@@ -33,10 +33,10 @@ const Header = () => {
         </nav>
 
         <div className="hidden md:flex items-center gap-3">
-          <Button variant="ghost" size="sm" onClick={() => navigate("/dashboard")}>
+          <Button variant="ghost" size="sm" onClick={() => navigate("/auth")}>
             Log in
           </Button>
-          <Button size="sm" onClick={() => navigate("/dashboard")} className="gradient-primary border-0 text-primary-foreground hover:opacity-90">
+          <Button size="sm" onClick={() => navigate("/auth")} className="gradient-primary border-0 text-primary-foreground hover:opacity-90">
             Get Started
           </Button>
         </div>
@@ -52,7 +52,7 @@ const Header = () => {
         <div className="md:hidden border-t border-border bg-background px-4 py-4 space-y-3">
           <Link to="/" className="block text-sm font-medium py-2" onClick={() => setMobileOpen(false)}>Home</Link>
           <Link to="/pricing" className="block text-sm font-medium py-2" onClick={() => setMobileOpen(false)}>Pricing</Link>
-          <Button className="w-full gradient-primary border-0 text-primary-foreground" onClick={() => { setMobileOpen(false); navigate("/dashboard"); }}>
+          <Button className="w-full gradient-primary border-0 text-primary-foreground" onClick={() => { setMobileOpen(false); navigate("/auth"); }}>
             Get Started
           </Button>
         </div>
