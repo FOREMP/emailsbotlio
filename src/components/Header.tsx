@@ -52,7 +52,7 @@ const Header = () => {
         <div className="md:hidden border-t border-border bg-background px-4 py-4 space-y-3">
           <Link to="/" className="block text-sm font-medium py-2" onClick={() => setMobileOpen(false)}>Home</Link>
           <Link to="/pricing" className="block text-sm font-medium py-2" onClick={() => setMobileOpen(false)}>Pricing</Link>
-          <Button className="w-full gradient-primary border-0 text-primary-foreground" onClick={() => { setMobileOpen(false); navigate("/dashboard"); }}>
+          <Button className="w-full gradient-primary border-0 text-primary-foreground" onClick={() => { setMobileOpen(false); navigate("/auth"); }}>
             Get Started
           </Button>
         </div>

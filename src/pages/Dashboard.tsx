@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Fish, Plus, Clock, BarChart3, MessageSquare, LogOut } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
 
 const mockSimulations = [
   { id: "1", title: "US Election Outcome 2028", status: "completed", agents: 12, rounds: 20, date: "Mar 20, 2026" },
@@ -15,11 +16,10 @@ const statusColors: Record<string, string> = {
 };
 
 const Dashboard = () => {
-  const navigate = useNavigate();
+  const { user, signOut } = useAuth();
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Dashboard header */}
       <header className="border-b border-border bg-card">
         <div className="container mx-auto flex h-14 items-center justify-between px-4">
           <Link to="/" className="flex items-center gap-2">
@@ -29,10 +29,10 @@ const Dashboard = () => {
             <span className="font-bold text-lg" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>MiroFish</span>
           </Link>
           <div className="flex items-center gap-4">
-            <div className="hidden sm:flex items-center gap-2 text-sm text-muted-foreground">
-              <span className="font-medium text-foreground">3</span> credits remaining
-            </div>
-            <Button variant="ghost" size="sm" onClick={() => navigate("/")}>
+            <span className="hidden sm:block text-sm text-muted-foreground truncate max-w-[200px]">
+              {user?.email}
+            </span>
+            <Button variant="ghost" size="sm" onClick={signOut}>
               <LogOut className="h-4 w-4 mr-1.5" />
               Log out
             </Button>
@@ -41,7 +41,6 @@ const Dashboard = () => {
       </header>
 
       <main className="container mx-auto px-4 py-8">
-        {/* Welcome + new sim */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
@@ -53,7 +52,6 @@ const Dashboard = () => {
           </Button>
         </div>
 
-        {/* Stats row */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           {[
             { label: "Total Simulations", value: "3", icon: BarChart3 },
@@ -71,7 +69,6 @@ const Dashboard = () => {
           ))}
         </div>
 
-        {/* Simulations list */}
         <div className="rounded-xl border border-border bg-card shadow-card overflow-hidden">
           <div className="px-5 py-4 border-b border-border">
             <h2 className="font-semibold">Your Simulations</h2>
