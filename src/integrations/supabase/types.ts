@@ -14,6 +14,44 @@ export type Database = {
   }
   public: {
     Tables: {
+      agents: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          persona: Json
+          response: string | null
+          sentiment: string | null
+          simulation_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          persona?: Json
+          response?: string | null
+          sentiment?: string | null
+          simulation_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          persona?: Json
+          response?: string | null
+          sentiment?: string | null
+          simulation_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agents_simulation_id_fkey"
+            columns: ["simulation_id"]
+            isOneToOne: false
+            referencedRelation: "simulations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -44,6 +82,124 @@ export type Database = {
         }
         Relationships: []
       }
+      reports: {
+        Row: {
+          created_at: string
+          full_report: string | null
+          id: string
+          insights: Json | null
+          simulation_id: string
+          summary: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          full_report?: string | null
+          id?: string
+          insights?: Json | null
+          simulation_id: string
+          summary?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          full_report?: string | null
+          id?: string
+          insights?: Json | null
+          simulation_id?: string
+          summary?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "reports_simulation_id_fkey"
+            columns: ["simulation_id"]
+            isOneToOne: false
+            referencedRelation: "simulations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      seed_materials: {
+        Row: {
+          content: string | null
+          created_at: string
+          file_name: string | null
+          file_path: string | null
+          id: string
+          simulation_id: string
+          type: Database["public"]["Enums"]["seed_material_type"]
+          user_id: string
+        }
+        Insert: {
+          content?: string | null
+          created_at?: string
+          file_name?: string | null
+          file_path?: string | null
+          id?: string
+          simulation_id: string
+          type: Database["public"]["Enums"]["seed_material_type"]
+          user_id: string
+        }
+        Update: {
+          content?: string | null
+          created_at?: string
+          file_name?: string | null
+          file_path?: string | null
+          id?: string
+          simulation_id?: string
+          type?: Database["public"]["Enums"]["seed_material_type"]
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "seed_materials_simulation_id_fkey"
+            columns: ["simulation_id"]
+            isOneToOne: false
+            referencedRelation: "simulations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      simulations: {
+        Row: {
+          agent_count: number
+          agents_processed: number
+          context_summary: string | null
+          created_at: string
+          id: string
+          question: string | null
+          status: Database["public"]["Enums"]["simulation_status"]
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          agent_count?: number
+          agents_processed?: number
+          context_summary?: string | null
+          created_at?: string
+          id?: string
+          question?: string | null
+          status?: Database["public"]["Enums"]["simulation_status"]
+          title: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          agent_count?: number
+          agents_processed?: number
+          context_summary?: string | null
+          created_at?: string
+          id?: string
+          question?: string | null
+          status?: Database["public"]["Enums"]["simulation_status"]
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -52,7 +208,14 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
-      [_ in never]: never
+      seed_material_type: "pdf" | "image" | "text"
+      simulation_status:
+        | "draft"
+        | "processing_materials"
+        | "generating_agents"
+        | "running"
+        | "completed"
+        | "failed"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -179,6 +342,16 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      seed_material_type: ["pdf", "image", "text"],
+      simulation_status: [
+        "draft",
+        "processing_materials",
+        "generating_agents",
+        "running",
+        "completed",
+        "failed",
+      ],
+    },
   },
 } as const
