@@ -33,10 +33,10 @@ const Header = () => {
         </nav>
 
         <div className="hidden md:flex items-center gap-3">
-          <Button variant="ghost" size="sm" onClick={() => navigate("/dashboard")}>
+          <Button variant="ghost" size="sm" onClick={() => navigate("/auth")}>
             Log in
           </Button>
-          <Button size="sm" onClick={() => navigate("/dashboard")} className="gradient-primary border-0 text-primary-foreground hover:opacity-90">
+          <Button size="sm" onClick={() => navigate("/auth")} className="gradient-primary border-0 text-primary-foreground hover:opacity-90">
             Get Started
           </Button>
         </div>
