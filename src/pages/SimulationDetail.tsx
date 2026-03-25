@@ -3,7 +3,12 @@ import { useParams, Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { Fish, ArrowLeft, Clock, CheckCircle2, XCircle, Loader2, Users, FileText } from "lucide-react";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Fish, ArrowLeft, Clock, CheckCircle2, XCircle, Loader2, Users, FileText, StopCircle } from "lucide-react";
+import { toast } from "sonner";
 
 type Simulation = {
   id: string;
