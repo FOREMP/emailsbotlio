@@ -3,7 +3,12 @@ import { useParams, Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { Fish, ArrowLeft, Clock, CheckCircle2, XCircle, Loader2, Users, FileText } from "lucide-react";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Fish, ArrowLeft, Clock, CheckCircle2, XCircle, Loader2, Users, FileText, StopCircle } from "lucide-react";
+import { toast } from "sonner";
 
 type Simulation = {
   id: string;
@@ -37,6 +42,23 @@ const SimulationDetail = () => {
   const [simulation, setSimulation] = useState<Simulation | null>(null);
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(true);
+  const [cancelling, setCancelling] = useState(false);
+
+  const handleCancel = async () => {
+    if (!id) return;
+    setCancelling(true);
+    const { error } = await supabase
+      .from("simulations")
+      .update({ status: "failed" as any })
+      .eq("id", id);
+    setCancelling(false);
+    if (error) {
+      toast.error("Failed to cancel simulation");
+    } else {
+      toast.success("Simulation cancelled");
+      setSimulation(prev => prev ? { ...prev, status: "failed" } : null);
+    }
+  };
 
   useEffect(() => {
     if (!id) return;
@@ -125,7 +147,31 @@ const SimulationDetail = () => {
               <span className="font-medium">{simulation.agents_processed.toLocaleString()} / {simulation.agent_count.toLocaleString()}</span>
             </div>
             <Progress value={progress} className="h-2" />
-            <p className="text-xs text-muted-foreground mt-2">The simulation is running. This page updates automatically.</p>
+            <div className="flex items-center justify-between mt-3">
+              <p className="text-xs text-muted-foreground">The simulation is running. This page updates automatically.</p>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="destructive" size="sm" disabled={cancelling}>
+                    <StopCircle className="h-4 w-4 mr-1.5" />
+                    {cancelling ? "Cancelling..." : "Cancel Run"}
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Cancel this simulation?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will stop the simulation. Any agents already processed will be lost. This action cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Keep Running</AlertDialogCancel>
+                    <AlertDialogAction onClick={handleCancel} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                      Cancel Simulation
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
           </div>
         )}
 
