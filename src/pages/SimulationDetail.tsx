@@ -42,6 +42,23 @@ const SimulationDetail = () => {
   const [simulation, setSimulation] = useState<Simulation | null>(null);
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(true);
+  const [cancelling, setCancelling] = useState(false);
+
+  const handleCancel = async () => {
+    if (!id) return;
+    setCancelling(true);
+    const { error } = await supabase
+      .from("simulations")
+      .update({ status: "failed" as any })
+      .eq("id", id);
+    setCancelling(false);
+    if (error) {
+      toast.error("Failed to cancel simulation");
+    } else {
+      toast.success("Simulation cancelled");
+      setSimulation(prev => prev ? { ...prev, status: "failed" } : null);
+    }
+  };
 
   useEffect(() => {
     if (!id) return;
