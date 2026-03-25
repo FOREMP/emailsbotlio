@@ -97,7 +97,16 @@ const SimulationNew = () => {
         }
       }
 
-      toast.success("Simulation created! It will start processing soon.");
+      // Trigger the AI pipeline
+      try {
+        await supabase.functions.invoke("process-materials", {
+          body: { simulation_id: sim.id },
+        });
+      } catch (invokeErr) {
+        console.error("Failed to invoke process-materials:", invokeErr);
+      }
+
+      toast.success("Simulation launched! Processing your materials...");
       navigate(`/simulation/${sim.id}`);
     } catch (err: any) {
       console.error(err);
