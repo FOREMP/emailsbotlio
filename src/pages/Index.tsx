@@ -1,38 +1,38 @@
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import Header from "@/components/Header";
-import { Zap, Brain, Users, BarChart3, Shield, Cpu } from "lucide-react";
+import { Mail, MessageSquare, Star, Upload, Sparkles, Code } from "lucide-react";
 
 const features = [
   {
-    icon: Brain,
-    title: "AI-Powered Agents",
-    description: "Generate intelligent agents from your seed materials — each with unique personas, memories, and behaviors.",
+    icon: Upload,
+    title: "Import Contacts",
+    description: "Upload CSV files or manually add contacts with names, emails, phone numbers, and custom fields.",
   },
   {
-    icon: Users,
-    title: "Multi-Agent Simulation",
-    description: "Watch agents interact over multiple rounds, debating and evolving their positions to reveal hidden patterns.",
+    icon: Sparkles,
+    title: "AI-Powered Campaigns",
+    description: "Let AI craft personalized emails and SMS messages using your contact data and product info.",
   },
   {
-    icon: BarChart3,
-    title: "Prediction Reports",
-    description: "Get detailed AI-generated prediction reports with confidence scores and supporting evidence.",
+    icon: Mail,
+    title: "Email Campaigns",
+    description: "Build beautiful emails with variable interpolation. Send via Resend with tracking and analytics.",
   },
   {
-    icon: Zap,
-    title: "Real-Time Processing",
-    description: "Upload documents and get simulations running in minutes, not hours. Watch progress live.",
+    icon: MessageSquare,
+    title: "SMS Campaigns",
+    description: "Reach customers directly with personalized SMS messages. Perfect for flash sales and reminders.",
   },
   {
-    icon: Shield,
-    title: "Enterprise Ready",
-    description: "SOC2-compliant infrastructure with encrypted storage and role-based access controls.",
+    icon: Star,
+    title: "Review Collection",
+    description: "Send review request emails with in-email ratings. Collect feedback automatically after every order.",
   },
   {
-    icon: Cpu,
-    title: "Chat With Agents",
-    description: "Interrogate individual agents or the report agent to dig deeper into any prediction.",
+    icon: Code,
+    title: "Embeddable Widget",
+    description: "Add a review widget to your store with a single code snippet. Reviews update in real-time.",
   },
 ];
 
@@ -51,15 +51,15 @@ const Index = () => {
         <div className="container mx-auto px-4 relative z-10">
           <div className="max-w-3xl mx-auto text-center">
             <div className="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-4 py-1.5 text-sm text-primary-foreground/80 mb-8">
-              <Zap className="h-3.5 w-3.5" />
-              AI-Powered Prediction Engine
+              <Mail className="h-3.5 w-3.5" />
+              Email & SMS Marketing for E-commerce
             </div>
             <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold tracking-tight text-white leading-[1.1] mb-6">
-              Predict the future with{" "}
-              <span className="text-gradient">multi-agent AI</span>
+              Grow your store with{" "}
+              <span className="text-gradient">smart campaigns</span>
             </h1>
             <p className="text-lg md:text-xl text-white/60 max-w-2xl mx-auto mb-10 leading-relaxed">
-              Upload your research, news, or reports. MiroFish generates AI agents that simulate real-world interactions to produce actionable predictions.
+              Import your customers, craft AI-powered emails and SMS, collect product reviews — all from one platform built for e-commerce.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Button
@@ -67,7 +67,7 @@ const Index = () => {
                 onClick={() => navigate("/dashboard")}
                 className="gradient-primary border-0 text-primary-foreground text-base px-8 h-12 hover:opacity-90 transition-opacity"
               >
-                Start Predicting — Free
+                Get Started Free
               </Button>
               <Button
                 size="lg"
@@ -87,10 +87,10 @@ const Index = () => {
         <div className="container mx-auto px-4">
           <div className="text-center mb-16">
             <h2 className="text-3xl md:text-4xl font-bold tracking-tight mb-4">
-              How MiroFish Works
+              Everything You Need to Sell More
             </h2>
             <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
-              From raw data to actionable predictions in three steps: upload, simulate, report.
+              From contact management to AI-written campaigns and automated review collection.
             </p>
           </div>
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-5xl mx-auto">
@@ -114,10 +114,10 @@ const Index = () => {
       <section className="py-24 gradient-hero">
         <div className="container mx-auto px-4 text-center">
           <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
-            Ready to see the future?
+            Ready to boost your sales?
           </h2>
           <p className="text-white/60 text-lg mb-8 max-w-xl mx-auto">
-            Start with 3 free simulations. No credit card required.
+            Start sending campaigns today. No credit card required.
           </p>
           <Button
             size="lg"
