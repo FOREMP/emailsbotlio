@@ -1,75 +1,47 @@
-
-
-## MiroFish Simulation Engine - Build Plan
+## MiroFish — Email & SMS Marketing Platform for E-commerce
 
 ### What We're Building
 
-A system where users upload seed materials (PDFs, images, text), define a question, and run an AI simulation across thousands of synthetic personas to get a prediction report with live progress tracking.
+A marketing platform where e-commerce store owners can import customer lists, create AI-powered email and SMS campaigns, and collect product reviews — all from one dashboard.
 
-### Phase 1: Database & File Storage (do first)
+### Core Features
 
-Create the core tables and a storage bucket for uploaded files.
+1. **Contact Management** — Upload CSV or manually add contacts (name, email, phone, custom fields). Organize into lists.
+2. **Email Campaigns** — Template editor with variable interpolation (`{{name}}`, `{{email}}`, custom fields). AI-powered content generation via OpenAI. Send via Resend.
+3. **SMS Campaigns** — Same variable system for SMS. AI generation. Send via Twilio or similar.
+4. **Review Collection** — Special email type with in-email star rating. Customer clicks a rating directly in the email, response is saved. Dashboard shows all reviews. Embeddable JS widget for the store's website with real-time review display.
+5. **Analytics Dashboard** — Campaign stats (sent, delivered, opened, clicked), review scores, contact growth.
 
-**New tables:**
-- `simulations` - id, user_id, title, question, status (draft/processing_materials/generating_agents/running/completed/failed), agent_count, created_at, updated_at
-- `seed_materials` - id, simulation_id, user_id, type (pdf/image/text), content (text content or description), file_path (storage ref), created_at
-- `agents` - id, simulation_id, name, persona (jsonb - income, behavior, traits, goals), response (text - their simulation answer), created_at
-- `reports` - id, simulation_id, user_id, summary, full_report (text/markdown), insights (jsonb), created_at
+### Technical Stack
 
-**Storage bucket:** `seed-materials` (private, with RLS so users can only access their own files)
+- **Frontend**: React + Vite + Tailwind + shadcn/ui
+- **Backend**: Supabase (auth, database, edge functions, storage)
+- **Email sending**: Resend API
+- **AI copywriting**: OpenAI API (via edge functions)
+- **SMS sending**: Twilio or similar (TBD)
+- **Auth**: Supabase Auth (already implemented)
 
-### Phase 2: Simulation Creation UI (do second)
+### Database Schema (planned)
 
-A multi-step "New Simulation" flow:
-
-1. **Upload step** - Drag-and-drop zone for PDFs, images, and a text input for manual info. Files go to Supabase Storage, text goes to `seed_materials` table.
-2. **Configure step** - Set agent count (default 2000), optionally customize demographic distribution.
-3. **Question step** - User types their question (e.g. "How does pricing for this product affect purchase decisions?").
-4. **Launch** - Creates the simulation record, triggers the edge function.
-
-New pages/components:
-- `/simulation/new` - multi-step creation wizard
-- `/simulation/:id` - simulation detail/results page
-
-### Phase 3: Edge Functions - The AI Engine (do third)
-
-Two edge functions using Lovable AI gateway:
-
-**`process-materials`** - Receives uploaded file content and text, uses AI to extract key product/context information into a structured summary.
-
-**`run-simulation`** - The core engine:
-1. Takes the processed material summary + user question
-2. Generates 2000 persona profiles (batched - AI generates groups of 50 at a time)
-3. For each batch of personas, asks the AI to simulate their response to the question given the context
-4. Stores each agent's response
-5. After all agents respond, generates a final aggregated report with statistics, sentiment breakdown, and actionable insights
-6. Updates simulation status at each stage so the frontend can show progress
-
-### Phase 4: Live Progress & Results UI (do fourth)
-
-- **Progress view** - Real-time status updates using Supabase realtime subscriptions on the `simulations` table. Shows current phase, agents processed count, progress bar.
-- **Results view** - The final report rendered as a rich page with:
-  - Executive summary
-  - Key statistics (% positive, negative, neutral)
-  - Demographic breakdown charts
-  - Individual agent response samples
-  - Full detailed report
+- `profiles` — exists, stores user info and credits
+- `contact_lists` — id, user_id, name, created_at
+- `contacts` — id, user_id, list_id, email, phone, first_name, last_name, custom_fields (jsonb), created_at
+- `campaigns` — id, user_id, type (email/sms), name, subject, body_template, status (draft/sending/sent), sent_count, created_at
+- `campaign_recipients` — id, campaign_id, contact_id, status (pending/sent/delivered/opened/clicked/failed), sent_at
+- `reviews` — id, user_id, product_name, product_id, contact_id, rating, comment, created_at
+- `review_widgets` — id, user_id, product_id, config (jsonb), created_at
 
 ### Implementation Order
 
-We'll build this across multiple messages:
+1. **Phase 1**: Contact list management (tables, CSV upload, list UI)
+2. **Phase 2**: Email campaign builder (template editor, variable system, Resend integration)
+3. **Phase 3**: SMS campaign builder (Twilio integration)
+4. **Phase 4**: Review collection system (in-email rating, dashboard, embeddable widget)
+5. **Phase 5**: Analytics dashboard, polish, error handling
 
-1. **Message 1**: Database migration (all tables + storage bucket) + simulation creation UI (upload, configure, question steps)
-2. **Message 2**: Edge functions for material processing and simulation engine
-3. **Message 3**: Live progress tracking + results/report page
-4. **Message 4**: Polish, error handling, credit deduction
+### What's Already Done
 
-### Technical Details
-
-- Edge functions use Lovable AI gateway (`https://ai.gateway.lovable.dev/v1/chat/completions`) with `google/gemini-3-flash-preview` model (cost-efficient, fast)
-- Personas are generated in batches of 50 via structured output (tool calling) to keep responses parseable
-- Simulation progress tracked by updating `simulations.status` column, frontend subscribes via Supabase realtime
-- PDFs parsed on the edge function side using the document content
-- Files uploaded to Supabase Storage via the JS client, then the edge function reads them
-- Each simulation costs 1 credit, deducted from `profiles.credits_remaining`
-
+- Auth system (signup, login, protected routes, profiles table)
+- Keep-alive cron function
+- Landing page and dashboard shell (empty state)
+- UI component library (shadcn)
