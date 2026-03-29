@@ -5,6 +5,7 @@ import { useAuth } from "@/contexts/AuthContext";
 
 const Dashboard = () => {
   const { user, signOut } = useAuth();
+  const navigate = useNavigate();
 
   return (
     <div className="min-h-screen bg-background">
