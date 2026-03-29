@@ -1,66 +1,60 @@
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import Header from "@/components/Header";
-import { Check, Zap } from "lucide-react";
+import { Check } from "lucide-react";
 
 const plans = [
   {
     name: "Starter",
-    price: "$19",
-    period: "/month",
-    description: "For individuals exploring AI predictions",
+    price: "€49",
+    period: "/mo",
+    description: "Everything you need to get started with email & SMS marketing.",
     features: [
-      "10 simulations / month",
-      "Up to 5 agents per simulation",
-      "10 rounds per simulation",
-      "Basic prediction reports",
+      "5,000 emails / month",
+      "500 SMS / month",
+      "Reviews widget",
+      "1 sending domain",
+      "Contact management",
       "Email support",
     ],
     cta: "Get Started",
     popular: false,
   },
   {
-    name: "Pro",
-    price: "$79",
-    period: "/month",
-    description: "For professionals who need deeper insights",
+    name: "Growth",
+    price: "€149",
+    period: "/mo",
+    description: "For growing stores that need more reach and deeper insights.",
     features: [
-      "50 simulations / month",
-      "Up to 20 agents per simulation",
-      "40 rounds per simulation",
-      "Advanced prediction reports",
-      "Chat with agents",
-      "Priority support",
-      "Export reports as PDF",
+      "25,000 emails / month",
+      "2,500 SMS / month",
+      "Reviews + analytics",
+      "3 sending domains",
+      "AI-powered campaigns",
+      "CSV import",
+      "Priority email support",
     ],
-    cta: "Start Pro Trial",
+    cta: "Start Growth Plan",
     popular: true,
   },
   {
-    name: "Enterprise",
-    price: "$249",
-    period: "/month",
-    description: "For teams running large-scale simulations",
+    name: "Pro",
+    price: "€349",
+    period: "/mo",
+    description: "For high-volume stores that demand the full suite.",
     features: [
-      "Unlimited simulations",
-      "Up to 50 agents per simulation",
-      "Unlimited rounds",
-      "Custom report templates",
-      "Team workspaces",
-      "API access",
-      "Dedicated support",
-      "SSO & audit logs",
+      "100,000 emails / month",
+      "10,000 SMS / month",
+      "Full review suite",
+      "Unlimited domains",
+      "AI-powered campaigns",
+      "Advanced analytics",
+      "Priority support",
+      "Custom review widgets",
     ],
-    cta: "Contact Sales",
+    cta: "Start Pro Plan",
     popular: false,
   },
-];
-
-const singleUse = [
-  { simulations: 1, price: "$5", perSim: "$5.00" },
-  { simulations: 5, price: "$20", perSim: "$4.00" },
-  { simulations: 15, price: "$45", perSim: "$3.00" },
-  { simulations: 50, price: "$100", perSim: "$2.00" },
 ];
 
 const Pricing = () => {
@@ -76,13 +70,13 @@ const Pricing = () => {
             Simple, transparent pricing
           </h1>
           <p className="text-muted-foreground text-lg max-w-xl mx-auto">
-            Choose a plan or buy simulations à la carte. Start free — no credit card needed.
+            Pick the plan that fits your store. Upgrade or downgrade anytime.
           </p>
         </div>
       </section>
 
       {/* Plans */}
-      <section className="pb-20">
+      <section className="pb-24">
         <div className="container mx-auto px-4">
           <div className="grid md:grid-cols-3 gap-6 max-w-5xl mx-auto">
             {plans.map((plan) => (
@@ -124,50 +118,12 @@ const Pricing = () => {
                       : "w-full"
                   }
                   variant={plan.popular ? "default" : "outline"}
-                  onClick={() => navigate("/dashboard")}
+                  onClick={() => navigate("/auth")}
                 >
                   {plan.cta}
                 </Button>
               </div>
             ))}
-          </div>
-        </div>
-      </section>
-
-      {/* Single-use packs */}
-      <section className="pb-24">
-        <div className="container mx-auto px-4">
-          <div className="max-w-3xl mx-auto">
-            <div className="text-center mb-10">
-              <div className="inline-flex items-center gap-2 text-sm font-medium text-primary mb-3">
-                <Zap className="h-4 w-4" />
-                Pay As You Go
-              </div>
-              <h2 className="text-2xl md:text-3xl font-bold mb-2">
-                Simulation Packs
-              </h2>
-              <p className="text-muted-foreground">
-                Don't need a subscription? Buy simulation credits individually.
-              </p>
-            </div>
-            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {singleUse.map((pack) => (
-                <div
-                  key={pack.simulations}
-                  className="rounded-xl border border-border bg-card p-5 shadow-card text-center hover:shadow-elevated transition-all"
-                >
-                  <div className="text-3xl font-bold mb-1">{pack.simulations}</div>
-                  <div className="text-sm text-muted-foreground mb-3">
-                    {pack.simulations === 1 ? "simulation" : "simulations"}
-                  </div>
-                  <div className="text-2xl font-bold mb-1">{pack.price}</div>
-                  <div className="text-xs text-muted-foreground mb-4">{pack.perSim} per sim</div>
-                  <Button variant="outline" size="sm" className="w-full" onClick={() => navigate("/dashboard")}>
-                    Buy
-                  </Button>
-                </div>
-              ))}
-            </div>
           </div>
         </div>
       </section>
