@@ -1,10 +1,11 @@
 import { Button } from "@/components/ui/button";
 import { Fish, Plus, Mail, MessageSquare, Users, Star, LogOut } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 
 const Dashboard = () => {
   const { user, signOut } = useAuth();
+  const navigate = useNavigate();
 
   return (
     <div className="min-h-screen bg-background">
@@ -53,13 +54,18 @@ const Dashboard = () => {
           ))}
         </div>
 
-        <div className="rounded-xl border border-border bg-card shadow-card overflow-hidden">
-          <div className="px-5 py-4 border-b border-border">
-            <h2 className="font-semibold">Recent Campaigns</h2>
+        <div className="grid sm:grid-cols-2 gap-4 mb-8">
+          <div className="rounded-xl border border-border bg-card shadow-card p-6">
+            <h2 className="font-semibold mb-2">Contacts</h2>
+            <p className="text-muted-foreground text-sm mb-4">Import your customer list to start sending campaigns.</p>
+            <Button onClick={() => navigate("/contacts")} className="gradient-primary border-0 text-primary-foreground hover:opacity-90">
+              <Users className="h-4 w-4 mr-1.5" /> Manage Contacts
+            </Button>
           </div>
-          <div className="p-8 text-center">
-            <p className="text-muted-foreground text-sm mb-4">No campaigns yet. Create your first one!</p>
-            <Button variant="outline" size="sm" disabled>
+          <div className="rounded-xl border border-border bg-card shadow-card p-6">
+            <h2 className="font-semibold mb-2">Campaigns</h2>
+            <p className="text-muted-foreground text-sm mb-4">Create and send email or SMS campaigns to your contacts.</p>
+            <Button variant="outline" disabled>
               <Plus className="h-4 w-4 mr-1.5" /> New Campaign (coming soon)
             </Button>
           </div>
