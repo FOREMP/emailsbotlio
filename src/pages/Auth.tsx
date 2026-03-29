@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Fish, ArrowLeft, Mail } from "lucide-react";
+import { Send, ArrowLeft, Mail } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { useEffect } from "react";
@@ -90,7 +90,7 @@ const Auth = () => {
             <ArrowLeft className="h-4 w-4" /> Back to home
           </button>
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl gradient-primary mb-4">
-            <Fish className="h-6 w-6 text-primary-foreground" />
+            <Send className="h-6 w-6 text-primary-foreground" />
           </div>
           <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
             {isSignUp ? "Create your account" : "Welcome back"}

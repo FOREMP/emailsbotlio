@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Fish, Plus, Users, Upload, ArrowLeft, Trash2, LogOut } from "lucide-react";
+import { Send, Plus, Users, Upload, ArrowLeft, Trash2, LogOut } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 
@@ -161,7 +161,7 @@ const Contacts = () => {
         <div className="container mx-auto flex h-14 items-center justify-between px-4">
           <Link to="/" className="flex items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg gradient-primary">
-              <Fish className="h-4 w-4 text-primary-foreground" />
+              <Send className="h-4 w-4 text-primary-foreground" />
             </div>
             <span className="font-bold text-lg" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>MailxSend</span>
           </Link>
