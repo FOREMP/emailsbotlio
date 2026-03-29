@@ -96,7 +96,7 @@ const Auth = () => {
             {isSignUp ? "Create your account" : "Welcome back"}
           </h1>
           <p className="text-muted-foreground text-sm mt-1">
-            {isSignUp ? "Start predicting with multi-agent AI" : "Sign in to your MiroFish account"}
+            {isSignUp ? "Start sending smart campaigns" : "Sign in to your MailxSend account"}
           </p>
         </div>
 

@@ -15,7 +15,7 @@ const Header = () => {
             <Fish className="h-5 w-5 text-primary-foreground" />
           </div>
           <span className="text-xl font-bold tracking-tight" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
-            MiroFish
+            MailxSend
           </span>
         </Link>
 
