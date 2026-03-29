@@ -163,7 +163,7 @@ const Contacts = () => {
             <div className="flex h-8 w-8 items-center justify-center rounded-lg gradient-primary">
               <Fish className="h-4 w-4 text-primary-foreground" />
             </div>
-            <span className="font-bold text-lg" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>MiroFish</span>
+            <span className="font-bold text-lg" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>MailxSend</span>
           </Link>
           <div className="flex items-center gap-4">
             <span className="hidden sm:block text-sm text-muted-foreground truncate max-w-[200px]">
