@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Fish, Menu, X } from "lucide-react";
+import { Send, Menu, X } from "lucide-react";
 import { useState } from "react";
 
 const Header = () => {
