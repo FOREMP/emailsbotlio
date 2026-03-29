@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Fish, Plus, Mail, MessageSquare, Users, Star, LogOut } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 
 const Dashboard = () => {
