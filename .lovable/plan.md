@@ -1,47 +1,71 @@
-## MiroFish — Email & SMS Marketing Platform for E-commerce
 
-### What We're Building
 
-A marketing platform where e-commerce store owners can import customer lists, create AI-powered email and SMS campaigns, and collect product reviews — all from one dashboard.
+## Smart File Upload with Dynamic Variable Detection
 
-### Core Features
+### Problem
+Currently, CSV upload only maps hardcoded columns (first_name, last_name, email, phone). Users need the ability to upload any CSV/Excel file, have the system detect ALL columns as usable variables (e.g. `{{company}}`, `{{order_id}}`, `{{city}}`), and store them so they can be referenced later in email/SMS templates.
 
-1. **Contact Management** — Upload CSV or manually add contacts (name, email, phone, custom fields). Organize into lists.
-2. **Email Campaigns** — Template editor with variable interpolation (`{{name}}`, `{{email}}`, custom fields). AI-powered content generation via OpenAI. Send via Resend.
-3. **SMS Campaigns** — Same variable system for SMS. AI generation. Send via Twilio or similar.
-4. **Review Collection** — Special email type with in-email star rating. Customer clicks a rating directly in the email, response is saved. Dashboard shows all reviews. Embeddable JS widget for the store's website with real-time review display.
-5. **Analytics Dashboard** — Campaign stats (sent, delivered, opened, clicked), review scores, contact growth.
+### How It Works (User Flow)
 
-### Technical Stack
+1. User navigates to a contact list and clicks "Import File"
+2. User selects a CSV or XLSX file
+3. System parses the file, extracts all column headers, and shows a **preview screen**:
+   - Displays detected columns and sample data (first 3-5 rows)
+   - User maps which column is **email** (required for email campaigns) and which is **phone** (required for SMS)
+   - All other columns are automatically saved as custom variables
+4. User confirms the import
+5. Contacts are saved with `email`, `phone`, `first_name`, `last_name` in their dedicated columns, and everything else goes into the `custom_fields` JSONB column
+6. The list's detected variables are stored on the `contact_lists` table so the campaign builder knows what `{{variables}}` are available
 
-- **Frontend**: React + Vite + Tailwind + shadcn/ui
-- **Backend**: Supabase (auth, database, edge functions, storage)
-- **Email sending**: Resend API
-- **AI copywriting**: OpenAI API (via edge functions)
-- **SMS sending**: Twilio or similar (TBD)
-- **Auth**: Supabase Auth (already implemented)
+### Database Change
 
-### Database Schema (planned)
+Add a `columns` JSONB column to `contact_lists` to store the detected variable names for that list:
 
-- `profiles` — exists, stores user info and credits
-- `contact_lists` — id, user_id, name, created_at
-- `contacts` — id, user_id, list_id, email, phone, first_name, last_name, custom_fields (jsonb), created_at
-- `campaigns` — id, user_id, type (email/sms), name, subject, body_template, status (draft/sending/sent), sent_count, created_at
-- `campaign_recipients` — id, campaign_id, contact_id, status (pending/sent/delivered/opened/clicked/failed), sent_at
-- `reviews` — id, user_id, product_name, product_id, contact_id, rating, comment, created_at
-- `review_widgets` — id, user_id, product_id, config (jsonb), created_at
+```sql
+ALTER TABLE contact_lists
+ADD COLUMN columns jsonb DEFAULT '[]'::jsonb;
+```
 
-### Implementation Order
+This stores an array like `["company", "city", "order_id", "loyalty_tier"]` — the extra fields beyond the standard ones.
 
-1. **Phase 1**: Contact list management (tables, CSV upload, list UI)
-2. **Phase 2**: Email campaign builder (template editor, variable system, Resend integration)
-3. **Phase 3**: SMS campaign builder (Twilio integration)
-4. **Phase 4**: Review collection system (in-email rating, dashboard, embeddable widget)
-5. **Phase 5**: Analytics dashboard, polish, error handling
+### Frontend Changes
 
-### What's Already Done
+**1. Add `xlsx` npm package** for parsing Excel files alongside CSV.
 
-- Auth system (signup, login, protected routes, profiles table)
-- Keep-alive cron function
-- Landing page and dashboard shell (empty state)
-- UI component library (shadcn)
+**2. New component: `FileImportDialog`** (`src/components/FileImportDialog.tsx`)
+- Accepts CSV or XLSX files
+- Parses headers and first few rows for preview
+- Shows a mapping UI:
+  - Auto-detects `email`, `phone`, `first_name`, `last_name` columns by common name patterns
+  - Lets user manually assign which column maps to email/phone if auto-detect fails
+  - All remaining columns become custom variables stored in `custom_fields`
+- Shows a preview table of the parsed data
+- On confirm: inserts contacts and updates the list's `columns` field
+
+**3. Update `Contacts.tsx`**
+- Replace the current raw CSV handler with the new `FileImportDialog`
+- Show detected variables as badges/tags on each list card (e.g. "company", "city")
+- Display custom field values in the contacts table
+
+### Data Storage Strategy
+
+Each contact row stores extra columns in `custom_fields` JSONB:
+```json
+{
+  "company": "Acme Corp",
+  "city": "Berlin", 
+  "order_id": "ORD-123"
+}
+```
+
+The parent `contact_lists.columns` stores the variable names so the campaign builder can offer `{{company}}`, `{{city}}`, `{{order_id}}` as insertable variables without scanning all contacts.
+
+### Files to Create/Modify
+
+| File | Action |
+|------|--------|
+| Migration SQL | Add `columns` jsonb to `contact_lists` |
+| `src/components/FileImportDialog.tsx` | New — file upload, parse, preview, column mapping |
+| `src/pages/Contacts.tsx` | Replace CSV handler, show variables on list cards, show custom fields in table |
+| `package.json` | Add `xlsx` dependency |
+
