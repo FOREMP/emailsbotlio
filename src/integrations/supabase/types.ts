@@ -16,6 +16,7 @@ export type Database = {
     Tables: {
       contact_lists: {
         Row: {
+          columns: Json | null
           created_at: string
           description: string | null
           id: string
@@ -24,6 +25,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          columns?: Json | null
           created_at?: string
           description?: string | null
           id?: string
@@ -32,6 +34,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          columns?: Json | null
           created_at?: string
           description?: string | null
           id?: string

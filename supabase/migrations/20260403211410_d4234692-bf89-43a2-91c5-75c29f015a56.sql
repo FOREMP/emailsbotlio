@@ -1,0 +1,1 @@
+ALTER TABLE public.contact_lists ADD COLUMN columns jsonb DEFAULT '[]'::jsonb;
