@@ -5,10 +5,12 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Send, Plus, Users, Upload, ArrowLeft, Trash2, LogOut } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
+import FileImportDialog from "@/components/FileImportDialog";
 
 const Contacts = () => {
   const { user, signOut } = useAuth();
@@ -18,6 +20,7 @@ const Contacts = () => {
   const [listDialogOpen, setListDialogOpen] = useState(false);
   const [selectedList, setSelectedList] = useState<string | null>(null);
   const [contactDialogOpen, setContactDialogOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [contactForm, setContactForm] = useState({ first_name: "", last_name: "", email: "", phone: "" });
 
   // Fetch lists
@@ -114,46 +117,50 @@ const Contacts = () => {
     onError: (e) => toast.error(e.message),
   });
 
-  // CSV upload
-  const handleCSVUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !selectedList) return;
+  // File import
+  const [importing, setImporting] = useState(false);
+  const handleFileImport = async (
+    importedContacts: { first_name: string; last_name: string; email: string; phone: string; custom_fields: Record<string, string> }[],
+    customColumns: string[]
+  ) => {
+    if (!selectedList) return;
+    setImporting(true);
+    try {
+      const contactsToInsert = importedContacts.map((c) => ({
+        user_id: user!.id,
+        list_id: selectedList,
+        first_name: c.first_name || null,
+        last_name: c.last_name || null,
+        email: c.email || null,
+        phone: c.phone || null,
+        custom_fields: Object.keys(c.custom_fields).length > 0 ? c.custom_fields : null,
+      }));
 
-    const text = await file.text();
-    const lines = text.split("\n").filter((l) => l.trim());
-    if (lines.length < 2) {
-      toast.error("CSV must have a header row and at least one data row");
-      return;
-    }
+      const { error } = await supabase.from("contacts").insert(contactsToInsert);
+      if (error) throw error;
 
-    const headers = lines[0].split(",").map((h) => h.trim().toLowerCase());
-    const rows = lines.slice(1).map((line) => {
-      const values = line.split(",").map((v) => v.trim());
-      const row: Record<string, string> = {};
-      headers.forEach((h, i) => (row[h] = values[i] || ""));
-      return row;
-    });
+      // Update list columns metadata (merge with existing)
+      const existingList = lists.find((l) => l.id === selectedList);
+      const existingCols: string[] = Array.isArray((existingList as any)?.columns) ? (existingList as any).columns : [];
+      const mergedCols = [...new Set([...existingCols, ...customColumns])];
 
-    const contactsToInsert = rows.map((row) => ({
-      user_id: user!.id,
-      list_id: selectedList,
-      first_name: row["first_name"] || row["firstname"] || row["first name"] || "",
-      last_name: row["last_name"] || row["lastname"] || row["last name"] || "",
-      email: row["email"] || "",
-      phone: row["phone"] || row["phone_number"] || "",
-    }));
+      if (mergedCols.length > 0) {
+        await supabase.from("contact_lists").update({ columns: mergedCols } as any).eq("id", selectedList);
+      }
 
-    const { error } = await supabase.from("contacts").insert(contactsToInsert);
-    if (error) {
-      toast.error("Failed to import: " + error.message);
-    } else {
       queryClient.invalidateQueries({ queryKey: ["contacts", selectedList] });
-      toast.success(`Imported ${contactsToInsert.length} contacts!`);
+      queryClient.invalidateQueries({ queryKey: ["contact_lists"] });
+      setImportDialogOpen(false);
+      toast.success(`Imported ${importedContacts.length} contacts!`);
+    } catch (err: any) {
+      toast.error("Import failed: " + err.message);
+    } finally {
+      setImporting(false);
     }
-    e.target.value = "";
   };
 
   const selectedListData = lists.find((l) => l.id === selectedList);
+  const listCustomColumns: string[] = Array.isArray((selectedListData as any)?.columns) ? (selectedListData as any).columns : [];
 
   return (
     <div className="min-h-screen bg-background">
@@ -229,29 +236,44 @@ const Contacts = () => {
               </div>
             ) : (
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {lists.map((list) => (
-                  <div
-                    key={list.id}
-                    className="rounded-xl border border-border bg-card p-5 shadow-card hover:shadow-elevated transition-all cursor-pointer group"
-                    onClick={() => setSelectedList(list.id)}
-                  >
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <h3 className="font-semibold">{list.name}</h3>
-                        {list.description && <p className="text-sm text-muted-foreground mt-1">{list.description}</p>}
+                {lists.map((list) => {
+                  const cols: string[] = Array.isArray((list as any)?.columns) ? (list as any).columns : [];
+                  return (
+                    <div
+                      key={list.id}
+                      className="rounded-xl border border-border bg-card p-5 shadow-card hover:shadow-elevated transition-all cursor-pointer group"
+                      onClick={() => setSelectedList(list.id)}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <h3 className="font-semibold">{list.name}</h3>
+                          {list.description && <p className="text-sm text-muted-foreground mt-1">{list.description}</p>}
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="opacity-0 group-hover:opacity-100 transition-opacity text-destructive"
+                          onClick={(e) => { e.stopPropagation(); deleteList.mutate(list.id); }}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
                       </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="opacity-0 group-hover:opacity-100 transition-opacity text-destructive"
-                        onClick={(e) => { e.stopPropagation(); deleteList.mutate(list.id); }}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      {cols.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-2">
+                          {cols.slice(0, 5).map((col) => (
+                            <Badge key={col} variant="secondary" className="text-xs font-mono">
+                              {`{{${col}}}`}
+                            </Badge>
+                          ))}
+                          {cols.length > 5 && (
+                            <Badge variant="outline" className="text-xs">+{cols.length - 5} more</Badge>
+                          )}
+                        </div>
+                      )}
+                      <p className="text-xs text-muted-foreground mt-3">Created {new Date(list.created_at).toLocaleDateString()}</p>
                     </div>
-                    <p className="text-xs text-muted-foreground mt-3">Created {new Date(list.created_at).toLocaleDateString()}</p>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </>
@@ -264,14 +286,20 @@ const Contacts = () => {
                 </button>
                 <h1 className="text-2xl font-bold tracking-tight">{selectedListData?.name}</h1>
                 {selectedListData?.description && <p className="text-muted-foreground text-sm mt-1">{selectedListData.description}</p>}
+                {listCustomColumns.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {listCustomColumns.map((col) => (
+                      <Badge key={col} variant="secondary" className="text-xs font-mono">
+                        {`{{${col}}}`}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="flex gap-2">
-                <label>
-                  <input type="file" accept=".csv" className="hidden" onChange={handleCSVUpload} />
-                  <Button variant="outline" size="sm" asChild>
-                    <span><Upload className="h-4 w-4 mr-1.5" /> Import CSV</span>
-                  </Button>
-                </label>
+                <Button variant="outline" size="sm" onClick={() => setImportDialogOpen(true)}>
+                  <Upload className="h-4 w-4 mr-1.5" /> Import File
+                </Button>
                 <Dialog open={contactDialogOpen} onOpenChange={setContactDialogOpen}>
                   <DialogTrigger asChild>
                     <Button size="sm" className="gradient-primary border-0 text-primary-foreground hover:opacity-90">
@@ -310,12 +338,19 @@ const Contacts = () => {
               </div>
             </div>
 
+            <FileImportDialog
+              open={importDialogOpen}
+              onOpenChange={setImportDialogOpen}
+              onImport={handleFileImport}
+              importing={importing}
+            />
+
             {contactsLoading ? (
               <p className="text-muted-foreground text-sm">Loading…</p>
             ) : contacts.length === 0 ? (
               <div className="rounded-xl border border-border bg-card shadow-card p-12 text-center">
                 <Users className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
-                <p className="text-muted-foreground text-sm">No contacts in this list yet. Add one manually or import a CSV.</p>
+                <p className="text-muted-foreground text-sm">No contacts in this list yet. Add one manually or import a file.</p>
               </div>
             ) : (
               <div className="rounded-xl border border-border bg-card shadow-card overflow-hidden">
@@ -326,22 +361,31 @@ const Contacts = () => {
                         <th className="text-left px-4 py-3 font-medium text-muted-foreground">Name</th>
                         <th className="text-left px-4 py-3 font-medium text-muted-foreground">Email</th>
                         <th className="text-left px-4 py-3 font-medium text-muted-foreground">Phone</th>
+                        {listCustomColumns.map((col) => (
+                          <th key={col} className="text-left px-4 py-3 font-medium text-muted-foreground whitespace-nowrap">{col}</th>
+                        ))}
                         <th className="text-right px-4 py-3 font-medium text-muted-foreground">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {contacts.map((c) => (
-                        <tr key={c.id} className="border-b border-border last:border-0 hover:bg-muted/30">
-                          <td className="px-4 py-3">{[c.first_name, c.last_name].filter(Boolean).join(" ") || "—"}</td>
-                          <td className="px-4 py-3 text-muted-foreground">{c.email || "—"}</td>
-                          <td className="px-4 py-3 text-muted-foreground">{c.phone || "—"}</td>
-                          <td className="px-4 py-3 text-right">
-                            <Button variant="ghost" size="sm" className="text-destructive" onClick={() => deleteContact.mutate(c.id)}>
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </td>
-                        </tr>
-                      ))}
+                      {contacts.map((c) => {
+                        const cf = (c.custom_fields as Record<string, string> | null) ?? {};
+                        return (
+                          <tr key={c.id} className="border-b border-border last:border-0 hover:bg-muted/30">
+                            <td className="px-4 py-3">{[c.first_name, c.last_name].filter(Boolean).join(" ") || "—"}</td>
+                            <td className="px-4 py-3 text-muted-foreground">{c.email || "—"}</td>
+                            <td className="px-4 py-3 text-muted-foreground">{c.phone || "—"}</td>
+                            {listCustomColumns.map((col) => (
+                              <td key={col} className="px-4 py-3 text-muted-foreground">{cf[col] || "—"}</td>
+                            ))}
+                            <td className="px-4 py-3 text-right">
+                              <Button variant="ghost" size="sm" className="text-destructive" onClick={() => deleteContact.mutate(c.id)}>
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
