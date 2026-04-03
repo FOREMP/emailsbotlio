@@ -217,7 +217,7 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
             </div>
 
             {!hasEmail && (
-              <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 dark:bg-amber-950/30 rounded-lg px-3 py-2">
+              <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 rounded-lg px-3 py-2">
                 <AlertCircle className="h-4 w-4 shrink-0" />
                 <span>No column mapped to Email. You'll need email for email campaigns.</span>
               </div>
