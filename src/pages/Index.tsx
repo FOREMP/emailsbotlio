@@ -1,38 +1,38 @@
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import Header from "@/components/Header";
-import { Mail, MessageSquare, Star, Upload, Sparkles, Code } from "lucide-react";
+import { Star, Brain, BarChart3, MessageSquareText, Mail, Zap } from "lucide-react";
 
 const features = [
   {
-    icon: Upload,
-    title: "Import Contacts",
-    description: "Upload CSV files or manually add contacts with names, emails, phone numbers, and custom fields.",
+    icon: Star,
+    title: "Review Aggregation",
+    description: "Pull reviews from Trustpilot, Google, and more into one unified dashboard. Never miss a review again.",
   },
   {
-    icon: Sparkles,
-    title: "AI-Powered Campaigns",
-    description: "Let AI craft personalized emails and SMS messages using your contact data and product info.",
+    icon: Brain,
+    title: "AI Sentiment Analysis",
+    description: "Automatically score sentiment, extract themes like 'shipping speed' or 'product quality', and spot trends.",
+  },
+  {
+    icon: MessageSquareText,
+    title: "AI-Generated Responses",
+    description: "Get professional, on-brand response drafts for every review. Edit and post directly to Trustpilot.",
+  },
+  {
+    icon: BarChart3,
+    title: "Insight Reports",
+    description: "Weekly AI digests and monthly PDF reports with sentiment trends, theme breakdowns, and action items.",
   },
   {
     icon: Mail,
-    title: "Email Campaigns",
-    description: "Build beautiful emails with variable interpolation. Send via Resend with tracking and analytics.",
+    title: "Automated Review Collection",
+    description: "Email past customers to request reviews. Smart scheduling and follow-ups to maximize response rates.",
   },
   {
-    icon: MessageSquare,
-    title: "SMS Campaigns",
-    description: "Reach customers directly with personalized SMS messages. Perfect for flash sales and reminders.",
-  },
-  {
-    icon: Star,
-    title: "Review Collection",
-    description: "Send review request emails with in-email ratings. Collect feedback automatically after every order.",
-  },
-  {
-    icon: Code,
-    title: "Embeddable Widget",
-    description: "Add a review widget to your store with a single code snippet. Reviews update in real-time.",
+    icon: Zap,
+    title: "Real-Time Alerts",
+    description: "Get notified instantly when negative reviews come in or sentiment drops. Act fast, protect your reputation.",
   },
 ];
 
@@ -51,15 +51,15 @@ const Index = () => {
         <div className="container mx-auto px-4 relative z-10">
           <div className="max-w-3xl mx-auto text-center">
             <div className="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-4 py-1.5 text-sm text-primary-foreground/80 mb-8">
-              <Mail className="h-3.5 w-3.5" />
-              Email & SMS Marketing for E-commerce
+              <Brain className="h-3.5 w-3.5" />
+              AI-Powered Review Intelligence
             </div>
             <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold tracking-tight text-white leading-[1.1] mb-6">
-              Grow your store with{" "}
-              <span className="text-gradient">smart campaigns</span>
+              Turn reviews into{" "}
+              <span className="text-gradient">growth insights</span>
             </h1>
             <p className="text-lg md:text-xl text-white/60 max-w-2xl mx-auto mb-10 leading-relaxed">
-              Import your customers, craft AI-powered emails and SMS, collect product reviews — all from one platform built for e-commerce.
+              Aggregate reviews from every platform, analyze sentiment with AI, generate smart responses, and collect more positive reviews — all from one dashboard.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Button
@@ -87,10 +87,10 @@ const Index = () => {
         <div className="container mx-auto px-4">
           <div className="text-center mb-16">
             <h2 className="text-3xl md:text-4xl font-bold tracking-tight mb-4">
-              Everything You Need to Sell More
+              Everything You Need to Master Your Reviews
             </h2>
             <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
-              From contact management to AI-written campaigns and automated review collection.
+              From aggregation and AI analysis to automated collection and smart responses.
             </p>
           </div>
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-5xl mx-auto">
@@ -114,10 +114,10 @@ const Index = () => {
       <section className="py-24 gradient-hero">
         <div className="container mx-auto px-4 text-center">
           <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
-            Ready to boost your sales?
+            Ready to understand your customers better?
           </h2>
           <p className="text-white/60 text-lg mb-8 max-w-xl mx-auto">
-            Start sending campaigns today. No credit card required.
+            Start analyzing your reviews today. No credit card required.
           </p>
           <Button
             size="lg"
@@ -132,7 +132,7 @@ const Index = () => {
       {/* Footer */}
       <footer className="border-t border-border py-12">
         <div className="container mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-4">
-          <p className="text-sm text-muted-foreground">© 2026 MailxSend. All rights reserved.</p>
+          <p className="text-sm text-muted-foreground">© 2026 ReviewBrain. All rights reserved.</p>
           <div className="flex gap-6">
             <a href="#" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Privacy</a>
             <a href="#" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Terms</a>
