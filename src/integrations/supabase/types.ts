@@ -121,6 +121,181 @@ export type Database = {
         }
         Relationships: []
       }
+      review_insights: {
+        Row: {
+          action_items: Json | null
+          avg_rating: number | null
+          created_at: string
+          id: string
+          period_end: string
+          period_start: string
+          period_type: string
+          review_count: number | null
+          sentiment_avg: number | null
+          source_id: string | null
+          summary: string | null
+          top_negative_themes: Json | null
+          top_positive_themes: Json | null
+          user_id: string
+        }
+        Insert: {
+          action_items?: Json | null
+          avg_rating?: number | null
+          created_at?: string
+          id?: string
+          period_end: string
+          period_start: string
+          period_type: string
+          review_count?: number | null
+          sentiment_avg?: number | null
+          source_id?: string | null
+          summary?: string | null
+          top_negative_themes?: Json | null
+          top_positive_themes?: Json | null
+          user_id: string
+        }
+        Update: {
+          action_items?: Json | null
+          avg_rating?: number | null
+          created_at?: string
+          id?: string
+          period_end?: string
+          period_start?: string
+          period_type?: string
+          review_count?: number | null
+          sentiment_avg?: number | null
+          source_id?: string | null
+          summary?: string | null
+          top_negative_themes?: Json | null
+          top_positive_themes?: Json | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "review_insights_source_id_fkey"
+            columns: ["source_id"]
+            isOneToOne: false
+            referencedRelation: "review_sources"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      review_sources: {
+        Row: {
+          api_credentials: Json | null
+          business_unit_id: string | null
+          created_at: string
+          domain: string | null
+          id: string
+          is_active: boolean
+          last_synced_at: string | null
+          name: string
+          platform: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          api_credentials?: Json | null
+          business_unit_id?: string | null
+          created_at?: string
+          domain?: string | null
+          id?: string
+          is_active?: boolean
+          last_synced_at?: string | null
+          name: string
+          platform: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          api_credentials?: Json | null
+          business_unit_id?: string | null
+          created_at?: string
+          domain?: string | null
+          id?: string
+          is_active?: boolean
+          last_synced_at?: string | null
+          name?: string
+          platform?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      reviews: {
+        Row: {
+          ai_response_draft: string | null
+          analyzed_at: string | null
+          author_name: string | null
+          created_at: string
+          external_id: string | null
+          id: string
+          key_phrases: Json | null
+          platform: string
+          rating: number | null
+          response_posted: boolean
+          review_date: string | null
+          review_text: string | null
+          sentiment_label: string | null
+          sentiment_score: number | null
+          source_id: string
+          themes: Json | null
+          title: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          ai_response_draft?: string | null
+          analyzed_at?: string | null
+          author_name?: string | null
+          created_at?: string
+          external_id?: string | null
+          id?: string
+          key_phrases?: Json | null
+          platform: string
+          rating?: number | null
+          response_posted?: boolean
+          review_date?: string | null
+          review_text?: string | null
+          sentiment_label?: string | null
+          sentiment_score?: number | null
+          source_id: string
+          themes?: Json | null
+          title?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          ai_response_draft?: string | null
+          analyzed_at?: string | null
+          author_name?: string | null
+          created_at?: string
+          external_id?: string | null
+          id?: string
+          key_phrases?: Json | null
+          platform?: string
+          rating?: number | null
+          response_posted?: boolean
+          review_date?: string | null
+          review_text?: string | null
+          sentiment_label?: string | null
+          sentiment_score?: number | null
+          source_id?: string
+          themes?: Json | null
+          title?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "reviews_source_id_fkey"
+            columns: ["source_id"]
+            isOneToOne: false
+            referencedRelation: "review_sources"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never

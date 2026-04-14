@@ -6,15 +6,15 @@ import { Check } from "lucide-react";
 const plans = [
   {
     name: "Starter",
-    price: "€49",
+    price: "$49",
     period: "/mo",
-    description: "Everything you need to get started with email & SMS marketing.",
+    description: "Aggregate reviews and get AI-powered insights to understand your customers.",
     features: [
-      "5,000 emails / month",
-      "500 SMS / month",
-      "Reviews widget",
-      "1 sending domain",
-      "Contact management",
+      "3 review sources",
+      "Review aggregation dashboard",
+      "AI sentiment & theme analysis",
+      "500 AI analyses / month",
+      "Weekly email digest",
       "Email support",
     ],
     cta: "Get Started",
@@ -22,37 +22,36 @@ const plans = [
   },
   {
     name: "Growth",
-    price: "€149",
+    price: "$129",
     period: "/mo",
-    description: "For growing stores that need more reach and deeper insights.",
+    description: "Respond smarter and collect more reviews with AI-powered tools.",
     features: [
-      "25,000 emails / month",
-      "2,500 SMS / month",
-      "Reviews + analytics",
-      "3 sending domains",
-      "AI-powered campaigns",
-      "CSV import",
-      "Priority email support",
+      "10 review sources",
+      "AI-generated review responses",
+      "Post replies to Trustpilot",
+      "5,000 AI analyses / month",
+      "Monthly PDF reports",
+      "Trend alerts",
+      "1,000 review request emails / mo",
     ],
     cta: "Start Growth Plan",
     popular: true,
   },
   {
-    name: "Pro",
-    price: "€349",
+    name: "Business",
+    price: "$249",
     period: "/mo",
-    description: "For high-volume stores that demand the full suite.",
+    description: "Full suite for teams that take online reputation seriously.",
     features: [
-      "100,000 emails / month",
-      "10,000 SMS / month",
-      "Full review suite",
-      "Unlimited domains",
-      "AI-powered campaigns",
-      "Advanced analytics",
+      "Unlimited review sources",
+      "Unlimited AI analysis",
+      "Competitor benchmarking",
+      "10,000 review request emails / mo",
+      "API access",
+      "White-label reports",
       "Priority support",
-      "Custom review widgets",
     ],
-    cta: "Start Pro Plan",
+    cta: "Start Business Plan",
     popular: false,
   },
 ];
@@ -70,12 +69,11 @@ const Pricing = () => {
             Simple, transparent pricing
           </h1>
           <p className="text-muted-foreground text-lg max-w-xl mx-auto">
-            Pick the plan that fits your store. Upgrade or downgrade anytime.
+            Pick the plan that fits your business. Upgrade or downgrade anytime.
           </p>
         </div>
       </section>
 
-      {/* Plans */}
       <section className="pb-24">
         <div className="container mx-auto px-4">
           <div className="grid md:grid-cols-3 gap-6 max-w-5xl mx-auto">
@@ -128,10 +126,9 @@ const Pricing = () => {
         </div>
       </section>
 
-      {/* Footer */}
       <footer className="border-t border-border py-12">
         <div className="container mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-4">
-          <p className="text-sm text-muted-foreground">© 2026 MailxSend. All rights reserved.</p>
+          <p className="text-sm text-muted-foreground">© 2026 ReviewBrain. All rights reserved.</p>
           <div className="flex gap-6">
             <a href="#" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Privacy</a>
             <a href="#" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Terms</a>
