@@ -121,7 +121,8 @@ const Contacts = () => {
   const [importing, setImporting] = useState(false);
   const handleFileImport = async (
     importedContacts: { first_name: string; last_name: string; email: string; phone: string; custom_fields: Record<string, string> }[],
-    customColumns: string[]
+    customColumns: string[],
+    fileMeta: { name: string; size: number; type: string; headers: string[]; mapping: Record<string, string>; sampleRows: Record<string, string>[] }
   ) => {
     if (!selectedList) return;
     setImporting(true);
@@ -148,8 +149,25 @@ const Contacts = () => {
         await supabase.from("contact_lists").update({ columns: mergedCols } as any).eq("id", selectedList);
       }
 
+      // Log the import (metadata only — we don't store the actual file)
+      await supabase.from("imported_files").insert({
+        user_id: user!.id,
+        list_id: selectedList,
+        file_name: fileMeta.name,
+        file_size: fileMeta.size,
+        file_type: fileMeta.type,
+        row_count: importedContacts.length,
+        column_count: fileMeta.headers.length,
+        imported_count: importedContacts.length,
+        columns_detected: fileMeta.headers,
+        mapping: fileMeta.mapping,
+        custom_columns: customColumns,
+        sample_rows: fileMeta.sampleRows.slice(0, 5),
+      });
+
       queryClient.invalidateQueries({ queryKey: ["contacts", selectedList] });
       queryClient.invalidateQueries({ queryKey: ["contact_lists"] });
+      queryClient.invalidateQueries({ queryKey: ["imported_files"] });
       setImportDialogOpen(false);
       toast.success(`Imported ${importedContacts.length} contacts!`);
     } catch (err: any) {
