@@ -58,7 +58,7 @@ const Dashboard = () => {
     { label: "Contacts", value: counts.data?.contacts ?? 0, icon: Users, to: "/contacts" },
     { label: "Lists", value: counts.data?.lists ?? 0, icon: Layers, to: "/contacts" },
     { label: "Senders", value: counts.data?.senders ?? 0, icon: Mail, to: "/senders" },
-    { label: "Sequences", value: counts.data?.sequences ?? 0, icon: Send, to: "/dashboard" },
+    { label: "Sequences", value: counts.data?.sequences ?? 0, icon: Send, to: "/sequences" },
     { label: "Emails Sent", value: counts.data?.sent ?? 0, icon: Inbox, to: "/dashboard" },
     { label: "Files Uploaded", value: counts.data?.files ?? 0, icon: FileSpreadsheet, to: "/files" },
   ];
