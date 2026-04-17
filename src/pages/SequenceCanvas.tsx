@@ -44,7 +44,7 @@ const nodeTypes = {
 
 const defaultConfig = (type: string): Record<string, any> => {
   switch (type) {
-    case "send_email": return { mode: "ai", sender_id: "rotate", prompt: "" };
+    case "send_email": return { mode: "ai", sender_id: "rotate", prompt: "", send_delay_seconds: 60, send_jitter_seconds: 30 };
     case "wait": return { duration: 1, unit: "days" };
     case "log_activity": return { activity_type: "contacted", note: "" };
     case "condition": return { condition_type: "opened", wait_window_hours: 24 };
