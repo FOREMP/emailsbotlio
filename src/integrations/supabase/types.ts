@@ -162,6 +162,65 @@ export type Database = {
           },
         ]
       }
+      imported_files: {
+        Row: {
+          column_count: number
+          columns_detected: Json
+          created_at: string
+          custom_columns: Json
+          file_name: string
+          file_size: number | null
+          file_type: string | null
+          id: string
+          imported_count: number
+          list_id: string | null
+          mapping: Json
+          row_count: number
+          sample_rows: Json
+          user_id: string
+        }
+        Insert: {
+          column_count?: number
+          columns_detected?: Json
+          created_at?: string
+          custom_columns?: Json
+          file_name: string
+          file_size?: number | null
+          file_type?: string | null
+          id?: string
+          imported_count?: number
+          list_id?: string | null
+          mapping?: Json
+          row_count?: number
+          sample_rows?: Json
+          user_id: string
+        }
+        Update: {
+          column_count?: number
+          columns_detected?: Json
+          created_at?: string
+          custom_columns?: Json
+          file_name?: string
+          file_size?: number | null
+          file_type?: string | null
+          id?: string
+          imported_count?: number
+          list_id?: string | null
+          mapping?: Json
+          row_count?: number
+          sample_rows?: Json
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "imported_files_list_id_fkey"
+            columns: ["list_id"]
+            isOneToOne: false
+            referencedRelation: "contact_lists"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           avatar_url: string | null

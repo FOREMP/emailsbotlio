@@ -26,7 +26,11 @@ interface ParsedData {
 interface FileImportDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onImport: (contacts: { first_name: string; last_name: string; email: string; phone: string; custom_fields: Record<string, string> }[], customColumns: string[]) => void;
+  onImport: (
+    contacts: { first_name: string; last_name: string; email: string; phone: string; custom_fields: Record<string, string> }[],
+    customColumns: string[],
+    fileMeta: { name: string; size: number; type: string; headers: string[]; mapping: Record<string, string>; sampleRows: Record<string, string>[] }
+  ) => void;
   importing?: boolean;
 }
 
@@ -94,6 +98,7 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
   const [parsed, setParsed] = useState<ParsedData | null>(null);
   const [mapping, setMapping] = useState<ColumnMapping>({});
   const [fileName, setFileName] = useState("");
+  const [fileMeta, setFileMeta] = useState<{ size: number; type: string }>({ size: 0, type: "" });
 
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -103,6 +108,7 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
       setParsed(data);
       setMapping(autoDetectMapping(data.headers));
       setFileName(file.name);
+      setFileMeta({ size: file.size, type: file.type || file.name.split(".").pop() || "" });
     } catch (err: any) {
       toast.error(err.message);
     }
@@ -145,7 +151,14 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
       return contact;
     });
 
-    onImport(contacts, customColumns);
+    onImport(contacts, customColumns, {
+      name: fileName,
+      size: fileMeta.size,
+      type: fileMeta.type,
+      headers: parsed.headers,
+      mapping: mapping as Record<string, string>,
+      sampleRows: parsed.rows.slice(0, 5),
+    });
   };
 
   const handleClose = (val: boolean) => {
