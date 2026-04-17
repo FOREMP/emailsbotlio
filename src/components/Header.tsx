@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Brain, Menu, X } from "lucide-react";
+import { Send, Menu, X } from "lucide-react";
 import { useState } from "react";
 
 const Header = () => {
@@ -12,10 +12,10 @@ const Header = () => {
       <div className="container mx-auto flex h-16 items-center justify-between px-4">
         <Link to="/" className="flex items-center gap-2.5 group">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg gradient-primary">
-            <Brain className="h-5 w-5 text-primary-foreground" />
+            <Send className="h-5 w-5 text-primary-foreground" />
           </div>
           <span className="text-xl font-bold tracking-tight" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
-            ReviewBrain
+            Botlio Email
           </span>
         </Link>
 
