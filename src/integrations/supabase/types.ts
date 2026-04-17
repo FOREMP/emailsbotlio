@@ -14,6 +14,39 @@ export type Database = {
   }
   public: {
     Tables: {
+      contact_activity: {
+        Row: {
+          activity_type: string
+          contact_id: string
+          created_at: string
+          id: string
+          metadata: Json
+          node_id: string | null
+          sequence_id: string | null
+          user_id: string
+        }
+        Insert: {
+          activity_type: string
+          contact_id: string
+          created_at?: string
+          id?: string
+          metadata?: Json
+          node_id?: string | null
+          sequence_id?: string | null
+          user_id: string
+        }
+        Update: {
+          activity_type?: string
+          contact_id?: string
+          created_at?: string
+          id?: string
+          metadata?: Json
+          node_id?: string | null
+          sequence_id?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       contact_lists: {
         Row: {
           columns: Json | null
@@ -119,6 +152,7 @@ export type Database = {
         Row: {
           contact_id: string
           created_at: string
+          current_node_id: string | null
           current_step: number
           id: string
           last_sent_at: string | null
@@ -131,6 +165,7 @@ export type Database = {
         Insert: {
           contact_id: string
           created_at?: string
+          current_node_id?: string | null
           current_step?: number
           id?: string
           last_sent_at?: string | null
@@ -143,6 +178,7 @@ export type Database = {
         Update: {
           contact_id?: string
           created_at?: string
+          current_node_id?: string | null
           current_step?: number
           id?: string
           last_sent_at?: string | null
@@ -534,6 +570,72 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      sequence_edges: {
+        Row: {
+          created_at: string
+          id: string
+          sequence_id: string
+          source_handle: string
+          source_node_id: string
+          target_node_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          sequence_id: string
+          source_handle?: string
+          source_node_id: string
+          target_node_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          sequence_id?: string
+          source_handle?: string
+          source_node_id?: string
+          target_node_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      sequence_nodes: {
+        Row: {
+          config: Json
+          created_at: string
+          id: string
+          node_type: string
+          position_x: number
+          position_y: number
+          sequence_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          config?: Json
+          created_at?: string
+          id?: string
+          node_type: string
+          position_x?: number
+          position_y?: number
+          sequence_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          config?: Json
+          created_at?: string
+          id?: string
+          node_type?: string
+          position_x?: number
+          position_y?: number
+          sequence_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
       }
       sequence_steps: {
         Row: {
