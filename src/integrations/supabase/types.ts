@@ -91,6 +91,77 @@ export type Database = {
           },
         ]
       }
+      do_not_contact: {
+        Row: {
+          created_at: string
+          email: string
+          id: string
+          reason: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          email: string
+          id?: string
+          reason?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          email?: string
+          id?: string
+          reason?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      enrollments: {
+        Row: {
+          contact_id: string
+          created_at: string
+          current_step: number
+          id: string
+          last_sent_at: string | null
+          next_send_at: string | null
+          sequence_id: string
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          contact_id: string
+          created_at?: string
+          current_step?: number
+          id?: string
+          last_sent_at?: string | null
+          next_send_at?: string | null
+          sequence_id: string
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          contact_id?: string
+          created_at?: string
+          current_step?: number
+          id?: string
+          last_sent_at?: string | null
+          next_send_at?: string | null
+          sequence_id?: string
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "enrollments_sequence_id_fkey"
+            columns: ["sequence_id"]
+            isOneToOne: false
+            referencedRelation: "sequences"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -295,6 +366,201 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      senders: {
+        Row: {
+          created_at: string
+          from_email: string
+          from_name: string
+          id: string
+          is_active: boolean
+          reply_to: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          from_email: string
+          from_name: string
+          id?: string
+          is_active?: boolean
+          reply_to?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          from_email?: string
+          from_name?: string
+          id?: string
+          is_active?: boolean
+          reply_to?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      sent_emails: {
+        Row: {
+          body: string | null
+          contact_id: string | null
+          enrollment_id: string | null
+          error_message: string | null
+          id: string
+          message_id: string | null
+          opened_at: string | null
+          recipient_email: string
+          replied_at: string | null
+          sender_id: string | null
+          sent_at: string
+          status: string
+          step_id: string | null
+          subject: string | null
+          user_id: string
+        }
+        Insert: {
+          body?: string | null
+          contact_id?: string | null
+          enrollment_id?: string | null
+          error_message?: string | null
+          id?: string
+          message_id?: string | null
+          opened_at?: string | null
+          recipient_email: string
+          replied_at?: string | null
+          sender_id?: string | null
+          sent_at?: string
+          status?: string
+          step_id?: string | null
+          subject?: string | null
+          user_id: string
+        }
+        Update: {
+          body?: string | null
+          contact_id?: string | null
+          enrollment_id?: string | null
+          error_message?: string | null
+          id?: string
+          message_id?: string | null
+          opened_at?: string | null
+          recipient_email?: string
+          replied_at?: string | null
+          sender_id?: string | null
+          sent_at?: string
+          status?: string
+          step_id?: string | null
+          subject?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sent_emails_enrollment_id_fkey"
+            columns: ["enrollment_id"]
+            isOneToOne: false
+            referencedRelation: "enrollments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sent_emails_sender_id_fkey"
+            columns: ["sender_id"]
+            isOneToOne: false
+            referencedRelation: "senders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sent_emails_step_id_fkey"
+            columns: ["step_id"]
+            isOneToOne: false
+            referencedRelation: "sequence_steps"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sequence_steps: {
+        Row: {
+          ai_model: string
+          ai_prompt: string | null
+          body_template: string | null
+          created_at: string
+          delay_days: number
+          id: string
+          sequence_id: string
+          step_order: number
+          subject_template: string | null
+          updated_at: string
+          use_ai: boolean
+          user_id: string
+        }
+        Insert: {
+          ai_model?: string
+          ai_prompt?: string | null
+          body_template?: string | null
+          created_at?: string
+          delay_days?: number
+          id?: string
+          sequence_id: string
+          step_order: number
+          subject_template?: string | null
+          updated_at?: string
+          use_ai?: boolean
+          user_id: string
+        }
+        Update: {
+          ai_model?: string
+          ai_prompt?: string | null
+          body_template?: string | null
+          created_at?: string
+          delay_days?: number
+          id?: string
+          sequence_id?: string
+          step_order?: number
+          subject_template?: string | null
+          updated_at?: string
+          use_ai?: boolean
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sequence_steps_sequence_id_fkey"
+            columns: ["sequence_id"]
+            isOneToOne: false
+            referencedRelation: "sequences"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sequences: {
+        Row: {
+          contact_list_id: string | null
+          created_at: string
+          id: string
+          name: string
+          sender_rotation: Json
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          contact_list_id?: string | null
+          created_at?: string
+          id?: string
+          name: string
+          sender_rotation?: Json
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          contact_list_id?: string | null
+          created_at?: string
+          id?: string
+          name?: string
+          sender_rotation?: Json
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
       }
     }
     Views: {
