@@ -1,138 +1,107 @@
 
 
-## ReviewBrain -- AI-Powered Review Intelligence Platform
+## Botlio Email — AI-Personalized Cold Outreach
 
-This replaces the MailxSend plan entirely. ReviewBrain aggregates customer reviews, analyzes them with AI, generates smart responses, and automates review collection.
+Replaces the ReviewBrain plan. Internal tool first (just you), but built so it scales to multi-tenant later.
 
-### Product Vision
+### Email-sending choice
 
-ReviewBrain helps mid-market companies (20-500 employees) understand what customers are saying, respond intelligently, and collect more positive reviews -- all from one dashboard.
+**Lovable Email** (built-in transactional infra) — not Resend.
+- You verify your own sender domain (e.g. `botlio.email`) via Lovable's domain setup dialog
+- Queue + retry + rate-limit handling built-in (~120 emails/min default, tunable)
+- One-click unsubscribe links built-in (`email_unsubscribe_tokens` + `handle-email-unsubscribe`)
+- Suppression list built-in (`suppressed_emails` blocks bounces/complaints/unsubscribes automatically)
+- Free at your scale, scales to thousands/day without changing providers
 
-### Trustpilot API Integration (Phase 1 Priority)
+This is exactly what your n8n SMTP setup did — just managed.
 
-Trustpilot provides two API tiers:
-- **Public/Data Solutions API** (free, API key only): Read reviews, ratings, TrustScore for any business unit by domain. Endpoints: `GET /v1/business-units/find?name=example.com`, `GET /v1/business-units/{id}/reviews`. This is enough to aggregate and analyze reviews.
-- **Business API** (requires Trustpilot paid plan, OAuth): Reply to reviews, invite customers, manage responses. Needed for the AI response feature.
+### Core concepts (mapped from your n8n flow)
 
-**Our approach**: Start with the public API for aggregation and analysis (works for all users). AI reply posting requires the user to connect their Trustpilot Business account via OAuth -- this becomes the Growth plan upsell.
+| n8n concept | Botlio Email equivalent |
+|---|---|
+| Google Sheet of leads | `contact_lists` + `contacts` (already exist, reuse FileImportDialog) |
+| Custom columns (Företag, Hemsida) | `contacts.custom_fields` JSONB (already exists) |
+| Multiple senders (Eric/Isak rotating) | `senders` table — name + email alias on your verified domain |
+| AI prompt per email | `sequence_steps.ai_prompt` (per step, fully editable) |
+| Sequence (Day 0, Day 3, Day 7…) | `sequences` + ordered `sequence_steps` with `delay_days` |
+| Status / Next_Followup_Date | `enrollments` (one row per contact-in-sequence) tracks current step + next send time |
+| Do_Not_Contact | Global `suppressed_emails` (auto) + per-contact `do_not_contact` flag |
+| Random delay + batching | pg_cron every 5 min picks due enrollments, send-cold-email function adds 5–60s jitter |
 
-### How AI Works with Reviews
+### Database (new tables)
 
-**Data flow:**
-1. Edge Function fetches reviews from Trustpilot API (scheduled via pg_cron, e.g. every 6 hours)
-2. Each review is stored in the `reviews` table with raw text, rating, date, author
-3. An AI analysis Edge Function processes new reviews using Lovable AI Gateway:
-   - **Per-review**: Sentiment score (positive/neutral/negative), extracted themes (e.g. "shipping", "product quality", "customer service"), key phrases
-   - **Batch/periodic**: Trend detection across all reviews for a time period
-4. Results stored in `review_analysis` fields on each review and aggregated into `review_insights`
+- **`senders`** — id, user_id, from_email, from_name, reply_to, is_active. Multiple per user (Eric, Isak…). Round-robin rotation.
+- **`sequences`** — id, user_id, name, contact_list_id, status (draft/active/paused), sender_rotation (array of sender_ids).
+- **`sequence_steps`** — id, sequence_id, step_order, delay_days (0 for first), subject_template, ai_prompt, ai_model, use_ai (bool — if false, body_template is used as-is).
+- **`enrollments`** — id, sequence_id, contact_id, current_step, next_send_at, status (active/paused/completed/replied/unsubscribed/bounced), last_sent_at. Unique on (sequence_id, contact_id) prevents double-enroll.
+- **`sent_emails`** — id, enrollment_id, step_id, sender_id, subject, body, sent_at, message_id, opened_at, replied_at. Full history for the overview.
+- **`do_not_contact`** — user_id, email (unique). Manual blocklist on top of Lovable's `suppressed_emails`.
 
-**AI response generation (Growth plan upsell):**
-- User clicks "Generate Response" on any review
-- Edge Function sends the review text + business context (tone, brand name) to Lovable AI
-- AI drafts a professional response the user can edit before posting
-- Posting uses Trustpilot Business API (requires user's OAuth token)
+All RLS-scoped to `user_id`.
 
-### What Reports Include
+### Edge functions (new)
 
-**Weekly AI Digest (auto-generated, emailed to user):**
-- Overall sentiment trend (this week vs last week)
-- Top 3 positive themes and top 3 negative themes with example quotes
-- New review count and average rating
-- Any significant sentiment drops (alerts)
-- AI-recommended action items (e.g. "5 customers mentioned slow shipping this week -- consider addressing fulfillment times")
+1. **`generate-email`** — input: contact + step prompt + custom_fields. Calls Lovable AI (Gemini Flash, free). Returns `{ subject, body }`. Variables like `{{Företag}}` are interpolated into the prompt before AI generation.
+2. **`enroll-contacts`** — input: sequence_id + contact_list_id. Creates enrollment rows for every non-suppressed, non-DNC contact. Sets `next_send_at = now()` for step 0.
+3. **`send-due-emails`** — runs every 5 min via pg_cron. Picks enrollments where `next_send_at <= now()` and `status = 'active'`. For each: pick sender (round-robin), call `generate-email`, enqueue via `send-transactional-email` (Lovable's queue handles delivery + unsubscribe link injection), log to `sent_emails`, advance to next step or mark completed.
+4. **Reuse `send-transactional-email`** — Lovable's built-in. Handles queue, retries, suppression check, unsubscribe footer.
 
-**Monthly Insight Report (dashboard + downloadable PDF):**
-- Rating distribution over time (chart)
-- Sentiment breakdown by theme (e.g. "Product Quality: 82% positive, Shipping: 45% positive")
-- Word cloud of most frequent terms
-- Review volume trends
-- Competitor comparison (if tracked)
-- Customer quotes highlight reel (best and worst)
-- NPS estimate derived from review sentiment
+### Pages
 
-### Pricing (Updated)
+- **`/` Landing** — rebrand "Botlio Email — AI cold outreach that doesn't suck."
+- **`/contacts`** — already exists. Reuse FileImportDialog (already auto-detects email/phone/name and treats Företag/Hemsida etc. as custom variables).
+- **`/senders`** — manage Eric, Isak, etc. Show domain verification status (links into Lovable Cloud → Emails dialog).
+- **`/sequences`** — list sequences. Create/edit a sequence: pick contact list, pick rotating senders, define steps (subject + AI prompt + delay). Live variable picker shows `{{first_name}}`, `{{email}}`, plus all custom columns from the chosen list.
+- **`/sequences/:id`** — detail view: enrolled count, sent count, reply rate, per-step stats. Enroll button. Pause/resume.
+- **`/outbox`** — global feed of every email sent (who, when, sender, subject, preview, status). Searchable. This is your "overview of all people I have sent."
+- **`/dashboard`** — sequences active, emails sent today/week, reply rate, top performing prompt.
 
-| Plan | Price | Key Features |
-|------|-------|-------------|
-| Starter | $49/mo | 3 review sources, review aggregation dashboard, basic AI analysis (sentiment + themes), weekly email digest |
-| Growth | $129/mo | 10 sources, AI-generated review responses, Trustpilot reply posting via OAuth, monthly PDF reports, trend alerts, review request emails (1,000/mo) |
-| Business | $249/mo | Unlimited sources, competitor benchmarking, 10,000 review request emails/mo, API access, white-label reports |
+### Anti-spam / unsubscribe
 
-### Database Schema (New Tables)
+- Every email gets Lovable's automatic unsubscribe footer + `List-Unsubscribe` header (one-click, RFC-compliant).
+- Unsubscribe writes to `suppressed_emails`; future sends to that address are auto-blocked across all sequences.
+- Before enrolling: skip if email is in `suppressed_emails`, `do_not_contact`, or already in any active enrollment for the same user (prevents the "spam same person twice" case).
+- Send pacing: 5–60s random jitter + Lovable's queue rate-limits = inbox-friendly.
 
-- `review_sources` -- Connected platforms (type: trustpilot/google/manual, business_unit_id, api_credentials, last_synced_at)
-- `reviews` -- Individual reviews (source_id, platform, author, rating, text, date, sentiment_score, themes JSONB, ai_response_draft, response_posted boolean)
-- `review_insights` -- Periodic AI analysis snapshots (source_id, period, summary text, top_themes JSONB, sentiment_avg, review_count)
-- `review_campaigns` -- Email campaigns to collect reviews (template, customer_list_id, schedule, status)
-- `review_customers` -- Customer lists for review requests (reuses existing contacts infrastructure)
+### Phases
 
-### Build Phases
+**Phase 1 — Rebrand + foundation**
+1. Rebrand UI to Botlio Email (landing, header, dashboard)
+2. Migration: senders, sequences, sequence_steps, enrollments, sent_emails, do_not_contact
+3. `/senders` page + Lovable Email domain setup dialog trigger
 
-**Phase 1 -- Foundation (build first)**
-1. Rebrand app from MailxSend to ReviewBrain (landing page, header, dashboard, all references)
-2. New database schema (review_sources, reviews, review_insights)
-3. Trustpilot public API integration Edge Function (fetch reviews by domain)
-4. Review aggregation dashboard (list reviews, filter by rating/date, search)
-5. AI analysis Edge Function (sentiment + theme extraction per review using Lovable AI)
-6. Insights dashboard with charts (sentiment over time, theme breakdown, rating distribution)
+**Phase 2 — Sequences & sending**
+4. `/sequences` list + create/edit (steps, prompts, variable picker)
+5. `generate-email` edge function (Lovable AI)
+6. `send-due-emails` edge function + pg_cron (every 5 min)
+7. Enroll flow from a contact list
 
-**Phase 2 -- AI Responses + Reports**
-7. AI response generation Edge Function (draft replies for reviews)
-8. Trustpilot OAuth flow for posting replies (Growth plan feature)
-9. Weekly email digest (scheduled Edge Function + email sending)
-10. Monthly PDF report generation
+**Phase 3 — Visibility**
+8. `/outbox` global feed
+9. Dashboard stats
+10. Per-sequence detail view
 
-**Phase 3 -- Review Collection + Scale**
-11. Review request email campaigns (reuse existing FileImportDialog for customer import)
-12. Google Business Profile integration
-13. Competitor benchmarking
-14. Embeddable review widget
-
-### Technical Architecture
-
-```text
-Frontend (React/Vite/Tailwind -- existing stack)
-  |
-  +-- Landing Page (rebranded)
-  +-- Dashboard (review feed, insights charts)
-  +-- Sources Manager (connect Trustpilot, Google)
-  +-- AI Response Editor (edit + approve AI drafts)
-  +-- Review Campaigns (email collection)
-  
-Backend (Supabase)
-  |
-  +-- Edge Functions:
-  |     +-- fetch-reviews (Trustpilot public API -> store)
-  |     +-- analyze-reviews (Lovable AI -> sentiment/themes)
-  |     +-- generate-response (Lovable AI -> draft reply)
-  |     +-- post-response (Trustpilot Business API via OAuth)
-  |     +-- send-review-request (email to customers)
-  |     +-- generate-digest (weekly summary email)
-  |
-  +-- pg_cron: scheduled review fetching every 6 hours
-  +-- Database: reviews, sources, insights, campaigns
-  
-External APIs:
-  +-- Trustpilot (public + business API)
-  +-- Lovable AI Gateway (analysis + response generation)
-```
-
-### Files to Create/Modify
+### Files to create/modify
 
 | File | Action |
-|------|--------|
-| `.lovable/plan.md` | Replace with ReviewBrain plan |
-| Migration SQL | Create review_sources, reviews, review_insights tables |
-| All pages + components | Rebrand from MailxSend to ReviewBrain |
-| `src/pages/Index.tsx` | New landing page for ReviewBrain |
-| `src/pages/Dashboard.tsx` | Review dashboard with feed + insights |
-| `src/pages/Sources.tsx` | New -- manage connected review platforms |
-| `src/pages/Pricing.tsx` | Updated pricing for ReviewBrain tiers |
-| `supabase/functions/fetch-reviews/` | New -- Trustpilot API integration |
-| `supabase/functions/analyze-reviews/` | New -- AI sentiment/theme analysis |
-| `supabase/functions/generate-response/` | New -- AI review response drafts |
+|---|---|
+| `.lovable/plan.md` | Replace with this plan |
+| Migration SQL | senders, sequences, sequence_steps, enrollments, sent_emails, do_not_contact + RLS |
+| `src/pages/Index.tsx` | Rebrand to Botlio Email |
+| `src/pages/Senders.tsx` | New |
+| `src/pages/Sequences.tsx`, `SequenceEditor.tsx`, `SequenceDetail.tsx` | New |
+| `src/pages/Outbox.tsx` | New |
+| `src/pages/Dashboard.tsx` | Rewrite for outreach metrics |
+| `supabase/functions/generate-email/index.ts` | New |
+| `supabase/functions/send-due-emails/index.ts` | New |
+| `supabase/functions/enroll-contacts/index.ts` | New |
+| Email infra | Triggered automatically when you set up sender domain |
 
-### User Requirement for Trustpilot
+### Prerequisite for sending
 
-Users will need a Trustpilot API key. The public/Data Solutions API key is free to obtain from Trustpilot's developer portal. For posting replies (Growth plan), they need a Trustpilot Business account with OAuth credentials.
+You'll need to set up your sender domain (`botlio.email`) inside the app — a one-time DNS step (a few records at your registrar). Lovable handles SPF/DKIM/MX automatically. Until DNS verifies, sequences can be built but actual sending is paused.
+
+### Phase 1 starts now
+
+After approval, I'll: rebrand to Botlio Email, run the migration for the new tables, build `/senders` with the domain setup trigger. Then we move to Phase 2.
 
