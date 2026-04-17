@@ -12,7 +12,7 @@ import Senders from "./pages/Senders.tsx";
 import Contacts from "./pages/Contacts.tsx";
 import Files from "./pages/Files.tsx";
 import Sequences from "./pages/Sequences.tsx";
-import SequenceEditor from "./pages/SequenceEditor.tsx";
+import SequenceCanvas from "./pages/SequenceCanvas.tsx";
 import Auth from "./pages/Auth.tsx";
 import Unsubscribe from "./pages/Unsubscribe.tsx";
 import NotFound from "./pages/NotFound.tsx";
@@ -35,7 +35,7 @@ const App = () => (
             <Route path="/contacts" element={<ProtectedRoute><Contacts /></ProtectedRoute>} />
             <Route path="/files" element={<ProtectedRoute><Files /></ProtectedRoute>} />
             <Route path="/sequences" element={<ProtectedRoute><Sequences /></ProtectedRoute>} />
-            <Route path="/sequences/:id" element={<ProtectedRoute><SequenceEditor /></ProtectedRoute>} />
+            <Route path="/sequences/:id" element={<ProtectedRoute><SequenceCanvas /></ProtectedRoute>} />
             <Route path="/unsubscribe" element={<Unsubscribe />} />
             <Route path="*" element={<NotFound />} />
           </Routes>

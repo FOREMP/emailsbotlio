@@ -1,0 +1,267 @@
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { X, Trash2, Sparkles, Loader2 } from "lucide-react";
+import { toast } from "@/hooks/use-toast";
+
+export interface FlowNode {
+  id: string;
+  node_type: string;
+  config: Record<string, any>;
+}
+
+interface Props {
+  node: FlowNode | null;
+  onChange: (config: Record<string, any>) => void;
+  onClose: () => void;
+  onDelete: () => void;
+  contactListId: string | null;
+}
+
+export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId }: Props) => {
+  const [previewing, setPreviewing] = useState(false);
+  const [preview, setPreview] = useState<{ subject: string; body: string } | null>(null);
+
+  const { data: lists = [] } = useQuery({
+    queryKey: ["inspector-lists"],
+    queryFn: async () => {
+      const { data } = await supabase.from("contact_lists").select("id, name");
+      return data ?? [];
+    },
+    enabled: node?.node_type === "trigger",
+  });
+
+  const { data: senders = [] } = useQuery({
+    queryKey: ["inspector-senders"],
+    queryFn: async () => {
+      const { data } = await supabase.from("senders").select("id, from_name, from_email").eq("is_active", true);
+      return data ?? [];
+    },
+    enabled: node?.node_type === "send_email",
+  });
+
+  const { data: variables = [] } = useQuery({
+    queryKey: ["inspector-vars", contactListId],
+    enabled: node?.node_type === "send_email" && !!contactListId,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("contact_lists")
+        .select("columns")
+        .eq("id", contactListId!)
+        .maybeSingle();
+      const cols = (data?.columns as any[]) ?? [];
+      return ["first_name", "last_name", "email", ...cols.map((c) => (typeof c === "string" ? c : c?.name)).filter(Boolean)];
+    },
+  });
+
+  if (!node) return null;
+  const cfg = node.config ?? {};
+  const set = (k: string, v: any) => onChange({ ...cfg, [k]: v });
+
+  const handlePreview = async () => {
+    if (!cfg.prompt) {
+      toast({ title: "Add a prompt first", variant: "destructive" });
+      return;
+    }
+    setPreviewing(true);
+    try {
+      const { data: contact } = await supabase
+        .from("contacts")
+        .select("first_name, last_name, email, custom_fields")
+        .eq("list_id", contactListId!)
+        .limit(1)
+        .maybeSingle();
+      const { data, error } = await supabase.functions.invoke("generate-email", {
+        body: { contact: contact ?? { first_name: "Sample" }, prompt: cfg.prompt, subject_hint: cfg.subject_hint },
+      });
+      if (error) throw error;
+      setPreview(data as any);
+    } catch (e: any) {
+      toast({ title: "Preview failed", description: e.message, variant: "destructive" });
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  return (
+    <aside className="w-96 border-l border-border bg-card overflow-y-auto flex flex-col">
+      <div className="flex items-center justify-between p-4 border-b border-border">
+        <div>
+          <div className="text-xs text-muted-foreground uppercase tracking-wide">{node.node_type.replace("_", " ")}</div>
+          <div className="font-semibold text-sm mt-0.5">Configure node</div>
+        </div>
+        <Button size="icon" variant="ghost" onClick={onClose}><X className="h-4 w-4" /></Button>
+      </div>
+
+      <div className="p-4 space-y-4 flex-1">
+        {node.node_type === "trigger" && (
+          <div>
+            <Label>Contact list</Label>
+            <Select
+              value={cfg.contact_list_id ?? ""}
+              onValueChange={(v) => {
+                const list = lists.find((l) => l.id === v);
+                onChange({ ...cfg, contact_list_id: v, contact_list_name: list?.name });
+              }}
+            >
+              <SelectTrigger><SelectValue placeholder="Pick a list" /></SelectTrigger>
+              <SelectContent>
+                {lists.map((l) => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        {node.node_type === "send_email" && (
+          <>
+            <div>
+              <Label>Sender</Label>
+              <Select value={cfg.sender_id ?? "rotate"} onValueChange={(v) => set("sender_id", v)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="rotate">Rotate (use sequence rotation)</SelectItem>
+                  {senders.map((s) => (
+                    <SelectItem key={s.id} value={s.id}>{s.from_name} &lt;{s.from_email}&gt;</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Mode</Label>
+              <Select value={cfg.mode ?? "ai"} onValueChange={(v) => set("mode", v)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ai">AI (gpt-4.1-mini)</SelectItem>
+                  <SelectItem value="template">Static template</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {(cfg.mode ?? "ai") === "ai" ? (
+              <>
+                <div>
+                  <Label>Subject hint (optional)</Label>
+                  <Input value={cfg.subject_hint ?? ""} onChange={(e) => set("subject_hint", e.target.value)} placeholder="e.g. Quick question about {{company}}" />
+                </div>
+                <div>
+                  <Label>AI prompt</Label>
+                  <Textarea
+                    rows={6}
+                    value={cfg.prompt ?? ""}
+                    onChange={(e) => set("prompt", e.target.value)}
+                    placeholder="Write a 3-sentence cold email to {{first_name}} at {{company}}, mention their recent {{trigger_event}}, and ask for a 15-min call."
+                  />
+                </div>
+                <Button size="sm" variant="outline" onClick={handlePreview} disabled={previewing} className="w-full">
+                  {previewing ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
+                  Preview with sample contact
+                </Button>
+                {preview && (
+                  <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs space-y-2">
+                    <div><span className="font-semibold">Subject:</span> {preview.subject}</div>
+                    <div className="whitespace-pre-wrap">{preview.body}</div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div>
+                  <Label>Subject</Label>
+                  <Input value={cfg.subject ?? ""} onChange={(e) => set("subject", e.target.value)} />
+                </div>
+                <div>
+                  <Label>Body</Label>
+                  <Textarea rows={8} value={cfg.body ?? ""} onChange={(e) => set("body", e.target.value)} />
+                </div>
+              </>
+            )}
+
+            {variables.length > 0 && (
+              <div>
+                <Label className="text-xs">Available variables</Label>
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {variables.map((v) => (
+                    <span key={v} className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-mono">
+                      {`{{${v}}}`}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {node.node_type === "wait" && (
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <Label>Duration</Label>
+              <Input type="number" min={0} value={cfg.duration ?? 1} onChange={(e) => set("duration", Number(e.target.value))} />
+            </div>
+            <div>
+              <Label>Unit</Label>
+              <Select value={cfg.unit ?? "days"} onValueChange={(v) => set("unit", v)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="minutes">minutes</SelectItem>
+                  <SelectItem value="hours">hours</SelectItem>
+                  <SelectItem value="days">days</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        )}
+
+        {node.node_type === "log_activity" && (
+          <>
+            <div>
+              <Label>Activity type</Label>
+              <Input value={cfg.activity_type ?? ""} onChange={(e) => set("activity_type", e.target.value)} placeholder="contacted / opened / custom" />
+            </div>
+            <div>
+              <Label>Note (optional)</Label>
+              <Textarea rows={3} value={cfg.note ?? ""} onChange={(e) => set("note", e.target.value)} />
+            </div>
+          </>
+        )}
+
+        {node.node_type === "condition" && (
+          <>
+            <div>
+              <Label>Check</Label>
+              <Select value={cfg.condition_type ?? "opened"} onValueChange={(v) => set("condition_type", v)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="opened">Email opened</SelectItem>
+                  <SelectItem value="replied">Email replied</SelectItem>
+                  <SelectItem value="clicked">Link clicked</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Wait window (hours)</Label>
+              <Input type="number" min={1} value={cfg.wait_window_hours ?? 24} onChange={(e) => set("wait_window_hours", Number(e.target.value))} />
+            </div>
+            <p className="text-xs text-muted-foreground">YES branch fires if event happens within window. NO branch fires after timeout.</p>
+          </>
+        )}
+
+        {node.node_type === "end" && (
+          <p className="text-sm text-muted-foreground">Terminates this branch. No configuration needed.</p>
+        )}
+      </div>
+
+      {node.node_type !== "trigger" && (
+        <div className="p-4 border-t border-border">
+          <Button variant="destructive" size="sm" className="w-full" onClick={onDelete}>
+            <Trash2 className="h-3.5 w-3.5 mr-1.5" /> Delete node
+          </Button>
+        </div>
+      )}
+    </aside>
+  );
+};
