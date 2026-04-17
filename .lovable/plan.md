@@ -1,56 +1,90 @@
 
 
-User wants a "Sequences" tab/section accessible from the dashboard. Looking at existing tables: `sequences`, `sequence_steps`, `enrollments`, `senders`, `contact_lists` are all in place. No `/sequences` route exists yet. Plan keeps Phase 2 sending out of scope (cron + AI generation) — this is just the builder UI so user can create + manage sequences. Sending wiring comes after.
+## Plan: n8n-style Visual Sequence Builder
 
-## Plan: Sequences Tab
+### Stack additions
+- **`@xyflow/react`** (React Flow) for the node canvas
+- **OpenAI gpt-4.1-mini** via new `OPENAI_API_KEY` secret (called from edge function only)
 
-### Navigation
-- Add **Sequences** link to dashboard header + dashboard stat tile already points here
-- New routes: `/sequences` (list), `/sequences/:id` (editor)
+### Database changes
+Replace the linear `sequence_steps` model with a graph model:
+- **New table `sequence_nodes`**: `id, sequence_id, user_id, node_type, position_x, position_y, config jsonb, created_at, updated_at`
+  - `node_type`: `trigger | send_email | wait | log_activity | condition | end`
+  - `config` holds type-specific settings (delay, prompt, subject, branch labels, etc.)
+- **New table `sequence_edges`**: `id, sequence_id, user_id, source_node_id, target_node_id, source_handle` (source_handle = `default | true | false` for condition branches)
+- **New table `contact_activity`**: `id, user_id, contact_id, sequence_id, node_id, activity_type, metadata, created_at` — for the Log Activity node
+- Keep `enrollments` but add `current_node_id uuid` so the runner walks the graph instead of incrementing step numbers
+- Drop usage of `sequence_steps` (table can stay for now, just unused)
 
-### Page 1: `/sequences` — List view
-Table of all sequences with columns:
-- Name · Status (draft/active/paused) · Steps count · Contact list · Enrolled count · Created
-- Top-right: **+ New Sequence** button → opens dialog (name + pick contact list + pick senders to rotate) → creates row → routes to editor
-- Row actions: Edit · Pause/Activate · Delete
+### Dashboard
+- Add **Sequences** link to the dashboard `<header>` nav (alongside Contacts/Senders/Files)
+- Sequences stat tile already links to `/sequences` ✓
 
-### Page 2: `/sequences/:id` — Editor
-Three sections:
+### Sequences list page (`/sequences`)
+- Keep existing list, but the "New Sequence" dialog now creates a sequence + auto-inserts a single **Trigger** node at center
+- Row "Edit" links go to the new canvas
 
-**1. Settings card (top)**
-- Name (inline edit)
-- Contact list dropdown (from `contact_lists`)
-- Sender rotation (multi-select from active `senders`, drag to reorder → saves to `sequences.sender_rotation` jsonb)
-- Status toggle: Draft ↔ Active (Active = will be picked up by future cron)
+### Node canvas (`/sequences/:id`) — REPLACES old editor
+Layout:
+- **Top bar**: name (inline edit) · status pill (Draft/Active) · Save indicator · "Enroll contacts" button · back link
+- **Left sidebar (node palette)**: draggable node types with icons + descriptions
+- **Center**: React Flow canvas (pan/zoom, minimap, controls)
+- **Right drawer (node inspector)**: opens on node click, edits selected node's `config`
 
-**2. Steps timeline (middle)**
-- Vertical list of `sequence_steps` ordered by `step_order`
-- Each step card shows: "Day X" badge · subject preview · AI prompt preview · edit/delete buttons
-- **+ Add Step** button between/after cards
-- Step editor (inline expand or dialog):
-  - Delay days (number, 0 for first)
-  - Toggle: **Use AI** (default on) vs **Static template**
-  - If AI: prompt textarea + model picker (gemini-2.5-flash default, free) + optional subject hint
-  - If static: subject + body textareas with `{{variable}}` insert helper (pulls from contact list's detected custom_columns)
-  - Live variable chips showing what's available from the linked list
+### The 6 node types
 
-**3. Enrollment panel (bottom)**
-- Shows: X contacts in list · Y already enrolled · Z suppressed/DNC
-- **Enroll all eligible** button (disabled until status=active + ≥1 step + ≥1 sender)
-- Calls a new edge function `enroll-contacts` which bulk-inserts `enrollments` rows skipping suppressed/DNC/already-enrolled, sets `next_send_at = now()` for step 0
+| Node | Color | Config |
+|---|---|---|
+| **Trigger** | green | `contact_list_id` (dropdown of lists) — auto-created, only one per sequence |
+| **Send Email** | blue | `sender_id` (or "rotate"), `mode: ai\|template`, if AI: `prompt`, `subject_hint`, `model=gpt-4.1-mini`; if template: `subject`, `body` with `{{variable}}` picker |
+| **Wait** | amber | `duration` (number) + `unit` (minutes/hours/days) |
+| **Log Activity** | purple | `activity_type` (free text or dropdown: contacted/opened/clicked/custom), `note` |
+| **Condition** | pink | `condition_type: opened\|replied\|clicked`, `wait_window_hours` — emits 2 handles (true/false) |
+| **End** | gray | no config — terminates branch |
 
-### Dashboard updates
-- The "Sequences" stat tile already exists — point it to `/sequences` instead of `/dashboard`
-- Add new card **Active Sequences** showing top 3 with name + enrolled/sent counts + link
+### Edges
+- Standard React Flow edges, animated when sequence is active
+- Condition node has 2 source handles (green=true, red=false)
+- Validation: must have exactly 1 trigger; every non-end leaf should connect to End
 
-### Out of scope (next phase)
-- `generate-email` edge function (OpenAI/Gemini)
-- `send-due-emails` cron worker
-- Open/reply tracking
-- Per-sender daily caps
-These are Phase 2b once you've built + tested a sequence end-to-end in the UI.
+### Persistence
+- Debounced auto-save (1s) on node move / edge change / config change
+- Single `saveFlow()` upserts all nodes + replaces all edges in a transaction
 
-### Files to create/edit
-- **New**: `src/pages/Sequences.tsx`, `src/pages/SequenceEditor.tsx`, `supabase/functions/enroll-contacts/index.ts` (+ deno.json)
-- **Edit**: `src/App.tsx` (2 routes), `src/pages/Dashboard.tsx` (fix sequences tile link + add active sequences card)
+### AI generation edge function — `generate-email`
+- New edge function, takes `{ contact, prompt, subject_hint }`
+- Reads `OPENAI_API_KEY` (request from user via secret tool)
+- Calls OpenAI Chat Completions with model `gpt-4.1-mini`
+- Returns `{ subject, body }` — invoked at SEND time by the runner (out of scope for this PR), but also exposed as a "Preview email" button in the Send Email node inspector so the user can test against a sample contact
+
+### Out of scope (Phase 2c — next)
+- The actual runner/cron that walks the graph for each enrollment
+- Open/reply tracking webhooks (the Condition node will work once we have these)
+- Branch validation UI warnings
+
+### Files
+**New:**
+- `src/pages/SequenceCanvas.tsx` (replaces SequenceEditor as the page rendered at `/sequences/:id`)
+- `src/components/sequence-canvas/NodePalette.tsx`
+- `src/components/sequence-canvas/NodeInspector.tsx`
+- `src/components/sequence-canvas/nodes/TriggerNode.tsx`
+- `src/components/sequence-canvas/nodes/SendEmailNode.tsx`
+- `src/components/sequence-canvas/nodes/WaitNode.tsx`
+- `src/components/sequence-canvas/nodes/LogActivityNode.tsx`
+- `src/components/sequence-canvas/nodes/ConditionNode.tsx`
+- `src/components/sequence-canvas/nodes/EndNode.tsx`
+- `supabase/functions/generate-email/index.ts` (+ deno.json)
+
+**Edit:**
+- `src/App.tsx` — point `/sequences/:id` to `SequenceCanvas`
+- `src/pages/Dashboard.tsx` — add Sequences link in header nav
+- `src/pages/Sequences.tsx` — new sequence dialog auto-creates trigger node
+- Delete `src/pages/SequenceEditor.tsx`
+
+### Order of operations
+1. Request `OPENAI_API_KEY` secret
+2. Run migration (new tables)
+3. Install `@xyflow/react`
+4. Build canvas + nodes + inspector
+5. Build `generate-email` edge function
 
