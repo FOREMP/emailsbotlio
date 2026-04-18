@@ -102,68 +102,83 @@ const Inner = () => {
   }, [sequence]);
 
   const seeding = useRef(false);
+  const dirty = useRef(false);
+  const hasFitView = useRef(false);
+  const reactFlow = useReactFlow();
+
+  // Seed defaults exactly once when sequence has no nodes
   useEffect(() => {
-    if (!initialLoad.current) return;
-    if (dbNodes.length === 0 && sequence && id && user && !seeding.current) {
-      // Auto-seed a default cold-outreach + 1 follow-up template (run ONCE)
-      seeding.current = true;
-      initialLoad.current = false;
-      (async () => {
-        const triggerCfg = sequence.contact_list_id ? { contact_list_id: sequence.contact_list_id } : {};
-        const seedNodes = [
-          { node_type: "trigger",     position_x: 250, position_y: 40,  config: triggerCfg },
-          { node_type: "send_email",  position_x: 250, position_y: 180, config: { mode: "ai", sender_strategy: "all", prompt: "Write a 3-sentence cold email to {{first_name}} introducing our service. Personal, specific, no fluff. Ask for a 15-min call.", subject_hint: "Quick question about {{company}}", send_delay_seconds: 60, send_jitter_seconds: 30 } },
-          { node_type: "wait",        position_x: 250, position_y: 340, config: { duration: 3, unit: "days" } },
-          { node_type: "send_email",  position_x: 250, position_y: 480, config: { mode: "ai", sender_strategy: "all", prompt: "Write a short, friendly follow-up email to {{first_name}}. Reference the previous email gently, restate the value in one sentence, and ask if next week works for a quick chat.", subject_hint: "Following up", send_delay_seconds: 60, send_jitter_seconds: 30 } },
-          { node_type: "end",         position_x: 250, position_y: 640, config: {} },
-        ].map((n) => ({ ...n, sequence_id: id, user_id: user.id }));
+    if (!sequence || !id || !user) return;
+    if (dbNodes.length > 0) return;
+    if (seeding.current) return;
+    // Defensive: if any trigger already exists in DB, do not seed
+    if ((dbNodes as any[]).some((n) => n.node_type === "trigger")) return;
+    seeding.current = true;
+    (async () => {
+      const triggerCfg = sequence.contact_list_id ? { contact_list_id: sequence.contact_list_id } : {};
+      const seedNodes = [
+        { node_type: "trigger",     position_x: 250, position_y: 40,  config: triggerCfg },
+        { node_type: "send_email",  position_x: 250, position_y: 180, config: { mode: "ai", sender_strategy: "all", prompt: "Write a 3-sentence cold email to {{first_name}} introducing our service. Personal, specific, no fluff. Ask for a 15-min call.", subject_hint: "Quick question about {{company}}", send_delay_seconds: 60, send_jitter_seconds: 30 } },
+        { node_type: "wait",        position_x: 250, position_y: 340, config: { duration: 3, unit: "days" } },
+        { node_type: "send_email",  position_x: 250, position_y: 480, config: { mode: "ai", sender_strategy: "all", prompt: "Write a short, friendly follow-up email to {{first_name}}. Reference the previous email gently, restate the value in one sentence, and ask if next week works for a quick chat.", subject_hint: "Following up", send_delay_seconds: 60, send_jitter_seconds: 30 } },
+        { node_type: "end",         position_x: 250, position_y: 640, config: {} },
+      ].map((n) => ({ ...n, sequence_id: id, user_id: user.id }));
 
-        const { data: insertedNodes, error: nodeErr } = await supabase
-          .from("sequence_nodes")
-          .insert(seedNodes)
-          .select();
-        if (nodeErr || !insertedNodes) { seeding.current = false; return; }
+      const { data: insertedNodes, error: nodeErr } = await supabase
+        .from("sequence_nodes")
+        .insert(seedNodes)
+        .select();
+      if (nodeErr || !insertedNodes) { seeding.current = false; return; }
 
-        // Wire edges in order
-        const edgePayload = [];
-        for (let i = 0; i < insertedNodes.length - 1; i++) {
-          edgePayload.push({
-            sequence_id: id,
-            user_id: user.id,
-            source_node_id: insertedNodes[i].id,
-            target_node_id: insertedNodes[i + 1].id,
-            source_handle: "default",
-          });
-        }
-        if (edgePayload.length > 0) {
-          await supabase.from("sequence_edges").insert(edgePayload);
-        }
-        qc.invalidateQueries({ queryKey: ["seq-nodes", id] });
-        qc.invalidateQueries({ queryKey: ["seq-edges", id] });
-      })();
-      return;
-    }
-    if (dbNodes.length > 0) {
-      setNodes(
-        dbNodes.map((n: any) => ({
-          id: n.id,
-          type: n.node_type,
-          position: { x: n.position_x, y: n.position_y },
-          data: { config: n.config, node_type: n.node_type },
-        })),
-      );
-      setEdges(
-        dbEdges.map((e: any) => ({
-          id: e.id,
-          source: e.source_node_id,
-          target: e.target_node_id,
-          sourceHandle: e.source_handle === "default" ? null : e.source_handle,
-          animated: sequence?.status === "active",
-        })),
-      );
-      initialLoad.current = false;
-    }
-  }, [dbNodes, dbEdges, sequence, id, user, qc]);
+      const edgePayload = [];
+      for (let i = 0; i < insertedNodes.length - 1; i++) {
+        edgePayload.push({
+          sequence_id: id,
+          user_id: user.id,
+          source_node_id: insertedNodes[i].id,
+          target_node_id: insertedNodes[i + 1].id,
+          source_handle: "default",
+        });
+      }
+      if (edgePayload.length > 0) {
+        await supabase.from("sequence_edges").insert(edgePayload);
+      }
+      qc.invalidateQueries({ queryKey: ["seq-nodes", id] });
+      qc.invalidateQueries({ queryKey: ["seq-edges", id] });
+    })();
+  }, [dbNodes, sequence, id, user, qc]);
+
+  // Reconcile DB → local whenever DB changes AND we're not dirty (unsaved local edits)
+  useEffect(() => {
+    if (dirty.current) return;
+    if (dbNodes.length === 0) return;
+    setNodes(
+      dbNodes.map((n: any) => ({
+        id: n.id,
+        type: n.node_type,
+        position: { x: n.position_x, y: n.position_y },
+        data: { config: n.config, node_type: n.node_type },
+      })),
+    );
+    setEdges(
+      dbEdges.map((e: any) => ({
+        id: e.id,
+        source: e.source_node_id,
+        target: e.target_node_id,
+        sourceHandle: e.source_handle === "default" ? null : e.source_handle,
+        animated: sequence?.status === "active",
+      })),
+    );
+  }, [dbNodes, dbEdges, sequence?.status]);
+
+  // Fit view exactly once when nodes first appear
+  useEffect(() => {
+    if (hasFitView.current) return;
+    if (nodes.length === 0) return;
+    hasFitView.current = true;
+    // Defer to next frame so RF measures nodes first
+    requestAnimationFrame(() => reactFlow.fitView({ padding: 0.2, duration: 200 }));
+  }, [nodes.length, reactFlow]);
 
   const triggerSave = useCallback(() => {
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
