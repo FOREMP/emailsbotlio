@@ -51,6 +51,26 @@ const Contacts = () => {
     },
   });
 
+  // Last-contacted timestamps per contact in this list
+  const { data: lastContacted = {} } = useQuery({
+    queryKey: ["last-contacted", selectedList, contacts.length],
+    enabled: !!selectedList && contacts.length > 0,
+    queryFn: async () => {
+      const ids = contacts.map((c) => c.id);
+      const { data } = await supabase
+        .from("sent_emails")
+        .select("contact_id, sent_at")
+        .in("contact_id", ids)
+        .eq("status", "sent")
+        .order("sent_at", { ascending: false });
+      const map: Record<string, string> = {};
+      (data ?? []).forEach((r: any) => {
+        if (r.contact_id && !map[r.contact_id]) map[r.contact_id] = r.sent_at;
+      });
+      return map;
+    },
+  });
+
   // Create list
   const createList = useMutation({
     mutationFn: async () => {
@@ -382,12 +402,14 @@ const Contacts = () => {
                         {listCustomColumns.map((col) => (
                           <th key={col} className="text-left px-4 py-3 font-medium text-muted-foreground whitespace-nowrap">{col}</th>
                         ))}
+                        <th className="text-left px-4 py-3 font-medium text-muted-foreground whitespace-nowrap">Last contacted</th>
                         <th className="text-right px-4 py-3 font-medium text-muted-foreground">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {contacts.map((c) => {
                         const cf = (c.custom_fields as Record<string, string> | null) ?? {};
+                        const lc = (lastContacted as Record<string, string>)[c.id];
                         return (
                           <tr key={c.id} className="border-b border-border last:border-0 hover:bg-muted/30">
                             <td className="px-4 py-3">{[c.first_name, c.last_name].filter(Boolean).join(" ") || "—"}</td>
@@ -396,6 +418,9 @@ const Contacts = () => {
                             {listCustomColumns.map((col) => (
                               <td key={col} className="px-4 py-3 text-muted-foreground">{cf[col] || "—"}</td>
                             ))}
+                            <td className="px-4 py-3 text-muted-foreground whitespace-nowrap text-xs">
+                              {lc ? new Date(lc).toLocaleString() : <span className="text-muted-foreground/50">—</span>}
+                            </td>
                             <td className="px-4 py-3 text-right">
                               <Button variant="ghost" size="sm" className="text-destructive" onClick={() => deleteContact.mutate(c.id)}>
                                 <Trash2 className="h-3.5 w-3.5" />

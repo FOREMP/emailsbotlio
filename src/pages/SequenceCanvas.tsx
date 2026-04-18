@@ -103,24 +103,40 @@ const Inner = () => {
 
   useEffect(() => {
     if (!initialLoad.current) return;
-    if (dbNodes.length === 0 && sequence && id) {
-      // Auto-create a trigger node if none exist
+    if (dbNodes.length === 0 && sequence && id && user) {
+      // Auto-seed a default cold-outreach + 1 follow-up template
       (async () => {
-        const { data, error } = await supabase
+        const triggerCfg = sequence.contact_list_id ? { contact_list_id: sequence.contact_list_id } : {};
+        const seedNodes = [
+          { node_type: "trigger",     position_x: 250, position_y: 40,  config: triggerCfg },
+          { node_type: "send_email",  position_x: 250, position_y: 180, config: { mode: "ai", sender_strategy: "all", prompt: "Write a 3-sentence cold email to {{first_name}} introducing our service. Personal, specific, no fluff. Ask for a 15-min call.", subject_hint: "Quick question", send_delay_seconds: 60, send_jitter_seconds: 30 } },
+          { node_type: "wait",        position_x: 250, position_y: 340, config: { duration: 3, unit: "days" } },
+          { node_type: "send_email",  position_x: 250, position_y: 480, config: { mode: "ai", sender_strategy: "all", prompt: "Write a short, friendly follow-up email to {{first_name}}. Reference the previous email gently, restate the value in one sentence, and ask if next week works for a quick chat.", subject_hint: "Following up", send_delay_seconds: 60, send_jitter_seconds: 30 } },
+          { node_type: "end",         position_x: 250, position_y: 640, config: {} },
+        ].map((n) => ({ ...n, sequence_id: id, user_id: user.id }));
+
+        const { data: insertedNodes, error: nodeErr } = await supabase
           .from("sequence_nodes")
-          .insert({
+          .insert(seedNodes)
+          .select();
+        if (nodeErr || !insertedNodes) return;
+
+        // Wire edges in order
+        const edgePayload = [];
+        for (let i = 0; i < insertedNodes.length - 1; i++) {
+          edgePayload.push({
             sequence_id: id,
-            user_id: user!.id,
-            node_type: "trigger",
-            position_x: 250,
-            position_y: 80,
-            config: sequence.contact_list_id ? { contact_list_id: sequence.contact_list_id } : {},
-          })
-          .select()
-          .single();
-        if (!error && data) {
-          qc.invalidateQueries({ queryKey: ["seq-nodes", id] });
+            user_id: user.id,
+            source_node_id: insertedNodes[i].id,
+            target_node_id: insertedNodes[i + 1].id,
+            source_handle: "default",
+          });
         }
+        if (edgePayload.length > 0) {
+          await supabase.from("sequence_edges").insert(edgePayload);
+        }
+        qc.invalidateQueries({ queryKey: ["seq-nodes", id] });
+        qc.invalidateQueries({ queryKey: ["seq-edges", id] });
       })();
       return;
     }
@@ -274,7 +290,10 @@ const Inner = () => {
       if (error) throw error;
       return data;
     },
-    onSuccess: (d: any) => toast({ title: "Enrollment complete", description: `${d?.enrolled ?? 0} contacts enrolled` }),
+    onSuccess: (d: any) => toast({
+      title: "Enrollment complete",
+      description: `${d?.enrolled ?? 0} new · ${d?.already_enrolled ?? 0} already enrolled · ${d?.suppressed ?? 0} suppressed · ${d?.no_email ?? 0} no email`,
+    }),
     onError: (e: Error) => toast({ title: "Enrollment failed", description: e.message, variant: "destructive" }),
   });
 

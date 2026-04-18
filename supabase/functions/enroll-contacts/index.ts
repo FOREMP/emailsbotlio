@@ -1,5 +1,9 @@
-import { createClient } from "@supabase/supabase-js";
-import { corsHeaders } from "@supabase/supabase-js/cors";
+import { createClient } from "npm:@supabase/supabase-js@2";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -55,19 +59,39 @@ Deno.serve(async (req) => {
       });
     }
 
-    if (!seq.contact_list_id) {
+    // Resolve contact list — body override > sequence default > trigger node config
+    let listId: string | null = body?.list_id ?? seq.contact_list_id ?? null;
+    if (!listId) {
+      const { data: triggerNode } = await supabase
+        .from("sequence_nodes")
+        .select("config")
+        .eq("sequence_id", sequenceId)
+        .eq("node_type", "trigger")
+        .maybeSingle();
+      listId = (triggerNode?.config as any)?.contact_list_id ?? null;
+    }
+    if (!listId) {
       return new Response(JSON.stringify({ error: "Sequence has no contact list" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
+    // Find the trigger node so new enrollments start on the node AFTER trigger
+    const { data: triggerRow } = await supabase
+      .from("sequence_nodes")
+      .select("id")
+      .eq("sequence_id", sequenceId)
+      .eq("node_type", "trigger")
+      .maybeSingle();
+    const triggerNodeId: string | null = triggerRow?.id ?? null;
+
     // Load all contacts in list
     const { data: contacts, error: contactsErr } = await supabase
       .from("contacts")
       .select("id, email")
       .eq("user_id", user.id)
-      .eq("list_id", seq.contact_list_id);
+      .eq("list_id", listId);
 
     if (contactsErr) throw contactsErr;
 
@@ -89,6 +113,7 @@ Deno.serve(async (req) => {
     let suppressed = 0;
     let alreadyEnrolled = 0;
     let noEmail = 0;
+    const nowIso = new Date().toISOString();
     const toInsert: Array<Record<string, unknown>> = [];
 
     for (const c of contacts ?? []) {
@@ -100,23 +125,26 @@ Deno.serve(async (req) => {
         sequence_id: sequenceId,
         contact_id: c.id,
         current_step: 0,
+        current_node_id: triggerNodeId,
         status: "active",
-        next_send_at: new Date().toISOString(),
+        next_send_at: nowIso,
       });
     }
 
-    let inserted = 0;
+    let enrolled = 0;
     if (toInsert.length > 0) {
-      const { error: insertErr, count } = await supabase
+      // Use upsert with the unique index to be safe against races
+      const { data: ins, error: insertErr } = await supabase
         .from("enrollments")
-        .insert(toInsert, { count: "exact" });
+        .upsert(toInsert, { onConflict: "sequence_id,contact_id", ignoreDuplicates: true })
+        .select("id");
       if (insertErr) throw insertErr;
-      inserted = count ?? toInsert.length;
+      enrolled = ins?.length ?? 0;
     }
 
     return new Response(
       JSON.stringify({
-        inserted,
+        enrolled,
         suppressed,
         already_enrolled: alreadyEnrolled,
         no_email: noEmail,
