@@ -37,9 +37,10 @@ interface FileImportDialogProps {
   existingColumns?: string[];
 }
 
-function autoDetectMapping(headers: string[]): ColumnMapping {
+function autoDetectMapping(headers: string[], existingColumns: string[] = []): ColumnMapping {
   const mapping: ColumnMapping = {};
   const lowerHeaders = headers.map((h) => h.toLowerCase().trim());
+  const existingLower = existingColumns.map((c) => c.toLowerCase().trim());
 
   const assigned = new Set<string>();
 
@@ -58,7 +59,13 @@ function autoDetectMapping(headers: string[]): ColumnMapping {
       mapping[headers[i]] = "last_name";
       assigned.add("last_name");
     } else {
-      mapping[headers[i]] = "custom";
+      // Try to match an existing custom column by name (case-insensitive)
+      const matchIdx = existingLower.indexOf(lower);
+      if (matchIdx >= 0) {
+        mapping[headers[i]] = `reuse:${existingColumns[matchIdx]}`;
+      } else {
+        mapping[headers[i]] = "custom";
+      }
     }
   }
 
@@ -109,32 +116,41 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
     try {
       const data = await parseFile(file);
       setParsed(data);
-      setMapping(autoDetectMapping(data.headers));
+      setMapping(autoDetectMapping(data.headers, existingColumns));
       setFileName(file.name);
       setFileMeta({ size: file.size, type: file.type || file.name.split(".").pop() || "" });
     } catch (err: any) {
       toast.error(err.message);
     }
     e.target.value = "";
-  }, []);
+  }, [existingColumns]);
 
   const updateMapping = (header: string, value: string) => {
     setMapping((prev) => {
       const next = { ...prev };
-      // If assigning a standard field, unassign it from any other column
-      if (value !== "custom" && value !== "skip") {
+      // If assigning a unique standard field, unassign it from any other column
+      const uniqueRoles = ["email", "phone", "first_name", "last_name"];
+      if (uniqueRoles.includes(value)) {
         for (const key of Object.keys(next)) {
           if (next[key] === value) next[key] = "custom";
         }
       }
-      next[header] = value as any;
+      next[header] = value;
       return next;
     });
   };
 
   const hasEmail = Object.values(mapping).includes("email");
+  // Custom columns = both new "custom" headers and any "reuse:" mappings (under reused key)
   const customColumns = parsed
-    ? parsed.headers.filter((h) => mapping[h] === "custom")
+    ? parsed.headers
+        .map((h) => {
+          const m = mapping[h];
+          if (m === "custom") return h;
+          if (typeof m === "string" && m.startsWith("reuse:")) return m.slice("reuse:".length);
+          return null;
+        })
+        .filter((v): v is string => !!v)
     : [];
 
   const handleConfirm = () => {
@@ -147,6 +163,9 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
         if (role === "skip") continue;
         if (role === "custom") {
           if (row[header]) contact.custom_fields[header] = row[header];
+        } else if (typeof role === "string" && role.startsWith("reuse:")) {
+          const key = role.slice("reuse:".length);
+          if (row[header]) contact.custom_fields[key] = row[header];
         } else {
           contact[role] = row[header];
         }
