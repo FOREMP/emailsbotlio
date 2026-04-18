@@ -196,7 +196,7 @@ const Sequences = () => {
             </Table>
           )}
         </div>
-      </main>
+      </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
