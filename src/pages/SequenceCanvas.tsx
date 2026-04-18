@@ -290,7 +290,10 @@ const Inner = () => {
       if (error) throw error;
       return data;
     },
-    onSuccess: (d: any) => toast({ title: "Enrollment complete", description: `${d?.enrolled ?? 0} contacts enrolled` }),
+    onSuccess: (d: any) => toast({
+      title: "Enrollment complete",
+      description: `${d?.enrolled ?? 0} new · ${d?.already_enrolled ?? 0} already enrolled · ${d?.suppressed ?? 0} suppressed · ${d?.no_email ?? 0} no email`,
+    }),
     onError: (e: Error) => toast({ title: "Enrollment failed", description: e.message, variant: "destructive" }),
   });
 
