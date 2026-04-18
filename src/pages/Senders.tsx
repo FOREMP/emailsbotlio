@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import Header from "@/components/Header";
@@ -8,7 +8,8 @@ import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
-import { Plus, Trash2, Mail, Globe } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Plus, Trash2, Mail, Send, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 interface Sender {
@@ -19,41 +20,90 @@ interface Sender {
   is_active: boolean;
 }
 
+interface SendingDomain {
+  id: string;
+  domain: string;
+  brand: "foremp" | "botlio";
+  reply_to_email: string;
+  is_active: boolean;
+}
+
+const brandClass = (b: string) =>
+  b === "foremp"
+    ? "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30"
+    : "bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/30";
+
 const Senders = () => {
   const { user } = useAuth();
   const [senders, setSenders] = useState<Sender[]>([]);
+  const [domains, setDomains] = useState<SendingDomain[]>([]);
   const [loading, setLoading] = useState(true);
+  const [seeding, setSeeding] = useState(false);
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ from_name: "", from_email: "", reply_to: "" });
+  const [form, setForm] = useState({ from_name: "", local_part: "", domain: "" });
   const [saving, setSaving] = useState(false);
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testEmailFor, setTestEmailFor] = useState<string | null>(null);
+  const [testTo, setTestTo] = useState("");
 
   const load = async () => {
     setLoading(true);
-    const { data, error } = await supabase.from("senders").select("*").order("created_at", { ascending: false });
-    if (error) toast.error(error.message);
-    else setSenders(data || []);
+    const [s, d] = await Promise.all([
+      supabase.from("senders").select("*").order("from_email"),
+      supabase.from("sending_domains").select("*").order("domain"),
+    ]);
+    if (s.error) toast.error(s.error.message);
+    else setSenders(s.data || []);
+    if (d.error) toast.error(d.error.message);
+    else setDomains((d.data as any) || []);
     setLoading(false);
   };
 
   useEffect(() => { if (user) load(); }, [user]);
 
+  const seedDefaults = async () => {
+    setSeeding(true);
+    const { error } = await supabase.rpc("seed_default_senders");
+    setSeeding(false);
+    if (error) return toast.error(error.message);
+    toast.success("Default senders ready (Eric + Isak per domain)");
+    load();
+  };
+
+  const domainBrand = (email: string) => {
+    const dom = email.split("@")[1];
+    return domains.find((d) => d.domain === dom);
+  };
+
+  const grouped = useMemo(() => {
+    const groups: Record<string, Sender[]> = {};
+    for (const s of senders) {
+      const dom = s.from_email.split("@")[1] ?? "other";
+      (groups[dom] ||= []).push(s);
+    }
+    return groups;
+  }, [senders]);
+
   const create = async () => {
     if (!user) return;
-    if (!form.from_name || !form.from_email) {
-      toast.error("Name and email required");
+    if (!form.from_name || !form.local_part || !form.domain) {
+      toast.error("Name, local part and domain required");
       return;
     }
+    const dom = domains.find((d) => d.domain === form.domain);
+    if (!dom) return toast.error("Pick a valid domain");
+    const fromEmail = `${form.local_part.trim().toLowerCase()}@${form.domain}`;
     setSaving(true);
     const { error } = await supabase.from("senders").insert({
       user_id: user.id,
       from_name: form.from_name,
-      from_email: form.from_email,
-      reply_to: form.reply_to || null,
+      from_email: fromEmail,
+      reply_to: dom.reply_to_email,
     });
     setSaving(false);
     if (error) return toast.error(error.message);
     toast.success("Sender added");
-    setForm({ from_name: "", from_email: "", reply_to: "" });
+    setForm({ from_name: "", local_part: "", domain: "" });
     setOpen(false);
     load();
   };
@@ -71,6 +121,39 @@ const Senders = () => {
     load();
   };
 
+  const sendTest = async (s: Sender) => {
+    if (!testTo || !testTo.includes("@")) return toast.error("Enter a recipient email");
+    setTestingId(s.id);
+    const { data, error } = await supabase.functions.invoke("send-cold-email", {
+      body: {
+        user_id: user!.id,
+        sender_id: s.id,
+        contact: { email: testTo, first_name: "Test" },
+        mode: "template",
+        subject: `Routing test from ${s.from_email}`,
+        body: `Hi — this is a routing test sent from ${s.from_name} <${s.from_email}>.\n\nReply to this email to confirm replies land in the right Zoho inbox.\n\n— ${s.from_name}`,
+      },
+    });
+    setTestingId(null);
+    if (error || (data as any)?.error) {
+      toast.error((data as any)?.error || error?.message || "Test send failed");
+      return;
+    }
+    toast.success(`Test queued via ${(data as any)?.sender_domain} → reply-to ${(data as any)?.reply_to}`);
+    setTestEmailFor(null);
+  };
+
+  const hasDomains = domains.length > 0;
+  const allDefaultsPresent = useMemo(() => {
+    if (!hasDomains) return true;
+    for (const d of domains.filter((x) => x.is_active)) {
+      const has = senders.some((s) => s.from_email === `eric@${d.domain}`) &&
+                  senders.some((s) => s.from_email === `isak@${d.domain}`);
+      if (!has) return false;
+    }
+    return true;
+  }, [domains, senders, hasDomains]);
+
   return (
     <div className="min-h-screen bg-background">
       <Header />
@@ -78,50 +161,65 @@ const Senders = () => {
         <div className="flex items-start justify-between mb-8 gap-4 flex-wrap">
           <div>
             <h1 className="text-3xl font-bold tracking-tight mb-2">Senders</h1>
-            <p className="text-muted-foreground">The identities your cold emails are sent from. Rotate multiple senders to keep volume natural.</p>
+            <p className="text-muted-foreground max-w-2xl">
+              The identities your cold emails are sent from. Each sender is tied to a domain; replies are auto-routed to the brand's Zoho inbox.
+            </p>
           </div>
-          <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger asChild>
-              <Button className="gradient-primary border-0 text-primary-foreground"><Plus className="h-4 w-4" /> Add sender</Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader><DialogTitle>Add a sender identity</DialogTitle></DialogHeader>
-              <div className="space-y-4 py-2">
-                <div>
-                  <Label>From name</Label>
-                  <Input value={form.from_name} onChange={(e) => setForm({ ...form, from_name: e.target.value })} placeholder="Eric Andersson" />
+          <div className="flex gap-2">
+            {!allDefaultsPresent && (
+              <Button variant="outline" onClick={seedDefaults} disabled={seeding}>
+                <Sparkles className="h-4 w-4" /> {seeding ? "Seeding..." : "Auto-create Eric + Isak per domain"}
+              </Button>
+            )}
+            <Dialog open={open} onOpenChange={setOpen}>
+              <DialogTrigger asChild>
+                <Button className="gradient-primary border-0 text-primary-foreground"><Plus className="h-4 w-4" /> Add sender</Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader><DialogTitle>Add a sender identity</DialogTitle></DialogHeader>
+                <div className="space-y-4 py-2">
+                  <div>
+                    <Label>From name</Label>
+                    <Input value={form.from_name} onChange={(e) => setForm({ ...form, from_name: e.target.value })} placeholder="Eric Wahlbom" />
+                  </div>
+                  <div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-end">
+                    <div>
+                      <Label>Local part</Label>
+                      <Input value={form.local_part} onChange={(e) => setForm({ ...form, local_part: e.target.value })} placeholder="eric" />
+                    </div>
+                    <div className="pb-2 text-muted-foreground">@</div>
+                    <div>
+                      <Label>Domain</Label>
+                      <Select value={form.domain} onValueChange={(v) => setForm({ ...form, domain: v })}>
+                        <SelectTrigger><SelectValue placeholder="Pick domain" /></SelectTrigger>
+                        <SelectContent>
+                          {domains.filter((d) => d.is_active).map((d) => (
+                            <SelectItem key={d.id} value={d.domain}>
+                              {d.domain} <span className="text-muted-foreground ml-1">({d.brand})</span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div>
+                    <Label>Reply-to (auto)</Label>
+                    <Input value={form.domain ? domains.find((d) => d.domain === form.domain)?.reply_to_email ?? "" : ""} readOnly className="bg-muted/40" />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Replies are forwarded to your brand inbox automatically — derived from the chosen domain.
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <Label>From email</Label>
-                  <Input value={form.from_email} onChange={(e) => setForm({ ...form, from_email: e.target.value })} placeholder="eric@yourdomain.com" />
-                  <p className="text-xs text-muted-foreground mt-1">Must be on a verified sender domain.</p>
-                </div>
-                <div>
-                  <Label>Reply-to (optional)</Label>
-                  <Input value={form.reply_to} onChange={(e) => setForm({ ...form, reply_to: e.target.value })} placeholder="eric@yourcompany.com" />
-                </div>
-              </div>
-              <DialogFooter>
-                <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
-                <Button onClick={create} disabled={saving} className="gradient-primary border-0 text-primary-foreground">
-                  {saving ? "Saving..." : "Add sender"}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
+                <DialogFooter>
+                  <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+                  <Button onClick={create} disabled={saving} className="gradient-primary border-0 text-primary-foreground">
+                    {saving ? "Saving..." : "Add sender"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </div>
         </div>
-
-        <Card className="p-6 mb-8 bg-muted/30 border-dashed">
-          <div className="flex gap-4">
-            <Globe className="h-5 w-5 text-primary mt-0.5 shrink-0" />
-            <div>
-              <h3 className="font-semibold mb-1">Domain setup required</h3>
-              <p className="text-sm text-muted-foreground mb-3">
-                Before you can actually send, verify the sender domain (e.g. <code className="text-foreground">botlio.email</code>) — a one-time DNS setup. Lovable handles SPF/DKIM/MX automatically. Until DNS verifies, sequences can be built but sending stays paused.
-              </p>
-            </div>
-          </div>
-        </Card>
 
         {loading ? (
           <p className="text-muted-foreground">Loading...</p>
@@ -129,35 +227,67 @@ const Senders = () => {
           <Card className="p-12 text-center">
             <Mail className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
             <h3 className="font-semibold mb-1">No senders yet</h3>
-            <p className="text-sm text-muted-foreground mb-4">Add your first sender identity above.</p>
+            <p className="text-sm text-muted-foreground mb-4">
+              {hasDomains ? "Click \"Auto-create Eric + Isak per domain\" to seed defaults across all 6 domains." : "Set up sender domains first."}
+            </p>
           </Card>
         ) : (
-          <div className="grid gap-3">
-            {senders.map((s) => (
-              <Card key={s.id} className="p-4 flex items-center justify-between gap-4">
-                <div className="flex items-center gap-4 min-w-0">
-                  <div className="h-10 w-10 rounded-full gradient-primary flex items-center justify-center text-primary-foreground font-semibold shrink-0">
-                    {s.from_name.charAt(0).toUpperCase()}
+          <div className="space-y-6">
+            {Object.entries(grouped).map(([dom, list]) => {
+              const d = domains.find((x) => x.domain === dom);
+              return (
+                <div key={dom}>
+                  <div className="flex items-center gap-2 mb-2 px-1">
+                    <h3 className="font-semibold">{dom}</h3>
+                    {d && <Badge variant="outline" className={brandClass(d.brand)}>{d.brand}</Badge>}
+                    {d && <span className="text-xs text-muted-foreground">replies → {d.reply_to_email}</span>}
                   </div>
-                  <div className="min-w-0">
-                    <div className="font-medium truncate">{s.from_name}</div>
-                    <div className="text-sm text-muted-foreground truncate">{s.from_email}{s.reply_to && ` · reply-to ${s.reply_to}`}</div>
+                  <div className="grid gap-2">
+                    {list.map((s) => {
+                      const db = domainBrand(s.from_email);
+                      return (
+                        <Card key={s.id} className="p-4">
+                          <div className="flex items-center justify-between gap-4">
+                            <div className="flex items-center gap-4 min-w-0">
+                              <div className="h-10 w-10 rounded-full gradient-primary flex items-center justify-center text-primary-foreground font-semibold shrink-0">
+                                {s.from_name.charAt(0).toUpperCase()}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="font-medium truncate">{s.from_name}</div>
+                                <div className="text-sm text-muted-foreground truncate">{s.from_email}</div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <Badge variant={s.is_active ? "default" : "secondary"} className="cursor-pointer" onClick={() => toggle(s)}>
+                                {s.is_active ? "Active" : "Paused"}
+                              </Badge>
+                              <Button variant="outline" size="sm" onClick={() => { setTestEmailFor(s.id); setTestTo(""); }}>
+                                <Send className="h-3.5 w-3.5" /> Test send
+                              </Button>
+                              <Button variant="ghost" size="icon" onClick={() => remove(s.id)}>
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </div>
+                          {testEmailFor === s.id && (
+                            <div className="mt-3 flex gap-2 items-end border-t pt-3">
+                              <div className="flex-1">
+                                <Label className="text-xs">Recipient (your inbox)</Label>
+                                <Input value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder="you@example.com" />
+                              </div>
+                              <Button size="sm" onClick={() => sendTest(s)} disabled={testingId === s.id}>
+                                {testingId === s.id ? "Sending..." : "Send test"}
+                              </Button>
+                              <Button size="sm" variant="ghost" onClick={() => setTestEmailFor(null)}>Cancel</Button>
+                            </div>
+                          )}
+                        </Card>
+                      );
+                    })}
                   </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <Badge
-                    variant={s.is_active ? "default" : "secondary"}
-                    className="cursor-pointer"
-                    onClick={() => toggle(s)}
-                  >
-                    {s.is_active ? "Active" : "Paused"}
-                  </Badge>
-                  <Button variant="ghost" size="icon" onClick={() => remove(s.id)}>
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </Card>
-            ))}
+              );
+            })}
           </div>
         )}
       </main>
