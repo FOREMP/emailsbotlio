@@ -1,5 +1,9 @@
-import { createClient } from "@supabase/supabase-js";
-import { corsHeaders } from "@supabase/supabase-js/cors";
+import { createClient } from "npm:@supabase/supabase-js@2";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -55,12 +59,32 @@ Deno.serve(async (req) => {
       });
     }
 
-    if (!seq.contact_list_id) {
+    // Resolve contact list — body override > sequence default > trigger node config
+    let listId: string | null = body?.list_id ?? seq.contact_list_id ?? null;
+    if (!listId) {
+      const { data: triggerNode } = await supabase
+        .from("sequence_nodes")
+        .select("config")
+        .eq("sequence_id", sequenceId)
+        .eq("node_type", "trigger")
+        .maybeSingle();
+      listId = (triggerNode?.config as any)?.contact_list_id ?? null;
+    }
+    if (!listId) {
       return new Response(JSON.stringify({ error: "Sequence has no contact list" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    // Find the trigger node so new enrollments start on the node AFTER trigger
+    const { data: triggerRow } = await supabase
+      .from("sequence_nodes")
+      .select("id")
+      .eq("sequence_id", sequenceId)
+      .eq("node_type", "trigger")
+      .maybeSingle();
+    const triggerNodeId: string | null = triggerRow?.id ?? null;
 
     // Load all contacts in list
     const { data: contacts, error: contactsErr } = await supabase
