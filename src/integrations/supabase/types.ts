@@ -495,6 +495,39 @@ export type Database = {
         }
         Relationships: []
       }
+      sending_domains: {
+        Row: {
+          brand: string
+          created_at: string
+          domain: string
+          id: string
+          is_active: boolean
+          reply_to_email: string
+          sender_subdomain: string
+          updated_at: string
+        }
+        Insert: {
+          brand: string
+          created_at?: string
+          domain: string
+          id?: string
+          is_active?: boolean
+          reply_to_email: string
+          sender_subdomain?: string
+          updated_at?: string
+        }
+        Update: {
+          brand?: string
+          created_at?: string
+          domain?: string
+          id?: string
+          is_active?: boolean
+          reply_to_email?: string
+          sender_subdomain?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       sent_emails: {
         Row: {
           body: string | null
@@ -728,7 +761,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      seed_default_senders: { Args: never; Returns: number }
     }
     Enums: {
       [_ in never]: never

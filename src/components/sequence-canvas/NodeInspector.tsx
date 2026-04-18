@@ -39,8 +39,17 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
   const { data: senders = [] } = useQuery({
     queryKey: ["inspector-senders"],
     queryFn: async () => {
-      const { data } = await supabase.from("senders").select("id, from_name, from_email").eq("is_active", true);
+      const { data } = await supabase.from("senders").select("id, from_name, from_email").eq("is_active", true).order("from_email");
       return data ?? [];
+    },
+    enabled: node?.node_type === "send_email",
+  });
+
+  const { data: domains = [] } = useQuery({
+    queryKey: ["inspector-domains"],
+    queryFn: async () => {
+      const { data } = await supabase.from("sending_domains").select("brand").eq("is_active", true);
+      return Array.from(new Set(((data as any[]) ?? []).map((d) => d.brand)));
     },
     enabled: node?.node_type === "send_email",
   });
@@ -120,17 +129,47 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
         {node.node_type === "send_email" && (
           <>
             <div>
-              <Label>Sender</Label>
-              <Select value={cfg.sender_id ?? "rotate"} onValueChange={(v) => set("sender_id", v)}>
+              <Label>Sender strategy</Label>
+              <Select
+                value={cfg.sender_strategy ?? "all"}
+                onValueChange={(v) => onChange({ ...cfg, sender_strategy: v, sender_id: v === "specific" ? cfg.sender_id : undefined, brand: v === "brand" ? (cfg.brand ?? domains[0]) : undefined })}
+              >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="rotate">Rotate (use sequence rotation)</SelectItem>
-                  {senders.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>{s.from_name} &lt;{s.from_email}&gt;</SelectItem>
+                  <SelectItem value="all">Rotate across all active senders</SelectItem>
+                  {domains.map((b) => (
+                    <SelectItem key={b} value="brand" disabled={cfg.sender_strategy === "brand" && cfg.brand === b}>
+                      Rotate within brand: {b}
+                    </SelectItem>
                   ))}
+                  <SelectItem value="specific">Specific sender</SelectItem>
                 </SelectContent>
               </Select>
             </div>
+            {cfg.sender_strategy === "brand" && (
+              <div>
+                <Label>Brand</Label>
+                <Select value={cfg.brand ?? domains[0]} onValueChange={(v) => set("brand", v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {domains.map((b) => <SelectItem key={b} value={b}>{b}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            {cfg.sender_strategy === "specific" && (
+              <div>
+                <Label>Sender</Label>
+                <Select value={cfg.sender_id ?? ""} onValueChange={(v) => set("sender_id", v)}>
+                  <SelectTrigger><SelectValue placeholder="Pick sender" /></SelectTrigger>
+                  <SelectContent>
+                    {senders.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>{s.from_name} &lt;{s.from_email}&gt;</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div>
               <Label>Email content</Label>
               <div className="grid grid-cols-2 gap-2 mt-1">
