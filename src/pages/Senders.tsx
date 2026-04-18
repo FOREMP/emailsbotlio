@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -181,7 +181,7 @@ const Senders = () => {
           </div>
           <div className="flex gap-2">
             {!allDefaultsPresent && (
-              <Button variant="outline" onClick={seedDefaults} disabled={seeding}>
+              <Button variant="outline" onClick={() => seedDefaults(false)} disabled={seeding}>
                 <Sparkles className="h-4 w-4" /> {seeding ? "Seeding..." : "Auto-create Eric + Isak per domain"}
               </Button>
             )}
