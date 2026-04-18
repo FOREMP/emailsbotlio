@@ -360,6 +360,7 @@ const Contacts = () => {
               onOpenChange={setImportDialogOpen}
               onImport={handleFileImport}
               importing={importing}
+              existingColumns={listCustomColumns}
             />
 
             {contactsLoading ? (
@@ -415,8 +416,7 @@ const Contacts = () => {
             )}
           </>
         )}
-      </main>
-    </div>
+    </>
   );
 };
 
