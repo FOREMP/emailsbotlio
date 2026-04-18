@@ -402,12 +402,14 @@ const Contacts = () => {
                         {listCustomColumns.map((col) => (
                           <th key={col} className="text-left px-4 py-3 font-medium text-muted-foreground whitespace-nowrap">{col}</th>
                         ))}
+                        <th className="text-left px-4 py-3 font-medium text-muted-foreground whitespace-nowrap">Last contacted</th>
                         <th className="text-right px-4 py-3 font-medium text-muted-foreground">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {contacts.map((c) => {
                         const cf = (c.custom_fields as Record<string, string> | null) ?? {};
+                        const lc = (lastContacted as Record<string, string>)[c.id];
                         return (
                           <tr key={c.id} className="border-b border-border last:border-0 hover:bg-muted/30">
                             <td className="px-4 py-3">{[c.first_name, c.last_name].filter(Boolean).join(" ") || "—"}</td>
@@ -416,6 +418,9 @@ const Contacts = () => {
                             {listCustomColumns.map((col) => (
                               <td key={col} className="px-4 py-3 text-muted-foreground">{cf[col] || "—"}</td>
                             ))}
+                            <td className="px-4 py-3 text-muted-foreground whitespace-nowrap text-xs">
+                              {lc ? new Date(lc).toLocaleString() : <span className="text-muted-foreground/50">—</span>}
+                            </td>
                             <td className="px-4 py-3 text-right">
                               <Button variant="ghost" size="sm" className="text-destructive" onClick={() => deleteContact.mutate(c.id)}>
                                 <Trash2 className="h-3.5 w-3.5" />
