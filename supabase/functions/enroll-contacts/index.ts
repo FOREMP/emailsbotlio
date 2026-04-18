@@ -91,7 +91,7 @@ Deno.serve(async (req) => {
       .from("contacts")
       .select("id, email")
       .eq("user_id", user.id)
-      .eq("list_id", seq.contact_list_id);
+      .eq("list_id", listId);
 
     if (contactsErr) throw contactsErr;
 
@@ -113,6 +113,7 @@ Deno.serve(async (req) => {
     let suppressed = 0;
     let alreadyEnrolled = 0;
     let noEmail = 0;
+    const nowIso = new Date().toISOString();
     const toInsert: Array<Record<string, unknown>> = [];
 
     for (const c of contacts ?? []) {
@@ -124,23 +125,26 @@ Deno.serve(async (req) => {
         sequence_id: sequenceId,
         contact_id: c.id,
         current_step: 0,
+        current_node_id: triggerNodeId,
         status: "active",
-        next_send_at: new Date().toISOString(),
+        next_send_at: nowIso,
       });
     }
 
-    let inserted = 0;
+    let enrolled = 0;
     if (toInsert.length > 0) {
-      const { error: insertErr, count } = await supabase
+      // Use upsert with the unique index to be safe against races
+      const { data: ins, error: insertErr } = await supabase
         .from("enrollments")
-        .insert(toInsert, { count: "exact" });
+        .upsert(toInsert, { onConflict: "sequence_id,contact_id", ignoreDuplicates: true })
+        .select("id");
       if (insertErr) throw insertErr;
-      inserted = count ?? toInsert.length;
+      enrolled = ins?.length ?? 0;
     }
 
     return new Response(
       JSON.stringify({
-        inserted,
+        enrolled,
         suppressed,
         already_enrolled: alreadyEnrolled,
         no_email: noEmail,
