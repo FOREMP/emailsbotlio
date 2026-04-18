@@ -1,4 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { sendLovableEmail, EmailAPIError } from 'npm:@lovable.dev/email-js@0.0.4'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -134,10 +135,15 @@ Deno.serve(async (req) => {
     message_id: messageId,
   })
 
-  // Enqueue via Lovable email queue
-  const { error: enqErr } = await supabase.rpc('enqueue_email', {
-    queue_name: 'transactional_emails',
-    payload: {
+  // Send directly via the Lovable email API (no queue dependency)
+  const apiKey = Deno.env.get('LOVABLE_API_KEY')
+  if (!apiKey) {
+    await supabase.from('sent_emails').update({ status: 'failed', error_message: 'LOVABLE_API_KEY missing' }).eq('id', messageId)
+    return new Response(JSON.stringify({ error: 'LOVABLE_API_KEY missing' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+  }
+
+  try {
+    await sendLovableEmail({
       message_id: messageId,
       to: contact.email,
       from: `${chosenSender.from_name} <${fromEmail}>`,
@@ -149,13 +155,12 @@ Deno.serve(async (req) => {
       purpose: 'transactional',
       label: 'cold-outreach',
       idempotency_key: messageId,
-      queued_at: new Date().toISOString(),
-    },
-  })
-
-  if (enqErr) {
-    await supabase.from('sent_emails').update({ status: 'failed', error_message: enqErr.message }).eq('id', messageId)
-    return new Response(JSON.stringify({ error: 'enqueue failed', detail: enqErr.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }, { apiKey, idempotencyKey: messageId })
+    await supabase.from('sent_emails').update({ status: 'sent' }).eq('id', messageId)
+  } catch (err) {
+    const detail = err instanceof EmailAPIError ? `${err.status}: ${err.message}` : (err instanceof Error ? err.message : String(err))
+    await supabase.from('sent_emails').update({ status: 'failed', error_message: detail }).eq('id', messageId)
+    return new Response(JSON.stringify({ error: 'send failed', detail }), { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
   }
 
   // Log activity
