@@ -1,10 +1,12 @@
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Send, Menu, X } from "lucide-react";
+import { Send, Menu, X, LogOut, LayoutDashboard } from "lucide-react";
 import { useState } from "react";
+import { useAuth } from "@/contexts/AuthContext";
 
 const Header = () => {
   const navigate = useNavigate();
+  const { user, signOut } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
@@ -32,12 +34,26 @@ const Header = () => {
         </nav>
 
         <div className="hidden md:flex items-center gap-3">
-          <Button variant="ghost" size="sm" onClick={() => navigate("/auth")}>
-            Log in
-          </Button>
-          <Button size="sm" onClick={() => navigate("/auth")} className="gradient-primary border-0 text-primary-foreground hover:opacity-90">
-            Get Started
-          </Button>
+          {user ? (
+            <>
+              <span className="text-sm text-muted-foreground truncate max-w-[180px]">{user.email}</span>
+              <Button size="sm" onClick={() => navigate("/dashboard")} className="gradient-primary border-0 text-primary-foreground hover:opacity-90">
+                <LayoutDashboard className="h-4 w-4 mr-1.5" /> Dashboard
+              </Button>
+              <Button variant="ghost" size="sm" onClick={async () => { await signOut(); navigate("/"); }}>
+                <LogOut className="h-4 w-4" />
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="ghost" size="sm" onClick={() => navigate("/auth")}>
+                Log in
+              </Button>
+              <Button size="sm" onClick={() => navigate("/auth")} className="gradient-primary border-0 text-primary-foreground hover:opacity-90">
+                Get Started
+              </Button>
+            </>
+          )}
         </div>
 
         <button className="md:hidden p-2" onClick={() => setMobileOpen(!mobileOpen)}>
@@ -49,9 +65,20 @@ const Header = () => {
         <div className="md:hidden border-t border-border bg-background px-4 py-4 space-y-3">
           <Link to="/" className="block text-sm font-medium py-2" onClick={() => setMobileOpen(false)}>Home</Link>
           <Link to="/pricing" className="block text-sm font-medium py-2" onClick={() => setMobileOpen(false)}>Pricing</Link>
-          <Button className="w-full gradient-primary border-0 text-primary-foreground" onClick={() => { setMobileOpen(false); navigate("/auth"); }}>
-            Get Started
-          </Button>
+          {user ? (
+            <>
+              <Button className="w-full gradient-primary border-0 text-primary-foreground" onClick={() => { setMobileOpen(false); navigate("/dashboard"); }}>
+                Dashboard
+              </Button>
+              <Button variant="outline" className="w-full" onClick={async () => { setMobileOpen(false); await signOut(); navigate("/"); }}>
+                Log out
+              </Button>
+            </>
+          ) : (
+            <Button className="w-full gradient-primary border-0 text-primary-foreground" onClick={() => { setMobileOpen(false); navigate("/auth"); }}>
+              Get Started
+            </Button>
+          )}
         </div>
       )}
     </header>

@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/contexts/AuthContext";
 import ProtectedRoute from "@/components/ProtectedRoute";
+import AppLayout from "@/components/AppLayout";
 import Index from "./pages/Index.tsx";
 import Pricing from "./pages/Pricing.tsx";
 import Dashboard from "./pages/Dashboard.tsx";
@@ -19,6 +20,12 @@ import NotFound from "./pages/NotFound.tsx";
 
 const queryClient = new QueryClient();
 
+const protect = (node: JSX.Element, bare = false) => (
+  <ProtectedRoute>
+    <AppLayout bare={bare}>{node}</AppLayout>
+  </ProtectedRoute>
+);
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
@@ -30,12 +37,12 @@ const App = () => (
             <Route path="/" element={<Index />} />
             <Route path="/pricing" element={<Pricing />} />
             <Route path="/auth" element={<Auth />} />
-            <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-            <Route path="/senders" element={<ProtectedRoute><Senders /></ProtectedRoute>} />
-            <Route path="/contacts" element={<ProtectedRoute><Contacts /></ProtectedRoute>} />
-            <Route path="/files" element={<ProtectedRoute><Files /></ProtectedRoute>} />
-            <Route path="/sequences" element={<ProtectedRoute><Sequences /></ProtectedRoute>} />
-            <Route path="/sequences/:id" element={<ProtectedRoute><SequenceCanvas /></ProtectedRoute>} />
+            <Route path="/dashboard" element={protect(<Dashboard />)} />
+            <Route path="/senders" element={protect(<Senders />)} />
+            <Route path="/contacts" element={protect(<Contacts />)} />
+            <Route path="/files" element={protect(<Files />)} />
+            <Route path="/sequences" element={protect(<Sequences />)} />
+            <Route path="/sequences/:id" element={protect(<SequenceCanvas />, true)} />
             <Route path="/unsubscribe" element={<Unsubscribe />} />
             <Route path="*" element={<NotFound />} />
           </Routes>

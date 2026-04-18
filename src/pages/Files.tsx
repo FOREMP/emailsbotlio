@@ -1,11 +1,10 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Send, FileSpreadsheet, ArrowLeft, LogOut, Eye } from "lucide-react";
+import { FileSpreadsheet, ArrowLeft, Eye } from "lucide-react";
 import { Link } from "react-router-dom";
 
 type ImportedFile = {
@@ -32,7 +31,6 @@ function formatBytes(bytes: number | null) {
 }
 
 const Files = () => {
-  const { user, signOut } = useAuth();
   const [selected, setSelected] = useState<ImportedFile | null>(null);
 
   const { data: files = [], isLoading } = useQuery({
@@ -58,28 +56,12 @@ const Files = () => {
   const listName = (id: string | null) => lists.find((l) => l.id === id)?.name ?? "—";
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto flex h-14 items-center justify-between px-4">
-          <Link to="/" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg gradient-primary">
-              <Send className="h-4 w-4 text-primary-foreground" />
-            </div>
-            <span className="font-bold text-lg" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>MailxSend</span>
-          </Link>
-          <div className="flex items-center gap-4">
-            <span className="hidden sm:block text-sm text-muted-foreground truncate max-w-[200px]">{user?.email}</span>
-            <Button variant="ghost" size="sm" onClick={signOut}><LogOut className="h-4 w-4 mr-1.5" />Log out</Button>
-          </div>
-        </div>
-      </header>
-
-      <main className="container mx-auto px-4 py-8">
-        <div className="flex items-center gap-2 mb-6">
-          <Link to="/dashboard">
-            <Button variant="ghost" size="sm"><ArrowLeft className="h-4 w-4 mr-1" /> Dashboard</Button>
-          </Link>
-        </div>
+    <>
+      <div className="flex items-center gap-2 mb-6">
+        <Link to="/dashboard">
+          <Button variant="ghost" size="sm"><ArrowLeft className="h-4 w-4 mr-1" /> Dashboard</Button>
+        </Link>
+      </div>
 
         <div className="mb-6">
           <h1 className="text-2xl font-bold tracking-tight">Uploaded Files</h1>
@@ -137,7 +119,7 @@ const Files = () => {
             </div>
           </div>
         )}
-      </main>
+      
 
       <Dialog open={!!selected} onOpenChange={(v) => !v && setSelected(null)}>
         <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
@@ -206,7 +188,7 @@ const Files = () => {
           )}
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 };
 

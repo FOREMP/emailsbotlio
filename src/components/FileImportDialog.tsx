@@ -15,7 +15,8 @@ const FIRST_NAME_PATTERNS = ["first_name", "firstname", "first name", "fname", "
 const LAST_NAME_PATTERNS = ["last_name", "lastname", "last name", "lname", "surname", "family_name"];
 
 type ColumnMapping = {
-  [header: string]: "email" | "phone" | "first_name" | "last_name" | "custom" | "skip";
+  // Standard fields, "skip", "custom" (new variable name = column header), or "reuse:<existing_key>"
+  [header: string]: string;
 };
 
 interface ParsedData {
@@ -32,11 +33,14 @@ interface FileImportDialogProps {
     fileMeta: { name: string; size: number; type: string; headers: string[]; mapping: Record<string, string>; sampleRows: Record<string, string>[] }
   ) => void;
   importing?: boolean;
+  /** Variable keys already defined on the target list, so users can reuse them instead of inventing new keys. */
+  existingColumns?: string[];
 }
 
-function autoDetectMapping(headers: string[]): ColumnMapping {
+function autoDetectMapping(headers: string[], existingColumns: string[] = []): ColumnMapping {
   const mapping: ColumnMapping = {};
   const lowerHeaders = headers.map((h) => h.toLowerCase().trim());
+  const existingLower = existingColumns.map((c) => c.toLowerCase().trim());
 
   const assigned = new Set<string>();
 
@@ -55,7 +59,13 @@ function autoDetectMapping(headers: string[]): ColumnMapping {
       mapping[headers[i]] = "last_name";
       assigned.add("last_name");
     } else {
-      mapping[headers[i]] = "custom";
+      // Try to match an existing custom column by name (case-insensitive)
+      const matchIdx = existingLower.indexOf(lower);
+      if (matchIdx >= 0) {
+        mapping[headers[i]] = `reuse:${existingColumns[matchIdx]}`;
+      } else {
+        mapping[headers[i]] = "custom";
+      }
     }
   }
 
@@ -94,7 +104,7 @@ function parseFile(file: File): Promise<ParsedData> {
   });
 }
 
-export default function FileImportDialog({ open, onOpenChange, onImport, importing }: FileImportDialogProps) {
+export default function FileImportDialog({ open, onOpenChange, onImport, importing, existingColumns = [] }: FileImportDialogProps) {
   const [parsed, setParsed] = useState<ParsedData | null>(null);
   const [mapping, setMapping] = useState<ColumnMapping>({});
   const [fileName, setFileName] = useState("");
@@ -106,32 +116,41 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
     try {
       const data = await parseFile(file);
       setParsed(data);
-      setMapping(autoDetectMapping(data.headers));
+      setMapping(autoDetectMapping(data.headers, existingColumns));
       setFileName(file.name);
       setFileMeta({ size: file.size, type: file.type || file.name.split(".").pop() || "" });
     } catch (err: any) {
       toast.error(err.message);
     }
     e.target.value = "";
-  }, []);
+  }, [existingColumns]);
 
   const updateMapping = (header: string, value: string) => {
     setMapping((prev) => {
       const next = { ...prev };
-      // If assigning a standard field, unassign it from any other column
-      if (value !== "custom" && value !== "skip") {
+      // If assigning a unique standard field, unassign it from any other column
+      const uniqueRoles = ["email", "phone", "first_name", "last_name"];
+      if (uniqueRoles.includes(value)) {
         for (const key of Object.keys(next)) {
           if (next[key] === value) next[key] = "custom";
         }
       }
-      next[header] = value as any;
+      next[header] = value;
       return next;
     });
   };
 
   const hasEmail = Object.values(mapping).includes("email");
+  // Custom columns = both new "custom" headers and any "reuse:" mappings (under reused key)
   const customColumns = parsed
-    ? parsed.headers.filter((h) => mapping[h] === "custom")
+    ? parsed.headers
+        .map((h) => {
+          const m = mapping[h];
+          if (m === "custom") return h;
+          if (typeof m === "string" && m.startsWith("reuse:")) return m.slice("reuse:".length);
+          return null;
+        })
+        .filter((v): v is string => !!v)
     : [];
 
   const handleConfirm = () => {
@@ -144,6 +163,9 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
         if (role === "skip") continue;
         if (role === "custom") {
           if (row[header]) contact.custom_fields[header] = row[header];
+        } else if (typeof role === "string" && role.startsWith("reuse:")) {
+          const key = role.slice("reuse:".length);
+          if (row[header]) contact.custom_fields[key] = row[header];
         } else {
           contact[role] = row[header];
         }
@@ -202,30 +224,42 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
             <div>
               <h3 className="text-sm font-semibold mb-2">Map columns</h3>
               <p className="text-xs text-muted-foreground mb-3">
-                Assign which column is email, phone, etc. Unmapped columns become custom variables you can use in templates like {"{{column_name}}"}.
+                Assign which column is email, phone, etc. Unmapped columns become custom variables (e.g. {"{{column_name}}"}).
+                {existingColumns.length > 0 && " Pick a 'Reuse' option to merge into a variable that already exists on this list."}
               </p>
               <div className="grid gap-2">
-                {parsed.headers.map((header) => (
-                  <div key={header} className="flex items-center gap-3">
-                    <span className="text-sm font-mono w-40 truncate shrink-0" title={header}>{header}</span>
-                    <Select value={mapping[header] || "custom"} onValueChange={(val) => updateMapping(header, val)}>
-                      <SelectTrigger className="w-44 h-8 text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="email">📧 Email</SelectItem>
-                        <SelectItem value="phone">📱 Phone</SelectItem>
-                        <SelectItem value="first_name">👤 First Name</SelectItem>
-                        <SelectItem value="last_name">👤 Last Name</SelectItem>
-                        <SelectItem value="custom">🏷️ Custom Variable</SelectItem>
-                        <SelectItem value="skip">⏭️ Skip</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    {mapping[header] === "custom" && (
-                      <Badge variant="secondary" className="text-xs">{"{{" + header + "}}"}</Badge>
-                    )}
-                  </div>
-                ))}
+                {parsed.headers.map((header) => {
+                  const m = mapping[header] || "custom";
+                  const isReuse = typeof m === "string" && m.startsWith("reuse:");
+                  const reusedKey = isReuse ? m.slice("reuse:".length) : null;
+                  return (
+                    <div key={header} className="flex items-center gap-3">
+                      <span className="text-sm font-mono w-40 truncate shrink-0" title={header}>{header}</span>
+                      <Select value={m} onValueChange={(val) => updateMapping(header, val)}>
+                        <SelectTrigger className="w-56 h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="email">📧 Email</SelectItem>
+                          <SelectItem value="phone">📱 Phone</SelectItem>
+                          <SelectItem value="first_name">👤 First Name</SelectItem>
+                          <SelectItem value="last_name">👤 Last Name</SelectItem>
+                          <SelectItem value="custom">🏷️ New custom variable</SelectItem>
+                          {existingColumns.map((col) => (
+                            <SelectItem key={col} value={`reuse:${col}`}>♻️ Reuse: {col}</SelectItem>
+                          ))}
+                          <SelectItem value="skip">⏭️ Skip</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {m === "custom" && (
+                        <Badge variant="secondary" className="text-xs">{"{{" + header + "}}"}</Badge>
+                      )}
+                      {isReuse && (
+                        <Badge variant="outline" className="text-xs">→ {"{{" + reusedKey + "}}"}</Badge>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
 

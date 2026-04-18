@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import Header from "@/components/Header";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -155,9 +155,7 @@ const Senders = () => {
   }, [domains, senders, hasDomains]);
 
   return (
-    <div className="min-h-screen bg-background">
-      <Header />
-      <main className="container mx-auto px-4 pt-28 pb-16 max-w-5xl">
+    <div className="max-w-5xl mx-auto">
         <div className="flex items-start justify-between mb-8 gap-4 flex-wrap">
           <div>
             <h1 className="text-3xl font-bold tracking-tight mb-2">Senders</h1>
@@ -290,7 +288,6 @@ const Senders = () => {
             })}
           </div>
         )}
-      </main>
     </div>
   );
 };

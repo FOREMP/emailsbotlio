@@ -7,13 +7,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Send, Plus, Users, Upload, ArrowLeft, Trash2, LogOut } from "lucide-react";
+import { Plus, Users, Upload, ArrowLeft, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import FileImportDialog from "@/components/FileImportDialog";
 
 const Contacts = () => {
-  const { user, signOut } = useAuth();
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [newListName, setNewListName] = useState("");
   const [newListDesc, setNewListDesc] = useState("");
@@ -201,35 +201,14 @@ const Contacts = () => {
   const listCustomColumns: string[] = Array.isArray((selectedListData as any)?.columns) ? (selectedListData as any).columns : [];
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto flex h-14 items-center justify-between px-4">
-          <Link to="/" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg gradient-primary">
-              <Send className="h-4 w-4 text-primary-foreground" />
-            </div>
-            <span className="font-bold text-lg" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>MailxSend</span>
-          </Link>
-          <div className="flex items-center gap-4">
-            <span className="hidden sm:block text-sm text-muted-foreground truncate max-w-[200px]">
-              {user?.email}
-            </span>
-            <Button variant="ghost" size="sm" onClick={signOut}>
-              <LogOut className="h-4 w-4 mr-1.5" />
-              Log out
-            </Button>
-          </div>
-        </div>
-      </header>
-
-      <main className="container mx-auto px-4 py-8">
-        <div className="flex items-center gap-2 mb-6">
-          <Link to="/dashboard">
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="h-4 w-4 mr-1" /> Dashboard
-            </Button>
-          </Link>
-        </div>
+    <>
+      <div className="flex items-center gap-2 mb-6">
+        <Link to="/dashboard">
+          <Button variant="ghost" size="sm">
+            <ArrowLeft className="h-4 w-4 mr-1" /> Dashboard
+          </Button>
+        </Link>
+      </div>
 
         {!selectedList ? (
           <>
@@ -381,6 +360,7 @@ const Contacts = () => {
               onOpenChange={setImportDialogOpen}
               onImport={handleFileImport}
               importing={importing}
+              existingColumns={listCustomColumns}
             />
 
             {contactsLoading ? (
@@ -436,8 +416,7 @@ const Contacts = () => {
             )}
           </>
         )}
-      </main>
-    </div>
+    </>
   );
 };
 
