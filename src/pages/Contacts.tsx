@@ -51,6 +51,26 @@ const Contacts = () => {
     },
   });
 
+  // Last-contacted timestamps per contact in this list
+  const { data: lastContacted = {} } = useQuery({
+    queryKey: ["last-contacted", selectedList, contacts.length],
+    enabled: !!selectedList && contacts.length > 0,
+    queryFn: async () => {
+      const ids = contacts.map((c) => c.id);
+      const { data } = await supabase
+        .from("sent_emails")
+        .select("contact_id, sent_at")
+        .in("contact_id", ids)
+        .eq("status", "sent")
+        .order("sent_at", { ascending: false });
+      const map: Record<string, string> = {};
+      (data ?? []).forEach((r: any) => {
+        if (r.contact_id && !map[r.contact_id]) map[r.contact_id] = r.sent_at;
+      });
+      return map;
+    },
+  });
+
   // Create list
   const createList = useMutation({
     mutationFn: async () => {
