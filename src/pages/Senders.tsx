@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -46,6 +46,8 @@ const Senders = () => {
   const [testEmailFor, setTestEmailFor] = useState<string | null>(null);
   const [testTo, setTestTo] = useState("");
 
+  const autoSeedTried = useRef(false);
+
   const load = async () => {
     setLoading(true);
     const [s, d] = await Promise.all([
@@ -61,14 +63,28 @@ const Senders = () => {
 
   useEffect(() => { if (user) load(); }, [user]);
 
-  const seedDefaults = async () => {
+  const seedDefaults = async (silent = false) => {
     setSeeding(true);
-    const { error } = await supabase.rpc("seed_default_senders");
+    const { data, error } = await supabase.rpc("seed_default_senders");
     setSeeding(false);
-    if (error) return toast.error(error.message);
-    toast.success("Default senders ready (Eric + Isak per domain)");
+    if (error) { if (!silent) toast.error(error.message); return; }
+    if (!silent && (data ?? 0) > 0) toast.success(`${data} new sender(s) provisioned`);
     load();
   };
+
+  // Auto-seed once on first visit if any default sender is missing
+  useEffect(() => {
+    if (!user || loading || autoSeedTried.current) return;
+    if (domains.length === 0) return;
+    const missing = domains.filter((x) => x.is_active).some((d) =>
+      !senders.some((s) => s.from_email === `eric@${d.domain}`) ||
+      !senders.some((s) => s.from_email === `isak@${d.domain}`)
+    );
+    if (missing) {
+      autoSeedTried.current = true;
+      seedDefaults(true);
+    }
+  }, [user, loading, domains, senders]);
 
   const domainBrand = (email: string) => {
     const dom = email.split("@")[1];
@@ -162,10 +178,16 @@ const Senders = () => {
             <p className="text-muted-foreground max-w-2xl">
               The identities your cold emails are sent from. Each sender is tied to a domain; replies are auto-routed to the brand's Zoho inbox.
             </p>
+            {domains.length > 0 && (
+              <p className="text-xs text-muted-foreground mt-2">
+                Provisioned: <span className="font-semibold text-foreground">{senders.length}</span> / {domains.filter((d) => d.is_active).length * 2} default senders
+                {seeding && <span className="ml-2 text-primary">· auto-seeding…</span>}
+              </p>
+            )}
           </div>
           <div className="flex gap-2">
             {!allDefaultsPresent && (
-              <Button variant="outline" onClick={seedDefaults} disabled={seeding}>
+              <Button variant="outline" onClick={() => seedDefaults(false)} disabled={seeding}>
                 <Sparkles className="h-4 w-4" /> {seeding ? "Seeding..." : "Auto-create Eric + Isak per domain"}
               </Button>
             )}
