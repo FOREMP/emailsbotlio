@@ -1,101 +1,104 @@
 
 
-## Goal
-Make the 5 (soon 6) verified-or-pending sender domains usable across the app. Each domain should support multiple named senders (default: Eric Wahlbom `eric@` and Isak Andersson `isak@`), with reply-to auto-routed by brand (foremp → `eric@foremp.se`, botlio → `eric@botlio.io`). The cold-outreach sequence runner should pick a sender, send via the right domain, log the send, and schedule follow-ups.
+## Problems found
 
-## Current state (what exists)
-- 5 domains added in Lovable Email infra: `botlio.email`, `botlio.eu`, `botlio.io`, `foremp.eu`, `foremp.one` (some still pending DNS)
-- `senders` table exists (from_name, from_email, reply_to, is_active) — manual entry
-- `send-transactional-email` edge function deployed and domain-agnostic
-- `sequences` + node-graph tables (`sequence_nodes`, `sequence_edges`, `enrollments`, `contact_activity`) exist
-- `sent_emails` table exists for logging
-- No runner yet — sequences can be built but nothing actually sends
-- No domain registry / no auto reply-to routing / no sender-rotation logic
+### 1. Canvas changes don't persist
+Looking at `SequenceCanvas.tsx` (need to verify), the canvas likely only saves on explicit "Save" action or not at all. Node config edits in the inspector probably only update local React state, never written back to `sequence_nodes.config`. Same for new nodes/edges added via palette.
+
+### 2. No way to start a sequence (enroll contacts)
+- `enroll-contacts` edge function exists but there's no clear UI button on the sequence page that says "Start sequence — enroll all contacts from list X".
+- Without enrollments, the runner has nothing to process.
+
+### 3. Send Email node is incomplete
+Current config supports `mode: 'ai' | 'static'`, `subject`, `body`, `prompt`, `subject_hint`. But:
+- **Variables** (`{{first_name}}`, `{{company}}`, custom_fields) are not interpolated in `send-cold-email` for the static path.
+- **AI mode** passes `prompt` to `generate-email` but doesn't pass the contact's custom_fields / list columns as context, so personalization is weak.
+- No preview of the rendered email in the inspector.
+
+### 4. Missing/weak nodes for the follow-up flow
+You said "send an email, then in a few days send another asking again". That requires:
+- **Send Email** ✓ (exists)
+- **Wait** ✓ (exists, but verify config UI works and persists)
+- **Send Email** ✓ again (the same node type, second instance)
+- **End** ✓ (exists)
+
+So node types exist — but the canvas needs a clean default template "Cold outreach + 1 follow-up" so the user doesn't have to wire it from scratch every time.
+
+### 5. "Noted as contacted" tracking
+Already partially there: `sent_emails` row is inserted by `send-cold-email`, and `contact_activity` is written by Log Activity nodes. But:
+- No automatic activity row on send (only if user manually adds a Log Activity node).
+- No "last contacted" column on the Contacts page so the user can see it worked.
+- No protection against re-enrolling the same contact in the same sequence (would double-send).
+
+### 6. Runner edge cases
+- If `next_send_at` is null on a fresh enrollment, runner picks it up immediately ✓.
+- But `enroll-contacts` may not be setting `next_send_at = now()` and `current_node_id = trigger`. Need to verify.
+
+---
 
 ## Plan
 
-### 1. New `sending_domains` table (seeded by us)
-Source of truth for the 6 domains and their brand routing.
+### A. Persistence (canvas saves reliably)
+1. Add **autosave** to `SequenceCanvas.tsx`:
+   - On every node drag-end, edge connect, node delete, or inspector config change → debounced 800ms upsert into `sequence_nodes` / `sequence_edges`.
+   - Visible "Saved" / "Saving…" indicator in the canvas toolbar.
+2. On canvas mount, load nodes+edges from DB (already done — verify and fix if not).
+
+### B. "Start sequence" button + safe enrollment
+1. On the sequence page header, add a **Start sequence** button that:
+   - Asks user to pick a contact list (default: the one already linked to the sequence).
+   - Calls `enroll-contacts` edge function with `sequence_id` + `list_id`.
+2. Update `enroll-contacts` to:
+   - Skip contacts already enrolled in this sequence (unique on `sequence_id + contact_id`).
+   - Skip contacts in `do_not_contact`.
+   - Set `current_node_id = <trigger node id>`, `next_send_at = now()`, `status = 'active'`.
+3. Add a unique index `enrollments(sequence_id, contact_id)` to enforce this in DB.
+
+### C. Variable interpolation in Send Email
+1. In `send-cold-email`, before sending:
+   - Build a context object: `{ first_name, last_name, email, company, ...contact.custom_fields }`.
+   - Replace `{{var}}` tokens in both `subject` and `body` (static mode).
+   - For AI mode, pass the same context to `generate-email` as structured input so the LLM can personalize properly.
+2. In the Send Email inspector, show a small "Available variables" hint listing keys from a sample contact in the linked list.
+
+### D. Auto-log every send
+1. In `send-cold-email`, after a successful send, also insert a `contact_activity` row with `activity_type = 'email_sent'` and `metadata = { sender_id, subject, node_id }`. No need for a manual Log Activity node.
+2. Update Contacts page to show a **"Last contacted"** column (max `sent_at` from `sent_emails` per contact).
+
+### E. Default sequence template
+When a new sequence is created, auto-seed the canvas with:
+```text
+[Trigger] → [Send Email #1] → [Wait 3 days] → [Send Email #2 (follow-up)] → [End]
 ```
-sending_domains: id, domain (unique), brand ('foremp'|'botlio'),
-                 reply_to_email, is_active, sender_subdomain ('notify')
-```
-Seed all 6 rows:
-- `foremp.one`, `foremp.eu`, `foremp.email` → brand `foremp`, reply_to `eric@foremp.se`
-- `botlio.io`, `botlio.eu`, `botlio.email` → brand `botlio`, reply_to `eric@botlio.io`
+User can then edit each node's content. Saves the "blank canvas" problem.
 
-### 2. Auto-seed senders per domain
-For every active domain, ensure two senders exist:
-- Eric Wahlbom — `eric@<domain>`
-- Isak Andersson — `isak@<domain>`
+### F. Sequence detail page polish
+- Show enrollment counts: Active / Completed / Failed.
+- Show last 20 sent emails for this sequence (recipient, subject, sent_at, status).
+- "Pause" / "Resume" sequence button (sets all enrollments status).
 
-That gives 12 senders total (2 × 6). The user can deactivate any of them or add more from the Senders page later. Reply-to is **derived from the domain's brand** at send time — not stored per sender — so it can never drift.
+### G. Verify the runner end-to-end
+- Confirm cron is running (query `cron.job` and recent `cron.job_run_details`).
+- Manually invoke `run-sequences` once after enrolling a test contact and watch logs.
 
-### 3. Upgrade Senders page (`/senders`)
-- Add a **Domain** dropdown to the "Add sender" dialog (lists active `sending_domains`)
-- Local-part input (e.g. `eric`) instead of full email — UI assembles `eric@foremp.eu`
-- Reply-to field becomes **read-only** and shows the brand's reply-to with a hint ("Replies go to your Zoho inbox at eric@foremp.se")
-- Group the senders list visually by domain with a small brand badge
+---
 
-### 4. Upgrade `send-transactional-email` edge function
-- Accept `sender_id` in the body (looks up sender → derives `from_email` + brand-based `reply_to`)
-- Set `from`, `from_name`, and `Reply-To` header on the outbound email
-- The Mailgun/Lovable email pipeline already routes via the matching `notify.<domain>` subdomain — no extra routing config needed once DNS is verified
-- Validate the sender's domain is in `sending_domains` and `is_active`, otherwise reject
+## How it will work after this is done
 
-### 5. New cold-outreach sender: `send-cold-email` edge function
-A separate function (NOT `send-transactional-email`, which is reserved for transactional flows). It:
-1. Picks a sender (round-robin per sequence, or specified `sender_id`)
-2. If the Send-Email node is in `mode: ai`, calls existing `generate-email` to produce subject + body for the contact
-3. Sends via the same Lovable email infra used today
-4. Inserts into `sent_emails` (recipient, sender, sequence, enrollment, body, message_id)
-5. Returns the message_id so the runner can advance the enrollment
+1. You open a sequence → canvas loads with the default `Trigger → Send → Wait 3d → Send → End` template.
+2. You click each Send Email node, write your subject/body (or pick AI mode + a prompt), use `{{first_name}}` etc. — every keystroke autosaves.
+3. You click **Start sequence**, pick a contact list. The system enrolls every contact in the list (skipping DNC + already-enrolled), sets `next_send_at = now()` on each.
+4. Within 1 minute, the cron runs `run-sequences`, which for each enrollment:
+   - Walks past the trigger
+   - Calls `send-cold-email` → personalizes via variables/AI → sends from a rotated sender on the right domain → logs to `sent_emails` + `contact_activity`
+   - Sets `next_send_at = now() + 3 days`, advances to the follow-up Send node
+5. Three days later, runner fires the follow-up email automatically.
+6. You see "Last contacted" on each contact, and an enrollment progress panel on the sequence page.
 
-### 6. Sequence runner: `run-sequences` edge function + cron
-The piece that actually walks the graph for each enrollment.
-- Cron every 1 minute via `pg_cron` + `pg_net`
-- Picks enrollments where `next_send_at <= now()` and `status = 'active'`
-- For each, reads the `current_node_id` from `sequence_nodes`, executes it:
-  - **Trigger** → move to next node immediately
-  - **Send Email** → call `send-cold-email`, log activity, advance
-  - **Wait** → set `next_send_at = now() + duration`, advance to wait's target
-  - **Log Activity** → insert into `contact_activity`, advance
-  - **Condition** → (stub for now, defaults to `false` branch since open/reply tracking isn't built yet)
-  - **End** → mark enrollment `completed`
+---
 
-### 7. Sender rotation in the canvas
-In the Send Email node inspector, replace the existing sender picker with:
-- "Rotate across all active senders" (default)
-- "Rotate within brand: foremp"
-- "Rotate within brand: botlio"
-- "Specific sender" → dropdown
-
-Stored in node `config` as `{ sender_strategy, sender_id?, brand? }`.
-
-### 8. Routing verification
-After deploy, send a test email from each domain to the user's Zoho inbox to confirm:
-- `From:` shows the right name + address
-- `Reply-To:` is the correct Zoho address
-- Reply lands in Zoho
-
-This is a manual click in a new "Test send" button on each sender row (calls `send-transactional-email` with a hardcoded test template to a user-specified email).
-
-## What you need to do
-1. **Nothing new for now** — finish DNS for the 3 still-pending domains (`botlio.io`, `foremp.eu`, `foremp.one`) at your registrar so they go from "pending" to "verified". The system will work for verified ones immediately and start working for the others as DNS propagates.
-2. After I deploy, click **Test send** on each sender (12 buttons) and confirm the test arrives in the right Zoho inbox.
-3. Optional: add the last 2 domains (`foremp.email`, `botlio.one` or whichever) when ready — they'll auto-pick-up the same logic.
-
-## What I will do (order of operations)
-1. Migration: create `sending_domains`, seed 6 rows, seed 12 senders
-2. Update Senders page with domain dropdown + brand badges + Test send button
-3. Upgrade `send-transactional-email` to accept `sender_id` and derive reply-to from brand
-4. Build `send-cold-email` edge function (uses `generate-email` for AI mode)
-5. Build `run-sequences` edge function + schedule via pg_cron every 1 min
-6. Update Send Email node inspector with rotation strategies
-7. Verify end-to-end with a test enrollment
-
-## Out of scope (next phase)
-- Open/click/reply tracking webhooks (needed for the Condition node to actually branch on real data)
-- Inbound email parsing (replies are forwarded to Zoho — Zoho is your inbox UI, not the app)
-- Per-sender daily send limits / warmup throttling
+## Out of scope for this round
+- Open/click/reply tracking (still no webhooks)
+- Conditional branching on real engagement (Condition node still defaults to false)
+- The pre-existing `enqueue_email` 500 — you said skip it; `send-cold-email` uses the direct Lovable API path which works.
 
