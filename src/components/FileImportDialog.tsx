@@ -224,30 +224,42 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
             <div>
               <h3 className="text-sm font-semibold mb-2">Map columns</h3>
               <p className="text-xs text-muted-foreground mb-3">
-                Assign which column is email, phone, etc. Unmapped columns become custom variables you can use in templates like {"{{column_name}}"}.
+                Assign which column is email, phone, etc. Unmapped columns become custom variables (e.g. {"{{column_name}}"}).
+                {existingColumns.length > 0 && " Pick a 'Reuse' option to merge into a variable that already exists on this list."}
               </p>
               <div className="grid gap-2">
-                {parsed.headers.map((header) => (
-                  <div key={header} className="flex items-center gap-3">
-                    <span className="text-sm font-mono w-40 truncate shrink-0" title={header}>{header}</span>
-                    <Select value={mapping[header] || "custom"} onValueChange={(val) => updateMapping(header, val)}>
-                      <SelectTrigger className="w-44 h-8 text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="email">📧 Email</SelectItem>
-                        <SelectItem value="phone">📱 Phone</SelectItem>
-                        <SelectItem value="first_name">👤 First Name</SelectItem>
-                        <SelectItem value="last_name">👤 Last Name</SelectItem>
-                        <SelectItem value="custom">🏷️ Custom Variable</SelectItem>
-                        <SelectItem value="skip">⏭️ Skip</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    {mapping[header] === "custom" && (
-                      <Badge variant="secondary" className="text-xs">{"{{" + header + "}}"}</Badge>
-                    )}
-                  </div>
-                ))}
+                {parsed.headers.map((header) => {
+                  const m = mapping[header] || "custom";
+                  const isReuse = typeof m === "string" && m.startsWith("reuse:");
+                  const reusedKey = isReuse ? m.slice("reuse:".length) : null;
+                  return (
+                    <div key={header} className="flex items-center gap-3">
+                      <span className="text-sm font-mono w-40 truncate shrink-0" title={header}>{header}</span>
+                      <Select value={m} onValueChange={(val) => updateMapping(header, val)}>
+                        <SelectTrigger className="w-56 h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="email">📧 Email</SelectItem>
+                          <SelectItem value="phone">📱 Phone</SelectItem>
+                          <SelectItem value="first_name">👤 First Name</SelectItem>
+                          <SelectItem value="last_name">👤 Last Name</SelectItem>
+                          <SelectItem value="custom">🏷️ New custom variable</SelectItem>
+                          {existingColumns.map((col) => (
+                            <SelectItem key={col} value={`reuse:${col}`}>♻️ Reuse: {col}</SelectItem>
+                          ))}
+                          <SelectItem value="skip">⏭️ Skip</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {m === "custom" && (
+                        <Badge variant="secondary" className="text-xs">{"{{" + header + "}}"}</Badge>
+                      )}
+                      {isReuse && (
+                        <Badge variant="outline" className="text-xs">→ {"{{" + reusedKey + "}}"}</Badge>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
