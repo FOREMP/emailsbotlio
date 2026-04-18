@@ -226,7 +226,7 @@ const Sequences = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 };
 

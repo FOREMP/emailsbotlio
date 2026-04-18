@@ -32,6 +32,8 @@ interface FileImportDialogProps {
     fileMeta: { name: string; size: number; type: string; headers: string[]; mapping: Record<string, string>; sampleRows: Record<string, string>[] }
   ) => void;
   importing?: boolean;
+  /** Variable keys already defined on the target list, so users can reuse them instead of inventing new keys. */
+  existingColumns?: string[];
 }
 
 function autoDetectMapping(headers: string[]): ColumnMapping {
