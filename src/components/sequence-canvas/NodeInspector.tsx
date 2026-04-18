@@ -227,11 +227,18 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
             {(cfg.mode ?? "ai") === "ai" ? (
               <>
                 <div>
-                  <Label>Subject hint (optional)</Label>
-                  <Input value={cfg.subject_hint ?? ""} onChange={(e) => set("subject_hint", e.target.value)} placeholder="e.g. Quick question about {{company}}" />
+                  <Label>AI subject prompt</Label>
+                  <Input
+                    value={cfg.subject_hint ?? ""}
+                    onChange={(e) => set("subject_hint", e.target.value)}
+                    placeholder='e.g. "Quick question about {{company}}"'
+                  />
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    AI will craft a unique subject per contact, guided by this hint. Use {`{{variables}}`} to personalize.
+                  </p>
                 </div>
                 <div>
-                  <Label>AI prompt</Label>
+                  <Label>AI body prompt</Label>
                   <Textarea
                     rows={6}
                     value={cfg.prompt ?? ""}

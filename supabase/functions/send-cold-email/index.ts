@@ -121,6 +121,28 @@ Deno.serve(async (req) => {
 
   const messageId = crypto.randomUUID()
 
+  // Get-or-create unsubscribe token for this recipient (one per email address)
+  const recipientLower = contact.email.toLowerCase()
+  let unsubscribeToken: string | null = null
+  {
+    const { data: existing } = await supabase
+      .from('email_unsubscribe_tokens')
+      .select('token')
+      .eq('email', recipientLower)
+      .maybeSingle()
+    if (existing?.token) {
+      unsubscribeToken = existing.token
+    } else {
+      const newToken = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '')
+      const { data: ins } = await supabase
+        .from('email_unsubscribe_tokens')
+        .insert({ email: recipientLower, token: newToken })
+        .select('token')
+        .maybeSingle()
+      unsubscribeToken = ins?.token ?? newToken
+    }
+  }
+
   // Log pending
   await supabase.from('sent_emails').insert({
     id: messageId,
@@ -155,7 +177,8 @@ Deno.serve(async (req) => {
       purpose: 'transactional',
       label: 'cold-outreach',
       idempotency_key: messageId,
-    }, { apiKey, idempotencyKey: messageId })
+      unsubscribe_token: unsubscribeToken!,
+    } as any, { apiKey, idempotencyKey: messageId })
     await supabase.from('sent_emails').update({ status: 'sent' }).eq('id', messageId)
   } catch (err) {
     const detail = err instanceof EmailAPIError ? `${err.status}: ${err.message}` : (err instanceof Error ? err.message : String(err))
