@@ -6,7 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Send, Plus, LogOut, ArrowLeft, Play, Pause, Trash2, Pencil } from "lucide-react";
+import { Plus, Play, Pause, Trash2, Pencil } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -22,7 +22,7 @@ const statusBadge = (s: string) => {
 };
 
 const Sequences = () => {
-  const { user, signOut } = useAuth();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -126,21 +126,8 @@ const Sequences = () => {
   });
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto flex h-14 items-center justify-between px-4">
-          <Link to="/dashboard" className="flex items-center gap-2">
-            <Button variant="ghost" size="sm"><ArrowLeft className="h-4 w-4 mr-1" /> Dashboard</Button>
-          </Link>
-          <div className="flex items-center gap-2">
-            <Send className="h-4 w-4 text-primary" />
-            <span className="font-semibold" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>Sequences</span>
-          </div>
-          <Button variant="ghost" size="sm" onClick={signOut}><LogOut className="h-4 w-4 mr-1.5" />Log out</Button>
-        </div>
-      </header>
-
-      <main className="container mx-auto px-4 py-8">
+    <>
+      <div>
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Sequences</h1>
