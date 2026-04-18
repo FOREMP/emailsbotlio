@@ -182,10 +182,10 @@ const Inner = () => {
 
   const triggerSave = useCallback(() => {
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    dirty.current = true;
     setSaveState("saving");
     saveTimer.current = window.setTimeout(async () => {
       try {
-        // Upsert nodes
         const nodePayload = nodes.map((n) => ({
           id: n.id,
           sequence_id: id!,
@@ -198,7 +198,6 @@ const Inner = () => {
         if (nodePayload.length > 0) {
           await supabase.from("sequence_nodes").upsert(nodePayload, { onConflict: "id" });
         }
-        // Replace edges
         await supabase.from("sequence_edges").delete().eq("sequence_id", id!);
         const edgePayload = edges.map((e) => ({
           sequence_id: id!,
@@ -211,9 +210,11 @@ const Inner = () => {
           await supabase.from("sequence_edges").insert(edgePayload);
         }
         setSaveState("saved");
+        dirty.current = false;
         setTimeout(() => setSaveState("idle"), 1200);
       } catch (e: any) {
         setSaveState("idle");
+        dirty.current = false;
         toast({ title: "Save failed", description: e.message, variant: "destructive" });
       }
     }, 1000);
@@ -374,7 +375,6 @@ const Inner = () => {
             onConnect={onConnect}
             onNodeClick={(_, n) => setSelectedId(n.id)}
             onPaneClick={() => setSelectedId(null)}
-            fitView
             proOptions={{ hideAttribution: true }}
           >
             <Background gap={16} />
