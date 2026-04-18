@@ -119,7 +119,7 @@ const Files = () => {
             </div>
           </div>
         )}
-      </main>
+      
 
       <Dialog open={!!selected} onOpenChange={(v) => !v && setSelected(null)}>
         <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
@@ -188,7 +188,7 @@ const Files = () => {
           )}
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 };
 
