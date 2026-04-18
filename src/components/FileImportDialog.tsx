@@ -15,7 +15,8 @@ const FIRST_NAME_PATTERNS = ["first_name", "firstname", "first name", "fname", "
 const LAST_NAME_PATTERNS = ["last_name", "lastname", "last name", "lname", "surname", "family_name"];
 
 type ColumnMapping = {
-  [header: string]: "email" | "phone" | "first_name" | "last_name" | "custom" | "skip";
+  // Standard fields, "skip", "custom" (new variable name = column header), or "reuse:<existing_key>"
+  [header: string]: string;
 };
 
 interface ParsedData {
@@ -96,7 +97,7 @@ function parseFile(file: File): Promise<ParsedData> {
   });
 }
 
-export default function FileImportDialog({ open, onOpenChange, onImport, importing }: FileImportDialogProps) {
+export default function FileImportDialog({ open, onOpenChange, onImport, importing, existingColumns = [] }: FileImportDialogProps) {
   const [parsed, setParsed] = useState<ParsedData | null>(null);
   const [mapping, setMapping] = useState<ColumnMapping>({});
   const [fileName, setFileName] = useState("");
