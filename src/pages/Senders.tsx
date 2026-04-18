@@ -178,6 +178,12 @@ const Senders = () => {
             <p className="text-muted-foreground max-w-2xl">
               The identities your cold emails are sent from. Each sender is tied to a domain; replies are auto-routed to the brand's Zoho inbox.
             </p>
+            {domains.length > 0 && (
+              <p className="text-xs text-muted-foreground mt-2">
+                Provisioned: <span className="font-semibold text-foreground">{senders.length}</span> / {domains.filter((d) => d.is_active).length * 2} default senders
+                {seeding && <span className="ml-2 text-primary">· auto-seeding…</span>}
+              </p>
+            )}
           </div>
           <div className="flex gap-2">
             {!allDefaultsPresent && (
