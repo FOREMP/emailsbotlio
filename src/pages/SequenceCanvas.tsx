@@ -101,15 +101,18 @@ const Inner = () => {
     setStatus(sequence.status);
   }, [sequence]);
 
+  const seeding = useRef(false);
   useEffect(() => {
     if (!initialLoad.current) return;
-    if (dbNodes.length === 0 && sequence && id && user) {
-      // Auto-seed a default cold-outreach + 1 follow-up template
+    if (dbNodes.length === 0 && sequence && id && user && !seeding.current) {
+      // Auto-seed a default cold-outreach + 1 follow-up template (run ONCE)
+      seeding.current = true;
+      initialLoad.current = false;
       (async () => {
         const triggerCfg = sequence.contact_list_id ? { contact_list_id: sequence.contact_list_id } : {};
         const seedNodes = [
           { node_type: "trigger",     position_x: 250, position_y: 40,  config: triggerCfg },
-          { node_type: "send_email",  position_x: 250, position_y: 180, config: { mode: "ai", sender_strategy: "all", prompt: "Write a 3-sentence cold email to {{first_name}} introducing our service. Personal, specific, no fluff. Ask for a 15-min call.", subject_hint: "Quick question", send_delay_seconds: 60, send_jitter_seconds: 30 } },
+          { node_type: "send_email",  position_x: 250, position_y: 180, config: { mode: "ai", sender_strategy: "all", prompt: "Write a 3-sentence cold email to {{first_name}} introducing our service. Personal, specific, no fluff. Ask for a 15-min call.", subject_hint: "Quick question about {{company}}", send_delay_seconds: 60, send_jitter_seconds: 30 } },
           { node_type: "wait",        position_x: 250, position_y: 340, config: { duration: 3, unit: "days" } },
           { node_type: "send_email",  position_x: 250, position_y: 480, config: { mode: "ai", sender_strategy: "all", prompt: "Write a short, friendly follow-up email to {{first_name}}. Reference the previous email gently, restate the value in one sentence, and ask if next week works for a quick chat.", subject_hint: "Following up", send_delay_seconds: 60, send_jitter_seconds: 30 } },
           { node_type: "end",         position_x: 250, position_y: 640, config: {} },
@@ -119,7 +122,7 @@ const Inner = () => {
           .from("sequence_nodes")
           .insert(seedNodes)
           .select();
-        if (nodeErr || !insertedNodes) return;
+        if (nodeErr || !insertedNodes) { seeding.current = false; return; }
 
         // Wire edges in order
         const edgePayload = [];
