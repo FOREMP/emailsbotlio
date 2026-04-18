@@ -1,12 +1,10 @@
 import { Button } from "@/components/ui/button";
-import { Send, Users, Mail, Layers, FileSpreadsheet, Inbox, LogOut, Plus, ArrowRight } from "lucide-react";
+import { Send, Users, Mail, Layers, FileSpreadsheet, Inbox, Plus, ArrowRight } from "lucide-react";
 import { Link } from "react-router-dom";
-import { useAuth } from "@/contexts/AuthContext";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 
 const Dashboard = () => {
-  const { user, signOut } = useAuth();
 
   const counts = useQuery({
     queryKey: ["dashboard-counts"],
@@ -76,30 +74,8 @@ const Dashboard = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto flex h-14 items-center justify-between px-4">
-          <Link to="/" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg gradient-primary">
-              <Send className="h-4 w-4 text-primary-foreground" />
-            </div>
-            <span className="font-bold text-lg" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>MailxSend</span>
-          </Link>
-          <nav className="hidden md:flex items-center gap-1">
-            <Link to="/sequences"><Button variant="ghost" size="sm">Sequences</Button></Link>
-            <Link to="/contacts"><Button variant="ghost" size="sm">Contacts</Button></Link>
-            <Link to="/senders"><Button variant="ghost" size="sm">Senders</Button></Link>
-            <Link to="/files"><Button variant="ghost" size="sm">Files</Button></Link>
-          </nav>
-          <div className="flex items-center gap-4">
-            <span className="hidden sm:block text-sm text-muted-foreground truncate max-w-[200px]">{user?.email}</span>
-            <Button variant="ghost" size="sm" onClick={signOut}><LogOut className="h-4 w-4 mr-1.5" />Log out</Button>
-          </div>
-        </div>
-      </header>
-
-      <main className="container mx-auto px-4 py-8">
-        <div className="mb-8">
+    <>
+      <div className="mb-8">
           <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
           <p className="text-muted-foreground text-sm mt-1">Your outreach at a glance.</p>
         </div>
