@@ -306,17 +306,22 @@ const Inner = () => {
     await supabase.from("sequences").update({ status: next }).eq("id", id!);
   };
 
-  const enroll = useMutation({
+  const publish = useMutation({
     mutationFn: async () => {
+      if (status !== "active") {
+        await supabase.from("sequences").update({ status: "active" }).eq("id", id!);
+        setStatus("active");
+        setEdges((eds) => eds.map((e) => ({ ...e, animated: true })));
+      }
       const { data, error } = await supabase.functions.invoke("enroll-contacts", { body: { sequence_id: id } });
       if (error) throw error;
       return data;
     },
     onSuccess: (d: any) => toast({
-      title: "Enrollment complete",
-      description: `${d?.enrolled ?? 0} new · ${d?.already_enrolled ?? 0} already enrolled · ${d?.suppressed ?? 0} suppressed · ${d?.no_email ?? 0} no email`,
+      title: "Sequence published 🚀",
+      description: `Now active. ${d?.enrolled ?? 0} new · ${d?.already_enrolled ?? 0} already enrolled · ${d?.suppressed ?? 0} suppressed · ${d?.no_email ?? 0} no email`,
     }),
-    onError: (e: Error) => toast({ title: "Enrollment failed", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Publish failed", description: e.message, variant: "destructive" }),
   });
 
   const triggerNode = nodes.find((n) => n.type === "trigger");
@@ -357,9 +362,9 @@ const Inner = () => {
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <Button size="sm" onClick={() => enroll.mutate()} disabled={enroll.isPending || !contactListId}>
-              <Users className="h-3.5 w-3.5 mr-1.5" />
-              {enroll.isPending ? "Enrolling…" : "Enroll contacts"}
+            <Button size="sm" onClick={() => publish.mutate()} disabled={publish.isPending || !contactListId} className="gradient-primary border-0 text-primary-foreground">
+              <Send className="h-3.5 w-3.5 mr-1.5" />
+              {publish.isPending ? "Publishing…" : status === "active" ? "Re-publish" : "Publish"}
             </Button>
             <Button variant="ghost" size="sm" onClick={signOut}><LogOut className="h-4 w-4" /></Button>
           </div>
