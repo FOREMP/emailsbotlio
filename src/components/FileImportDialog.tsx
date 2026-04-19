@@ -113,10 +113,25 @@ function parseFile(file: File): Promise<ParsedData> {
 }
 
 export default function FileImportDialog({ open, onOpenChange, onImport, importing, existingColumns = [] }: FileImportDialogProps) {
+  const { user } = useAuth();
   const [parsed, setParsed] = useState<ParsedData | null>(null);
   const [mapping, setMapping] = useState<ColumnMapping>({});
   const [fileName, setFileName] = useState("");
   const [fileMeta, setFileMeta] = useState<{ size: number; type: string }>({ size: 0, type: "" });
+  const [autopilot, setAutopilot] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("autopilot_skip_dnc") === "true";
+  });
+  const [dncMatches, setDncMatches] = useState<string[] | null>(null);
+  const [pendingImport, setPendingImport] = useState<null | {
+    contacts: any[]; customColumns: string[]; meta: any;
+  }>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("autopilot_skip_dnc", autopilot ? "true" : "false");
+    }
+  }, [autopilot]);
 
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
