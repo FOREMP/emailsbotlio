@@ -67,6 +67,20 @@ Deno.serve(async (req) => {
         failed++; continue
       }
 
+      // Stop sequence if contact has unsubscribed (DNC list or global suppression)
+      if (contact.email) {
+        const emailLower = contact.email.toLowerCase()
+        const [{ data: dnc }, { data: supp }] = await Promise.all([
+          supabase.from('do_not_contact').select('id').eq('user_id', enr.user_id).eq('email', emailLower).maybeSingle(),
+          supabase.from('suppressed_emails').select('id').eq('email', emailLower).maybeSingle(),
+        ])
+        if (dnc || supp) {
+          await supabase.from('enrollments').update({ status: 'unsubscribed' }).eq('id', enr.id)
+          console.log(`[enr ${enr.id}] contact unsubscribed → cancelled`)
+          continue
+        }
+      }
+
       // Determine current node — prefer wired duplicates
       let currentNode = enr.current_node_id
         ? findNodePreferWired(nodes ?? [], edges ?? [], enr.current_node_id)
