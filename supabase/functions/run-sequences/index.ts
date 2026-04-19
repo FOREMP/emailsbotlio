@@ -220,6 +220,43 @@ Deno.serve(async (req) => {
         continue
       }
 
+      if (currentNode.node_type === 'schedule') {
+        const next = (edges ?? []).find((e: any) => e.source_node_id === currentNode.id)
+        if (!next) { await supabase.from('enrollments').update({ status: 'completed' }).eq('id', enr.id); continue }
+        const tod = String(cfg.time_of_day ?? '09:00')
+        const [hh, mm] = tod.split(':').map((x: string) => Number(x))
+        const allowedDays: string[] = Array.isArray(cfg.days) ? cfg.days : []
+        const dayMap = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+        const now = new Date()
+        // Find next valid datetime at hh:mm UTC, on an allowed day (today if allowed and not yet past)
+        let candidate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hh || 0, mm || 0, 0, 0))
+        if (candidate.getTime() <= now.getTime()) candidate = new Date(candidate.getTime() + 86_400_000)
+        for (let i = 0; i < 8; i++) {
+          const dayName = dayMap[candidate.getUTCDay()]
+          if (allowedDays.length === 0 || allowedDays.includes(dayName)) break
+          candidate = new Date(candidate.getTime() + 86_400_000)
+        }
+        // If we're already at/after today's hh:mm and today is allowed, fire NOW (advance immediately)
+        const todayName = dayMap[now.getUTCDay()]
+        const todaySlot = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hh || 0, mm || 0, 0, 0))
+        const dayAllowedToday = allowedDays.length === 0 || allowedDays.includes(todayName)
+        if (dayAllowedToday && now.getTime() >= todaySlot.getTime()) {
+          await supabase.from('enrollments').update({
+            current_node_id: next.target_node_id,
+            next_send_at: nowIso,
+          }).eq('id', enr.id)
+          advanced++
+          console.log(`[enr ${enr.id}] schedule passed (today ${tod}) → advance`)
+          continue
+        }
+        await supabase.from('enrollments').update({
+          current_node_id: currentNode.id, // stay on schedule node
+          next_send_at: candidate.toISOString(),
+        }).eq('id', enr.id)
+        console.log(`[enr ${enr.id}] schedule → wait until ${candidate.toISOString()}`)
+        continue
+      }
+
       if (currentNode.node_type === 'wait') {
         const next = (edges ?? []).find((e: any) => e.source_node_id === currentNode.id)
         if (!next) { await supabase.from('enrollments').update({ status: 'completed' }).eq('id', enr.id); continue }
