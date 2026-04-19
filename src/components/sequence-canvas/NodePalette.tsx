@@ -1,7 +1,8 @@
-import { Mail, Clock, Activity, GitBranch, CircleStop, Gauge } from "lucide-react";
+import { Mail, Clock, Activity, GitBranch, CircleStop, Gauge, CalendarClock } from "lucide-react";
 
 const items = [
   { type: "send_email", label: "Send Email", icon: Mail, desc: "AI or template", color: "bg-blue-500" },
+  { type: "schedule", label: "Daily Schedule", icon: CalendarClock, desc: "Run at time x", color: "bg-indigo-500" },
   { type: "throttle", label: "Daily Limit", icon: Gauge, desc: "Cap sends/day", color: "bg-emerald-500" },
   { type: "wait", label: "Wait", icon: Clock, desc: "Delay branch", color: "bg-amber-500" },
   { type: "log_activity", label: "Log Activity", icon: Activity, desc: "Record event", color: "bg-purple-500" },

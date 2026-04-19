@@ -354,6 +354,46 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
           </div>
         )}
 
+        {node.node_type === "schedule" && (
+          <>
+            <div>
+              <Label>Time of day (UTC, HH:MM)</Label>
+              <Input
+                type="time"
+                value={cfg.time_of_day ?? "09:00"}
+                onChange={(e) => set("time_of_day", e.target.value)}
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Contacts that reach this node wait until this time (UTC) each day before continuing.
+              </p>
+            </div>
+            <div>
+              <Label>Days of week (optional)</Label>
+              <div className="flex flex-wrap gap-1 mt-1">
+                {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map((d) => {
+                  const active = (cfg.days ?? []).includes(d);
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => {
+                        const cur: string[] = cfg.days ?? [];
+                        set("days", active ? cur.filter((x) => x !== d) : [...cur, d]);
+                      }}
+                      className={`text-xs px-2 py-1 rounded border ${active ? "bg-primary text-primary-foreground border-primary" : "bg-background border-border"}`}
+                    >
+                      {d}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Leave empty to run every day. Selected days only otherwise.
+              </p>
+            </div>
+          </>
+        )}
+
         {node.node_type === "end" && (
           <p className="text-sm text-muted-foreground">Terminates this branch. No configuration needed.</p>
         )}
