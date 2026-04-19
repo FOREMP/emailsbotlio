@@ -9,7 +9,7 @@ export const ScheduleNode = ({ data, selected }: NodeProps) => {
     <NodeShell
       icon={CalendarClock}
       title="Daily Schedule"
-      subtitle={`Run at ${cfg.time_of_day ?? "09:00"} UTC · ${days}`}
+      subtitle={`Run at ${cfg.time_of_day ?? "09:00"} Stockholm · ${days}`}
       colorClass="border-indigo-500/60 bg-indigo-500/5"
       iconColorClass="bg-indigo-500"
       selected={selected}
