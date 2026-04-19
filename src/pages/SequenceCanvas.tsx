@@ -348,7 +348,7 @@ const Inner = () => {
     triggerSave(nextNodes, edgesRef.current);
   }, [id, triggerSave]);
 
-  const deleteNode = useCallback(async (nodeId: string) => {
+  const deleteNode = useCallback((nodeId: string) => {
     const nextNodes = nodesRef.current.filter((n) => n.id !== nodeId);
     const nextEdges = edgesRef.current.filter((e) => e.source !== nodeId && e.target !== nodeId);
 
@@ -357,12 +357,6 @@ const Inner = () => {
     setNodes(nextNodes);
     setEdges(nextEdges);
     setSelectedId(null);
-
-    const { error } = await supabase.from("sequence_nodes").delete().eq("id", nodeId);
-    if (error) {
-      toast({ title: "Delete failed", description: error.message, variant: "destructive" });
-      return;
-    }
 
     triggerSave(nextNodes, nextEdges);
   }, [triggerSave]);
