@@ -23,7 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ArrowLeft, LogOut, Send, Loader2, CheckCircle2 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { NodePalette } from "@/components/sequence-canvas/NodePalette";
 import { NodeInspector, type FlowNode } from "@/components/sequence-canvas/NodeInspector";
 import { TriggerNode } from "@/components/sequence-canvas/nodes/TriggerNode";
@@ -61,7 +61,6 @@ const defaultConfig = (type: string): Record<string, any> => {
 const Inner = () => {
   const { id } = useParams();
   const { user, signOut } = useAuth();
-  const qc = useQueryClient();
   const { screenToFlowPosition } = useReactFlow();
   const reactFlow = useReactFlow();
 
@@ -73,7 +72,6 @@ const Inner = () => {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
 
   const saveTimer = useRef<number | null>(null);
-  const seeding = useRef(false);
   const dirty = useRef(false);
   const hasFitView = useRef(false);
   const nodesRef = useRef<Node[]>([]);
@@ -123,55 +121,6 @@ const Inner = () => {
     setName(sequence.name);
     setStatus(sequence.status);
   }, [sequence]);
-
-  useEffect(() => {
-    if (!sequence || !id || !user) return;
-    if ((sequence as any).seeded) return;
-    if (dbNodes.length > 0) return;
-    if (seeding.current) return;
-
-    seeding.current = true;
-    (async () => {
-      const triggerCfg = sequence.contact_list_id ? { contact_list_id: sequence.contact_list_id } : {};
-      const seedNodes = [
-        { node_type: "trigger", position_x: 250, position_y: 40, config: triggerCfg },
-        { node_type: "send_email", position_x: 250, position_y: 180, config: { mode: "ai", sender_strategy: "all", prompt: "Write a 3-sentence cold email to {{first_name}} introducing our service. Personal, specific, no fluff. Ask for a 15-min call.", subject_hint: "Quick question about {{company}}", send_delay_seconds: 60, send_jitter_seconds: 30 } },
-        { node_type: "wait", position_x: 250, position_y: 340, config: { duration: 3, unit: "days" } },
-        { node_type: "send_email", position_x: 250, position_y: 480, config: { mode: "ai", sender_strategy: "all", prompt: "Write a short, friendly follow-up email to {{first_name}}. Reference the previous email gently, restate the value in one sentence, and ask if next week works for a quick chat.", subject_hint: "Following up", send_delay_seconds: 60, send_jitter_seconds: 30 } },
-        { node_type: "end", position_x: 250, position_y: 640, config: {} },
-      ].map((n) => ({ ...n, sequence_id: id, user_id: user.id }));
-
-      const { data: insertedNodes, error: nodeErr } = await supabase
-        .from("sequence_nodes")
-        .insert(seedNodes)
-        .select();
-
-      if (nodeErr || !insertedNodes) {
-        seeding.current = false;
-        return;
-      }
-
-      const edgePayload = [];
-      for (let i = 0; i < insertedNodes.length - 1; i++) {
-        edgePayload.push({
-          sequence_id: id,
-          user_id: user.id,
-          source_node_id: insertedNodes[i].id,
-          target_node_id: insertedNodes[i + 1].id,
-          source_handle: "default",
-        });
-      }
-
-      if (edgePayload.length > 0) {
-        await supabase.from("sequence_edges").insert(edgePayload);
-      }
-
-      await supabase.from("sequences").update({ seeded: true } as any).eq("id", id);
-      qc.invalidateQueries({ queryKey: ["sequence", id] });
-      qc.invalidateQueries({ queryKey: ["seq-nodes", id] });
-      qc.invalidateQueries({ queryKey: ["seq-edges", id] });
-    })();
-  }, [dbNodes, sequence, id, user, qc]);
 
   useEffect(() => {
     if (dirty.current) return;
