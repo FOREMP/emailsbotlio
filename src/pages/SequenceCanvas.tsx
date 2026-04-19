@@ -112,13 +112,12 @@ const Inner = () => {
   const hasFitView = useRef(false);
   const reactFlow = useReactFlow();
 
-  // Seed defaults exactly once when sequence has no nodes
+  // Seed defaults exactly once per sequence (tracked via sequences.seeded)
   useEffect(() => {
     if (!sequence || !id || !user) return;
+    if ((sequence as any).seeded) return;
     if (dbNodes.length > 0) return;
     if (seeding.current) return;
-    // Defensive: if any trigger already exists in DB, do not seed
-    if ((dbNodes as any[]).some((n) => n.node_type === "trigger")) return;
     seeding.current = true;
     (async () => {
       const triggerCfg = sequence.contact_list_id ? { contact_list_id: sequence.contact_list_id } : {};
@@ -149,6 +148,8 @@ const Inner = () => {
       if (edgePayload.length > 0) {
         await supabase.from("sequence_edges").insert(edgePayload);
       }
+      await supabase.from("sequences").update({ seeded: true } as any).eq("id", id);
+      qc.invalidateQueries({ queryKey: ["sequence", id] });
       qc.invalidateQueries({ queryKey: ["seq-nodes", id] });
       qc.invalidateQueries({ queryKey: ["seq-edges", id] });
     })();
