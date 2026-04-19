@@ -21,6 +21,16 @@ function plainToHtml(s: string): string {
   return `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.55;white-space:pre-wrap">${escapeHtml(s)}</div>`
 }
 
+function deriveBrand(domain: string, brandFromDb?: string | null): string {
+  if (brandFromDb && brandFromDb.trim()) return brandFromDb.trim().toUpperCase()
+  const root = domain.split('.')[0] ?? domain
+  return root.toUpperCase()
+}
+
+function appendFooter(bodyText: string, senderName: string, brand: string): string {
+  return `${bodyText.replace(/\s+$/, '')}\n\nBest regards,\n\n${senderName}\n\n${brand}`
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders })
 
@@ -118,6 +128,10 @@ Deno.serve(async (req) => {
   if (!finalSubject || !finalBody) {
     return new Response(JSON.stringify({ error: 'empty subject or body' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
   }
+
+  // Append branded footer: Best regards, {sender name}, {BRAND}
+  const brand = deriveBrand(domain, (domainRow as any).brand)
+  finalBody = appendFooter(finalBody, chosenSender.from_name, brand)
 
   const messageId = crypto.randomUUID()
 

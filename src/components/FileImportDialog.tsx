@@ -1,11 +1,19 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Upload, FileSpreadsheet, AlertCircle } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Upload, FileSpreadsheet, AlertCircle, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
 
 const STANDARD_FIELDS = ["email", "phone", "first_name", "last_name"] as const;
 
@@ -105,10 +113,25 @@ function parseFile(file: File): Promise<ParsedData> {
 }
 
 export default function FileImportDialog({ open, onOpenChange, onImport, importing, existingColumns = [] }: FileImportDialogProps) {
+  const { user } = useAuth();
   const [parsed, setParsed] = useState<ParsedData | null>(null);
   const [mapping, setMapping] = useState<ColumnMapping>({});
   const [fileName, setFileName] = useState("");
   const [fileMeta, setFileMeta] = useState<{ size: number; type: string }>({ size: 0, type: "" });
+  const [autopilot, setAutopilot] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("autopilot_skip_dnc") === "true";
+  });
+  const [dncMatches, setDncMatches] = useState<string[] | null>(null);
+  const [pendingImport, setPendingImport] = useState<null | {
+    contacts: any[]; customColumns: string[]; meta: any;
+  }>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("autopilot_skip_dnc", autopilot ? "true" : "false");
+    }
+  }, [autopilot]);
 
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -160,10 +183,9 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
     setFileMeta({ size: 0, type: "" });
   };
 
-  const handleConfirm = () => {
-    if (!parsed) return;
-
-    const contacts = parsed.rows.map((row) => {
+  const buildContacts = () => {
+    if (!parsed) return [] as any[];
+    return parsed.rows.map((row) => {
       const contact: any = { first_name: "", last_name: "", email: "", phone: "", custom_fields: {} as Record<string, string> };
       for (const header of parsed.headers) {
         const role = mapping[header];
@@ -179,18 +201,79 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
       }
       return contact;
     });
+  };
 
+  const finalizeImport = (contacts: any[]) => {
     onImport(contacts, customColumns, {
       name: fileName,
       size: fileMeta.size,
       type: fileMeta.type,
-      headers: parsed.headers,
+      headers: parsed!.headers,
       mapping: mapping as Record<string, string>,
-      sampleRows: parsed.rows.slice(0, 5),
+      sampleRows: parsed!.rows.slice(0, 5),
     });
-
-    // Reset so the user can immediately import another file
     resetState();
+  };
+
+  const handleConfirm = async () => {
+    if (!parsed) return;
+    const contacts = buildContacts();
+
+    // Pre-check: are any of these emails on the user's do_not_contact list?
+    const emails = Array.from(
+      new Set(
+        contacts
+          .map((c) => (c.email || "").toLowerCase().trim())
+          .filter((e) => !!e),
+      ),
+    );
+
+    let dncSet = new Set<string>();
+    if (user && emails.length > 0) {
+      const { data } = await supabase
+        .from("do_not_contact")
+        .select("email")
+        .eq("user_id", user.id)
+        .in("email", emails);
+      dncSet = new Set((data ?? []).map((r: any) => (r.email as string).toLowerCase()));
+    }
+
+    if (dncSet.size === 0) {
+      finalizeImport(contacts);
+      return;
+    }
+
+    const matches = Array.from(dncSet);
+
+    if (autopilot) {
+      const filtered = contacts.filter((c) => !dncSet.has((c.email || "").toLowerCase().trim()));
+      toast.success(`Skipped ${matches.length} unsubscribed contact${matches.length === 1 ? "" : "s"}`);
+      finalizeImport(filtered);
+      return;
+    }
+
+    setDncMatches(matches);
+    setPendingImport({ contacts, customColumns, meta: null });
+  };
+
+  const handleDncSkip = () => {
+    if (!pendingImport || !dncMatches) return;
+    const dncSet = new Set(dncMatches.map((e) => e.toLowerCase()));
+    const filtered = pendingImport.contacts.filter(
+      (c) => !dncSet.has((c.email || "").toLowerCase().trim()),
+    );
+    toast.success(`Skipped ${dncMatches.length} unsubscribed contact${dncMatches.length === 1 ? "" : "s"}`);
+    setDncMatches(null);
+    setPendingImport(null);
+    finalizeImport(filtered);
+  };
+
+  const handleDncImportAnyway = () => {
+    if (!pendingImport) return;
+    setDncMatches(null);
+    const all = pendingImport.contacts;
+    setPendingImport(null);
+    finalizeImport(all);
   };
 
   const handleClose = (val: boolean) => {
@@ -315,12 +398,48 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
               </div>
             )}
 
+            <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-3 py-2">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="h-4 w-4 text-muted-foreground" />
+                <div>
+                  <Label htmlFor="autopilot-dnc" className="text-sm font-medium cursor-pointer">Autopilot: skip unsubscribed</Label>
+                  <p className="text-xs text-muted-foreground">Automatically remove contacts on your Do-Not-Contact list, no prompt.</p>
+                </div>
+              </div>
+              <Switch id="autopilot-dnc" checked={autopilot} onCheckedChange={setAutopilot} />
+            </div>
+
             <Button onClick={handleConfirm} disabled={importing} className="w-full">
               {importing ? "Importing…" : `Import ${parsed.rows.length} contacts`}
             </Button>
           </div>
         )}
       </DialogContent>
+
+      <AlertDialog open={!!dncMatches} onOpenChange={(o) => { if (!o) { setDncMatches(null); setPendingImport(null); } }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <ShieldAlert className="h-5 w-5 text-destructive" />
+              {dncMatches?.length} unsubscribed contact{dncMatches?.length === 1 ? "" : "s"} found
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  These addresses previously unsubscribed from your emails. Contacting them again may damage your sender reputation.
+                </p>
+                <div className="max-h-40 overflow-y-auto rounded-md border border-border bg-muted/30 p-2 text-xs font-mono">
+                  {dncMatches?.map((e) => <div key={e}>{e}</div>)}
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={handleDncImportAnyway}>Import anyway</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDncSkip}>Skip these contacts</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }

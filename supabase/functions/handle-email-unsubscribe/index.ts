@@ -124,7 +124,59 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: 'Failed to process unsubscribe' }, 500)
   }
 
-  console.log('Email unsubscribed', { email: tokenRecord.email })
+  // Add email to per-user do_not_contact list for every user that has sent
+  // an email to this address. Also cancel any active enrollments so in-flight
+  // sequences stop immediately.
+  const recipientLower = tokenRecord.email.toLowerCase()
+  const { data: senders } = await supabase
+    .from('sent_emails')
+    .select('user_id')
+    .eq('recipient_email', tokenRecord.email)
+
+  const userIds = Array.from(
+    new Set((senders ?? []).map((r: any) => r.user_id).filter(Boolean)),
+  )
+
+  for (const uid of userIds) {
+    const { error: dncError } = await supabase
+      .from('do_not_contact')
+      .upsert(
+        { user_id: uid, email: recipientLower, reason: 'unsubscribed_via_email' },
+        { onConflict: 'user_id,email' },
+      )
+    if (dncError) {
+      // Fallback: try insert (in case no unique constraint exists)
+      const { data: existing } = await supabase
+        .from('do_not_contact')
+        .select('id')
+        .eq('user_id', uid)
+        .eq('email', recipientLower)
+        .maybeSingle()
+      if (!existing) {
+        await supabase
+          .from('do_not_contact')
+          .insert({ user_id: uid, email: recipientLower, reason: 'unsubscribed_via_email' })
+      }
+    }
+
+    // Cancel active enrollments for this user/contact
+    const { data: contactRows } = await supabase
+      .from('contacts')
+      .select('id')
+      .eq('user_id', uid)
+      .ilike('email', tokenRecord.email)
+    const contactIds = (contactRows ?? []).map((c: any) => c.id)
+    if (contactIds.length > 0) {
+      await supabase
+        .from('enrollments')
+        .update({ status: 'unsubscribed' })
+        .eq('user_id', uid)
+        .in('contact_id', contactIds)
+        .eq('status', 'active')
+    }
+  }
+
+  console.log('Email unsubscribed', { email: tokenRecord.email, users: userIds.length })
 
   return jsonResponse({ success: true })
 })
