@@ -323,6 +323,32 @@ const Senders = () => {
                               </Button>
                             </div>
                           </div>
+                          <div className="mt-3 grid grid-cols-[1fr_1fr_auto] gap-3 items-end border-t pt-3">
+                            <div>
+                              <Label className="text-xs">Daily limit</Label>
+                              <Input
+                                type="number"
+                                min={1}
+                                value={s.daily_limit}
+                                onChange={(e) => updateSender(s.id, { daily_limit: Number(e.target.value) })}
+                              />
+                            </div>
+                            <div>
+                              <Label className="text-xs">Today's quota</Label>
+                              <div className="h-9 px-3 flex items-center rounded-md border bg-muted/40 text-sm">
+                                {todayQuota(s)} {s.warmup_enabled && <span className="ml-2 text-[10px] text-amber-600 dark:text-amber-400">warming…</span>}
+                              </div>
+                            </div>
+                            {!s.warmup_enabled ? (
+                              <Button size="sm" variant="outline" onClick={() => updateSender(s.id, { warmup_enabled: true, warmup_started_at: new Date().toISOString(), warmup_target: 50 })}>
+                                <Flame className="h-3.5 w-3.5" /> Warm up
+                              </Button>
+                            ) : (
+                              <Button size="sm" variant="ghost" onClick={() => updateSender(s.id, { warmup_enabled: false, warmup_started_at: null })}>
+                                Stop warmup
+                              </Button>
+                            )}
+                          </div>
                           {testEmailFor === s.id && (
                             <div className="mt-3 flex gap-2 items-end border-t pt-3">
                               <div className="flex-1">
