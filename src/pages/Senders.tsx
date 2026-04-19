@@ -188,6 +188,7 @@ const Senders = () => {
     const ramp = day <= 6 ? day * 5 : 30 + (day - 6) * 10;
     return Math.min(s.daily_limit, s.warmup_target, Math.max(5, ramp));
   };
+  const hasDomains = domains.length > 0;
   const allDefaultsPresent = useMemo(() => {
     if (!hasDomains) return true;
     for (const d of domains.filter((x) => x.is_active)) {
@@ -214,6 +215,11 @@ const Senders = () => {
             )}
           </div>
           <div className="flex gap-2">
+            {senders.some((s) => !s.warmup_enabled && s.is_active) && (
+              <Button variant="outline" onClick={startWarmupAll}>
+                <Flame className="h-4 w-4" /> Warm up all domains
+              </Button>
+            )}
             {!allDefaultsPresent && (
               <Button variant="outline" onClick={() => seedDefaults(false)} disabled={seeding}>
                 <Sparkles className="h-4 w-4" /> {seeding ? "Seeding..." : "Auto-create Eric + Isak per domain"}
