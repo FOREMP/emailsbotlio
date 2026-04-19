@@ -148,6 +148,8 @@ const Inner = () => {
       if (edgePayload.length > 0) {
         await supabase.from("sequence_edges").insert(edgePayload);
       }
+      await supabase.from("sequences").update({ seeded: true } as any).eq("id", id);
+      qc.invalidateQueries({ queryKey: ["sequence", id] });
       qc.invalidateQueries({ queryKey: ["seq-nodes", id] });
       qc.invalidateQueries({ queryKey: ["seq-edges", id] });
     })();
