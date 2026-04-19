@@ -357,14 +357,14 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
         {node.node_type === "schedule" && (
           <>
             <div>
-              <Label>Time of day (UTC, HH:MM)</Label>
+              <Label>Time of day (Stockholm, HH:MM)</Label>
               <Input
                 type="time"
                 value={cfg.time_of_day ?? "09:00"}
                 onChange={(e) => set("time_of_day", e.target.value)}
               />
               <p className="text-[11px] text-muted-foreground mt-1">
-                Contacts that reach this node wait until this time (UTC) each day before continuing.
+                Contacts that reach this node wait until this time (Europe/Stockholm, auto-adjusts for daylight saving) each day before continuing.
               </p>
             </div>
             <div>
