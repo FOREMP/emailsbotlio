@@ -398,12 +398,48 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
               </div>
             )}
 
+            <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-3 py-2">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="h-4 w-4 text-muted-foreground" />
+                <div>
+                  <Label htmlFor="autopilot-dnc" className="text-sm font-medium cursor-pointer">Autopilot: skip unsubscribed</Label>
+                  <p className="text-xs text-muted-foreground">Automatically remove contacts on your Do-Not-Contact list, no prompt.</p>
+                </div>
+              </div>
+              <Switch id="autopilot-dnc" checked={autopilot} onCheckedChange={setAutopilot} />
+            </div>
+
             <Button onClick={handleConfirm} disabled={importing} className="w-full">
               {importing ? "Importing…" : `Import ${parsed.rows.length} contacts`}
             </Button>
           </div>
         )}
       </DialogContent>
+
+      <AlertDialog open={!!dncMatches} onOpenChange={(o) => { if (!o) { setDncMatches(null); setPendingImport(null); } }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <ShieldAlert className="h-5 w-5 text-destructive" />
+              {dncMatches?.length} unsubscribed contact{dncMatches?.length === 1 ? "" : "s"} found
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  These addresses previously unsubscribed from your emails. Contacting them again may damage your sender reputation.
+                </p>
+                <div className="max-h-40 overflow-y-auto rounded-md border border-border bg-muted/30 p-2 text-xs font-mono">
+                  {dncMatches?.map((e) => <div key={e}>{e}</div>)}
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={handleDncImportAnyway}>Import anyway</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDncSkip}>Skip these contacts</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }
