@@ -9,7 +9,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Trash2, Mail, Send, Sparkles } from "lucide-react";
+import { Plus, Trash2, Mail, Send, Sparkles, Flame } from "lucide-react";
 import { toast } from "sonner";
 
 interface Sender {
@@ -18,6 +18,10 @@ interface Sender {
   from_name: string;
   reply_to: string | null;
   is_active: boolean;
+  daily_limit: number;
+  warmup_enabled: boolean;
+  warmup_started_at: string | null;
+  warmup_target: number;
 }
 
 interface SendingDomain {
@@ -159,6 +163,31 @@ const Senders = () => {
     setTestEmailFor(null);
   };
 
+  const updateSender = async (id: string, patch: Partial<Sender>) => {
+    setSenders((prev) => prev.map((x) => x.id === id ? { ...x, ...patch } as Sender : x));
+    const { error } = await supabase.from("senders").update(patch as any).eq("id", id);
+    if (error) toast.error(error.message);
+  };
+
+  const startWarmupAll = async () => {
+    if (senders.length === 0) return;
+    const nowIso = new Date().toISOString();
+    const ids = senders.filter((s) => s.is_active).map((s) => s.id);
+    const { error } = await supabase
+      .from("senders")
+      .update({ warmup_enabled: true, warmup_started_at: nowIso, warmup_target: 50 })
+      .in("id", ids);
+    if (error) return toast.error(error.message);
+    toast.success(`Warmup started on ${ids.length} senders. Day 1 cap: 5 emails each.`);
+    load();
+  };
+
+  const todayQuota = (s: Sender) => {
+    if (!s.warmup_enabled || !s.warmup_started_at) return s.daily_limit;
+    const day = Math.max(1, Math.floor((Date.now() - new Date(s.warmup_started_at).getTime()) / 86_400_000) + 1);
+    const ramp = day <= 6 ? day * 5 : 30 + (day - 6) * 10;
+    return Math.min(s.daily_limit, s.warmup_target, Math.max(5, ramp));
+  };
   const hasDomains = domains.length > 0;
   const allDefaultsPresent = useMemo(() => {
     if (!hasDomains) return true;
@@ -186,6 +215,11 @@ const Senders = () => {
             )}
           </div>
           <div className="flex gap-2">
+            {senders.some((s) => !s.warmup_enabled && s.is_active) && (
+              <Button variant="outline" onClick={startWarmupAll}>
+                <Flame className="h-4 w-4" /> Warm up all domains
+              </Button>
+            )}
             {!allDefaultsPresent && (
               <Button variant="outline" onClick={() => seedDefaults(false)} disabled={seeding}>
                 <Sparkles className="h-4 w-4" /> {seeding ? "Seeding..." : "Auto-create Eric + Isak per domain"}
@@ -288,6 +322,32 @@ const Senders = () => {
                                 <Trash2 className="h-4 w-4" />
                               </Button>
                             </div>
+                          </div>
+                          <div className="mt-3 grid grid-cols-[1fr_1fr_auto] gap-3 items-end border-t pt-3">
+                            <div>
+                              <Label className="text-xs">Daily limit</Label>
+                              <Input
+                                type="number"
+                                min={1}
+                                value={s.daily_limit}
+                                onChange={(e) => updateSender(s.id, { daily_limit: Number(e.target.value) })}
+                              />
+                            </div>
+                            <div>
+                              <Label className="text-xs">Today's quota</Label>
+                              <div className="h-9 px-3 flex items-center rounded-md border bg-muted/40 text-sm">
+                                {todayQuota(s)} {s.warmup_enabled && <span className="ml-2 text-[10px] text-amber-600 dark:text-amber-400">warming…</span>}
+                              </div>
+                            </div>
+                            {!s.warmup_enabled ? (
+                              <Button size="sm" variant="outline" onClick={() => updateSender(s.id, { warmup_enabled: true, warmup_started_at: new Date().toISOString(), warmup_target: 50 })}>
+                                <Flame className="h-3.5 w-3.5" /> Warm up
+                              </Button>
+                            ) : (
+                              <Button size="sm" variant="ghost" onClick={() => updateSender(s.id, { warmup_enabled: false, warmup_started_at: null })}>
+                                Stop warmup
+                              </Button>
+                            )}
                           </div>
                           {testEmailFor === s.id && (
                             <div className="mt-3 flex gap-2 items-end border-t pt-3">

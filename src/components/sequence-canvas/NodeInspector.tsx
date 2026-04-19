@@ -339,6 +339,21 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
           </>
         )}
 
+        {node.node_type === "throttle" && (
+          <div>
+            <Label>Max emails per day (this branch)</Label>
+            <Input
+              type="number"
+              min={1}
+              value={cfg.max_per_day ?? 50}
+              onChange={(e) => set("max_per_day", Number(e.target.value))}
+            />
+            <p className="text-[11px] text-muted-foreground mt-1">
+              When this branch has already sent this many emails today, remaining contacts wait until tomorrow.
+            </p>
+          </div>
+        )}
+
         {node.node_type === "end" && (
           <p className="text-sm text-muted-foreground">Terminates this branch. No configuration needed.</p>
         )}

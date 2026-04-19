@@ -489,6 +489,7 @@ export type Database = {
       senders: {
         Row: {
           created_at: string
+          daily_limit: number
           from_email: string
           from_name: string
           id: string
@@ -496,9 +497,13 @@ export type Database = {
           reply_to: string | null
           updated_at: string
           user_id: string
+          warmup_enabled: boolean
+          warmup_started_at: string | null
+          warmup_target: number
         }
         Insert: {
           created_at?: string
+          daily_limit?: number
           from_email: string
           from_name: string
           id?: string
@@ -506,9 +511,13 @@ export type Database = {
           reply_to?: string | null
           updated_at?: string
           user_id: string
+          warmup_enabled?: boolean
+          warmup_started_at?: string | null
+          warmup_target?: number
         }
         Update: {
           created_at?: string
+          daily_limit?: number
           from_email?: string
           from_name?: string
           id?: string
@@ -516,6 +525,9 @@ export type Database = {
           reply_to?: string | null
           updated_at?: string
           user_id?: string
+          warmup_enabled?: boolean
+          warmup_started_at?: string | null
+          warmup_target?: number
         }
         Relationships: []
       }
@@ -786,6 +798,8 @@ export type Database = {
     }
     Functions: {
       seed_default_senders: { Args: never; Returns: number }
+      sender_daily_remaining: { Args: { _sender_id: string }; Returns: number }
+      sender_warmup_quota: { Args: { _sender_id: string }; Returns: number }
     }
     Enums: {
       [_ in never]: never
