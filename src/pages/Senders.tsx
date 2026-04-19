@@ -163,7 +163,31 @@ const Senders = () => {
     setTestEmailFor(null);
   };
 
-  const hasDomains = domains.length > 0;
+  const updateSender = async (id: string, patch: Partial<Sender>) => {
+    setSenders((prev) => prev.map((x) => x.id === id ? { ...x, ...patch } as Sender : x));
+    const { error } = await supabase.from("senders").update(patch as any).eq("id", id);
+    if (error) toast.error(error.message);
+  };
+
+  const startWarmupAll = async () => {
+    if (senders.length === 0) return;
+    const nowIso = new Date().toISOString();
+    const ids = senders.filter((s) => s.is_active).map((s) => s.id);
+    const { error } = await supabase
+      .from("senders")
+      .update({ warmup_enabled: true, warmup_started_at: nowIso, warmup_target: 50 })
+      .in("id", ids);
+    if (error) return toast.error(error.message);
+    toast.success(`Warmup started on ${ids.length} senders. Day 1 cap: 5 emails each.`);
+    load();
+  };
+
+  const todayQuota = (s: Sender) => {
+    if (!s.warmup_enabled || !s.warmup_started_at) return s.daily_limit;
+    const day = Math.max(1, Math.floor((Date.now() - new Date(s.warmup_started_at).getTime()) / 86_400_000) + 1);
+    const ramp = day <= 6 ? day * 5 : 30 + (day - 6) * 10;
+    return Math.min(s.daily_limit, s.warmup_target, Math.max(5, ramp));
+  };
   const allDefaultsPresent = useMemo(() => {
     if (!hasDomains) return true;
     for (const d of domains.filter((x) => x.is_active)) {
