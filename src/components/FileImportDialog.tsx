@@ -183,10 +183,9 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
     setFileMeta({ size: 0, type: "" });
   };
 
-  const handleConfirm = () => {
-    if (!parsed) return;
-
-    const contacts = parsed.rows.map((row) => {
+  const buildContacts = () => {
+    if (!parsed) return [] as any[];
+    return parsed.rows.map((row) => {
       const contact: any = { first_name: "", last_name: "", email: "", phone: "", custom_fields: {} as Record<string, string> };
       for (const header of parsed.headers) {
         const role = mapping[header];
@@ -202,18 +201,79 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
       }
       return contact;
     });
+  };
 
+  const finalizeImport = (contacts: any[]) => {
     onImport(contacts, customColumns, {
       name: fileName,
       size: fileMeta.size,
       type: fileMeta.type,
-      headers: parsed.headers,
+      headers: parsed!.headers,
       mapping: mapping as Record<string, string>,
-      sampleRows: parsed.rows.slice(0, 5),
+      sampleRows: parsed!.rows.slice(0, 5),
     });
-
-    // Reset so the user can immediately import another file
     resetState();
+  };
+
+  const handleConfirm = async () => {
+    if (!parsed) return;
+    const contacts = buildContacts();
+
+    // Pre-check: are any of these emails on the user's do_not_contact list?
+    const emails = Array.from(
+      new Set(
+        contacts
+          .map((c) => (c.email || "").toLowerCase().trim())
+          .filter((e) => !!e),
+      ),
+    );
+
+    let dncSet = new Set<string>();
+    if (user && emails.length > 0) {
+      const { data } = await supabase
+        .from("do_not_contact")
+        .select("email")
+        .eq("user_id", user.id)
+        .in("email", emails);
+      dncSet = new Set((data ?? []).map((r: any) => (r.email as string).toLowerCase()));
+    }
+
+    if (dncSet.size === 0) {
+      finalizeImport(contacts);
+      return;
+    }
+
+    const matches = Array.from(dncSet);
+
+    if (autopilot) {
+      const filtered = contacts.filter((c) => !dncSet.has((c.email || "").toLowerCase().trim()));
+      toast.success(`Skipped ${matches.length} unsubscribed contact${matches.length === 1 ? "" : "s"}`);
+      finalizeImport(filtered);
+      return;
+    }
+
+    setDncMatches(matches);
+    setPendingImport({ contacts, customColumns, meta: null });
+  };
+
+  const handleDncSkip = () => {
+    if (!pendingImport || !dncMatches) return;
+    const dncSet = new Set(dncMatches.map((e) => e.toLowerCase()));
+    const filtered = pendingImport.contacts.filter(
+      (c) => !dncSet.has((c.email || "").toLowerCase().trim()),
+    );
+    toast.success(`Skipped ${dncMatches.length} unsubscribed contact${dncMatches.length === 1 ? "" : "s"}`);
+    setDncMatches(null);
+    setPendingImport(null);
+    finalizeImport(filtered);
+  };
+
+  const handleDncImportAnyway = () => {
+    if (!pendingImport) return;
+    setDncMatches(null);
+    const all = pendingImport.contacts;
+    setPendingImport(null);
+    finalizeImport(all);
   };
 
   const handleClose = (val: boolean) => {
