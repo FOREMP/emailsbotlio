@@ -100,13 +100,88 @@ Deno.serve(async (req) => {
       const cfg = currentNode.config ?? {}
       console.log(`[enr ${enr.id}] processing ${currentNode.node_type}(${currentNode.id})`)
 
+      // Daily-limit (throttle) node: count today's send_email-after-this-node activity
+      if (currentNode.node_type === 'throttle') {
+        const max = Number(cfg.max_per_day ?? 50)
+        const startOfDay = new Date(); startOfDay.setUTCHours(0, 0, 0, 0)
+        const { count } = await supabase
+          .from('contact_activity')
+          .select('id', { count: 'exact', head: true })
+          .eq('sequence_id', enr.sequence_id)
+          .eq('node_id', currentNode.id)
+          .eq('activity_type', 'throttle_pass')
+          .gte('created_at', startOfDay.toISOString())
+        if ((count ?? 0) >= max) {
+          // Defer this enrollment to next UTC midnight
+          const tomorrow = new Date(startOfDay.getTime() + 24 * 3600_000)
+          await supabase.from('enrollments').update({ next_send_at: tomorrow.toISOString() }).eq('id', enr.id)
+          console.log(`[enr ${enr.id}] throttle full (${count}/${max}) → deferred to ${tomorrow.toISOString()}`)
+          continue
+        }
+        // Mark this pass and advance
+        await supabase.from('contact_activity').insert({
+          user_id: enr.user_id,
+          contact_id: enr.contact_id,
+          sequence_id: enr.sequence_id,
+          node_id: currentNode.id,
+          activity_type: 'throttle_pass',
+          metadata: { used: (count ?? 0) + 1, max },
+        })
+        const next = (edges ?? []).find((e: any) => e.source_node_id === currentNode.id)
+        if (!next) { await supabase.from('enrollments').update({ status: 'completed' }).eq('id', enr.id); continue }
+        await supabase.from('enrollments').update({
+          current_node_id: next.target_node_id,
+          next_send_at: nowIso,
+        }).eq('id', enr.id)
+        advanced++
+        continue
+      }
+
       if (currentNode.node_type === 'send_email') {
+        // Pre-check: pick a sender and verify it has remaining daily quota
+        let preSenderId: string | null = null
+        if (cfg.sender_strategy === 'specific' && cfg.sender_id) {
+          preSenderId = cfg.sender_id
+        } else {
+          // Find any active sender for this user with remaining quota
+          let q = supabase.from('senders').select('id, from_email').eq('user_id', enr.user_id).eq('is_active', true)
+          const { data: pool } = await q
+          let candidates = pool ?? []
+          if (cfg.sender_strategy === 'brand' && cfg.brand) {
+            candidates = candidates.filter((s: any) => {
+              const dom = (s.from_email as string).split('@')[1] ?? ''
+              return dom.startsWith(`${cfg.brand}.`) || dom === cfg.brand
+            })
+          }
+          // Check remaining quota for each, pick one with capacity
+          for (const c of candidates.sort(() => Math.random() - 0.5)) {
+            const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: c.id })
+            if ((rem ?? 0) > 0) { preSenderId = c.id; break }
+          }
+        }
+        if (!preSenderId) {
+          // All senders capped → defer to next UTC midnight
+          const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
+          await supabase.from('enrollments').update({ next_send_at: tomorrow.toISOString() }).eq('id', enr.id)
+          console.log(`[enr ${enr.id}] all senders at daily cap → deferred to ${tomorrow.toISOString()}`)
+          continue
+        }
+        // For specific-strategy, also verify that one has capacity
+        if (cfg.sender_strategy === 'specific') {
+          const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: preSenderId })
+          if ((rem ?? 0) <= 0) {
+            const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
+            await supabase.from('enrollments').update({ next_send_at: tomorrow.toISOString() }).eq('id', enr.id)
+            console.log(`[enr ${enr.id}] specific sender at daily cap → deferred`)
+            continue
+          }
+        }
+
         const r = await supabase.functions.invoke('send-cold-email', {
           body: {
             user_id: enr.user_id,
-            sender_id: cfg.sender_strategy === 'specific' ? cfg.sender_id : undefined,
-            strategy: cfg.sender_strategy === 'brand' ? 'brand' : 'all',
-            brand: cfg.brand,
+            sender_id: preSenderId,
+            strategy: 'specific',
             contact,
             sequence_id: enr.sequence_id,
             enrollment_id: enr.id,
@@ -122,8 +197,6 @@ Deno.serve(async (req) => {
           const msg = (r.data as any)?.error || r.error?.message || 'unknown send error'
           console.error(`[enr ${enr.id}] send-cold-email failed: ${msg}`)
           errors.push({ enr: enr.id, err: msg })
-          // Don't immediately mark failed — allow retry next tick by leaving status active
-          // but bump next_send_at by 5 min to avoid hot-loop
           await supabase.from('enrollments').update({
             next_send_at: new Date(Date.now() + 5 * 60_000).toISOString(),
           }).eq('id', enr.id)
