@@ -153,6 +153,13 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
         .filter((v): v is string => !!v)
     : [];
 
+  const resetState = () => {
+    setParsed(null);
+    setMapping({});
+    setFileName("");
+    setFileMeta({ size: 0, type: "" });
+  };
+
   const handleConfirm = () => {
     if (!parsed) return;
 
@@ -181,14 +188,13 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
       mapping: mapping as Record<string, string>,
       sampleRows: parsed.rows.slice(0, 5),
     });
+
+    // Reset so the user can immediately import another file
+    resetState();
   };
 
   const handleClose = (val: boolean) => {
-    if (!val) {
-      setParsed(null);
-      setMapping({});
-      setFileName("");
-    }
+    if (!val) resetState();
     onOpenChange(val);
   };
 
