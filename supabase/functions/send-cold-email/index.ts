@@ -129,6 +129,10 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: 'empty subject or body' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
   }
 
+  // Append branded footer: Best regards, {sender name}, {BRAND}
+  const brand = deriveBrand(domain, (domainRow as any).brand)
+  finalBody = appendFooter(finalBody, chosenSender.from_name, brand)
+
   const messageId = crypto.randomUUID()
 
   // Get-or-create unsubscribe token for this recipient (one per email address)
