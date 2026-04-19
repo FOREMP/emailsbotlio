@@ -1,60 +1,54 @@
 
-Root cause:
-- The system is most likely not creating truly “random” new nodes. Old node rows are still sitting in `sequence_nodes`, and when the page refetches on tab focus / reopen, the canvas reloads them from Supabase.
-- In `src/pages/SequenceCanvas.tsx`, `onNodesChange(... remove ...)` updates React state and calls `triggerSave`, but `triggerSave` only upserts the remaining nodes. It never deletes node rows that disappeared from the canvas.
-- There is a second bug: saves are debounced by 1 second and the timer is cleared on unmount. So if you switch tab / leave quickly after an edit, that last edit can be lost before it ever reaches Supabase.
 
-What I will change:
-1. Make canvas persistence authoritative
-- Replace the current “upsert remaining nodes only” logic with full graph reconciliation:
-  - load current DB node ids for the sequence
-  - compute which ids are no longer in the canvas
-  - delete those missing ids from `sequence_nodes`
-  - upsert only the nodes that still exist
-  - keep the existing full replace logic for edges
-- This ensures the database exactly matches the canvas state.
+## Plan: Email footer + unsubscribe enforcement
 
-2. Fix all delete paths
-- Handle deletions from both:
-  - the inspector delete button (`deleteNode`)
-  - React Flow’s built-in remove events (`onNodesChange` with `remove`)
-- I’ll make both paths use the same persistence function so keyboard delete, selection delete, and inspector delete all behave identically.
+### 1. Branded footer on cold emails
+Update `supabase/functions/send-cold-email/index.ts`:
+- Derive brand name from sender domain (e.g. `foremp.eu` → `FOREMP`) by taking the part before the first `.` and uppercasing it. Look up `sending_domains.brand` first if present, otherwise fall back to that derivation.
+- Append a footer block to both `text` and `html` versions before sending:
+  ```
+  Best regards,
 
-3. Prevent lost saves on tab switch / leaving
-- Flush pending saves immediately on:
-  - component unmount
-  - page visibility change / tab hide
-  - window blur or before navigation away if needed
-- This removes the “I changed something, switched tab, came back, and old nodes returned” behavior.
+  {sender.from_name}
 
-4. Stop DB refetch from overwriting unsaved local state
-- Tighten the hydration effect so it only rehydrates from Supabase when there is no local pending save.
-- After a successful save, explicitly sync local refs/state from the just-saved graph instead of trusting a later refetch.
+  {BRAND}
+  ```
+- HTML version uses `<br>` line breaks with the same plain styling as `plainToHtml`.
+- Footer is inserted BEFORE the system unsubscribe footer (which is auto-appended by Lovable email).
 
-5. Clean up the current broken sequence state
-- After the logic is fixed, I’ll remove the ghost node rows already stuck in the affected sequence so the canvas starts from the real saved state.
-- No schema change should be needed for this fix.
+### 2. One-click unsubscribe → DNC list
+Update `supabase/functions/handle-email-unsubscribe/index.ts`:
+- On successful POST (token confirmed), in addition to marking the token used and adding to `suppressed_emails`, also insert the email into `do_not_contact` for the original sending user.
+- To find the right `user_id`: look up the most recent `sent_emails` row matching `recipient_email = token.email` and use its `user_id`. If multiple users sent to the same address, add them all (loop over distinct user_ids).
+- Insert into `do_not_contact` with `reason: 'unsubscribed_via_email'`.
 
-Files to update:
-- `src/pages/SequenceCanvas.tsx` — main fix for save/delete/reload behavior
-- Possibly small related cleanup if needed in:
-  - `src/components/sequence-canvas/NodeInspector.tsx`
-  - React Query usage around the sequence canvas
+The current `Unsubscribe.tsx` page already shows a "Confirm unsubscribe" button — no UI changes needed.
 
-Technical details:
-- Current faulty behavior:
-  - `triggerSave()` does `upsert(nodePayload)` but never deletes missing node ids.
-  - `useEffect([dbNodes, dbEdges,...])` then reloads those stale rows into the canvas.
-  - the 1s debounce is canceled on unmount, so recent changes may never persist.
-- Intended behavior after fix:
-  - Supabase `sequence_nodes` becomes an exact mirror of the current canvas.
-  - If a node is deleted anywhere in the UI, its DB row is deleted too.
-  - If you leave and come back, only the nodes you explicitly added and configured remain.
+### 3. Stop in-flight sequences after unsubscribe
+Update `supabase/functions/send-cold-email/index.ts`:
+- The DNC check already exists at the top of the function. Confirmed it blocks sends. ✓
+- Also update `supabase/functions/run-sequences/index.ts` (the cron worker) to skip/cancel enrollments where the contact's email is in `suppressed_emails` or `do_not_contact` for that user — mark `enrollments.status = 'unsubscribed'` so they stop being processed entirely instead of being checked every cycle.
 
-Validation after implementation:
-- Create a new sequence → open canvas → it stays empty
-- Drag in one node → leave page immediately → reopen → same node remains
-- Delete a node with inspector button → reopen → it stays deleted
-- Delete a node with keyboard / canvas remove → reopen → it stays deleted
-- Change node settings, switch tab, come back → settings persist
-- Wait for window refocus / React Query refetch → no ghost nodes reappear
+### 4. Warn on re-import of DNC contacts
+Update `src/components/FileImportDialog.tsx` and `src/pages/Contacts.tsx`:
+- After the file is parsed, query `do_not_contact` for the current user where `email` is in the parsed list.
+- If matches exist, show a confirmation dialog listing the matched emails with two options:
+  - **Skip these contacts** (default) — filters them out of the import
+  - **Import anyway** — proceeds with all rows
+- Add an "Autopilot" toggle (persisted in localStorage as `autopilot_skip_dnc`) — when on, automatically skip without prompting and show a toast `"Skipped N unsubscribed contacts"`.
+
+### 5. Files touched
+- `supabase/functions/send-cold-email/index.ts` — footer
+- `supabase/functions/handle-email-unsubscribe/index.ts` — DNC insert
+- `supabase/functions/run-sequences/index.ts` — cancel enrollments on unsubscribe
+- `src/components/FileImportDialog.tsx` — DNC pre-check + warning UI + autopilot toggle
+- `src/pages/Contacts.tsx` — pass user id / wire autopilot toggle if needed
+
+No DB schema changes — `do_not_contact`, `suppressed_emails`, and `email_unsubscribe_tokens` already exist.
+
+### Validation
+- Send a test email → footer reads `Best regards, {sender name}, {BRAND}`.
+- Click unsubscribe link → confirm → email lands in both `suppressed_emails` and your account's `do_not_contact`.
+- Verify a contact mid-sequence stops receiving further emails after unsubscribing.
+- Re-import a CSV containing the unsubscribed email → warning dialog appears; with autopilot on, it's silently skipped.
+
