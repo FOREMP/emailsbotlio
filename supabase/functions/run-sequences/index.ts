@@ -227,33 +227,73 @@ Deno.serve(async (req) => {
         const [hh, mm] = tod.split(':').map((x: string) => Number(x))
         const allowedDays: string[] = Array.isArray(cfg.days) ? cfg.days : []
         const dayMap = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
-        const now = new Date()
-        // Find next valid datetime at hh:mm UTC, on an allowed day (today if allowed and not yet past)
-        let candidate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hh || 0, mm || 0, 0, 0))
-        if (candidate.getTime() <= now.getTime()) candidate = new Date(candidate.getTime() + 86_400_000)
-        for (let i = 0; i < 8; i++) {
-          const dayName = dayMap[candidate.getUTCDay()]
-          if (allowedDays.length === 0 || allowedDays.includes(dayName)) break
-          candidate = new Date(candidate.getTime() + 86_400_000)
+        const TZ = 'Europe/Stockholm'
+
+        // Get current time as Stockholm wall-clock components
+        const fmt = new Intl.DateTimeFormat('en-US', {
+          timeZone: TZ, hour12: false,
+          year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', second: '2-digit', weekday: 'short',
+        })
+        const parts = Object.fromEntries(fmt.formatToParts(new Date()).map((p) => [p.type, p.value])) as any
+
+        // Build a UTC instant for a given Stockholm wall-clock date+time (handles DST via offset diff)
+        const stockholmWallToUTC = (y: number, mo: number, d: number, h: number, mi: number): Date => {
+          // Initial guess: treat the wall-clock as if it were UTC
+          const guess = new Date(Date.UTC(y, mo - 1, d, h, mi, 0))
+          // What Stockholm thinks the guess instant is
+          const sParts = Object.fromEntries(
+            new Intl.DateTimeFormat('en-US', {
+              timeZone: TZ, hour12: false,
+              year: 'numeric', month: '2-digit', day: '2-digit',
+              hour: '2-digit', minute: '2-digit', second: '2-digit',
+            }).formatToParts(guess).map((p) => [p.type, p.value])
+          ) as any
+          const asStockholm = Date.UTC(
+            Number(sParts.year), Number(sParts.month) - 1, Number(sParts.day),
+            Number(sParts.hour), Number(sParts.minute), Number(sParts.second)
+          )
+          const offsetMs = asStockholm - guess.getTime() // Stockholm is ahead of UTC
+          return new Date(guess.getTime() - offsetMs)
         }
-        // If we're already at/after today's hh:mm and today is allowed, fire NOW (advance immediately)
-        const todayName = dayMap[now.getUTCDay()]
-        const todaySlot = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hh || 0, mm || 0, 0, 0))
+
+        const todayY = Number(parts.year), todayMo = Number(parts.month), todayD = Number(parts.day)
+        const nowStockholmMins = Number(parts.hour) * 60 + Number(parts.minute)
+        const slotMins = (hh || 0) * 60 + (mm || 0)
+        const todayName = parts.weekday as string
+
+        // Candidate: today's slot in Stockholm
+        let candidate = stockholmWallToUTC(todayY, todayMo, todayD, hh || 0, mm || 0)
+        let candidateDayName = todayName
+        if (nowStockholmMins >= slotMins) {
+          // Move to tomorrow's slot
+          const tmr = new Date(Date.UTC(todayY, todayMo - 1, todayD + 1))
+          candidate = stockholmWallToUTC(tmr.getUTCFullYear(), tmr.getUTCMonth() + 1, tmr.getUTCDate(), hh || 0, mm || 0)
+          candidateDayName = dayMap[tmr.getUTCDay()]
+        }
+        // Walk forward until allowed day
+        for (let i = 0; i < 8; i++) {
+          if (allowedDays.length === 0 || allowedDays.includes(candidateDayName)) break
+          const nextDay = new Date(candidate.getTime() + 86_400_000)
+          candidate = stockholmWallToUTC(nextDay.getUTCFullYear(), nextDay.getUTCMonth() + 1, nextDay.getUTCDate(), hh || 0, mm || 0)
+          candidateDayName = dayMap[nextDay.getUTCDay()]
+        }
+
         const dayAllowedToday = allowedDays.length === 0 || allowedDays.includes(todayName)
-        if (dayAllowedToday && now.getTime() >= todaySlot.getTime()) {
+        if (dayAllowedToday && nowStockholmMins >= slotMins) {
           await supabase.from('enrollments').update({
             current_node_id: next.target_node_id,
             next_send_at: nowIso,
           }).eq('id', enr.id)
           advanced++
-          console.log(`[enr ${enr.id}] schedule passed (today ${tod}) → advance`)
+          console.log(`[enr ${enr.id}] schedule passed (today ${tod} Stockholm) → advance`)
           continue
         }
         await supabase.from('enrollments').update({
-          current_node_id: currentNode.id, // stay on schedule node
+          current_node_id: currentNode.id,
           next_send_at: candidate.toISOString(),
         }).eq('id', enr.id)
-        console.log(`[enr ${enr.id}] schedule → wait until ${candidate.toISOString()}`)
+        console.log(`[enr ${enr.id}] schedule → wait until ${candidate.toISOString()} (${tod} Stockholm)`)
         continue
       }
 
