@@ -9,7 +9,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Trash2, Mail, Send, Sparkles } from "lucide-react";
+import { Plus, Trash2, Mail, Send, Sparkles, Flame } from "lucide-react";
 import { toast } from "sonner";
 
 interface Sender {
@@ -18,6 +18,10 @@ interface Sender {
   from_name: string;
   reply_to: string | null;
   is_active: boolean;
+  daily_limit: number;
+  warmup_enabled: boolean;
+  warmup_started_at: string | null;
+  warmup_target: number;
 }
 
 interface SendingDomain {
