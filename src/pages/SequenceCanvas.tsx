@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -21,7 +21,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, LogOut, Send, Loader2, CheckCircle2, Users } from "lucide-react";
+import { ArrowLeft, LogOut, Send, Loader2, CheckCircle2 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { NodePalette } from "@/components/sequence-canvas/NodePalette";
@@ -61,10 +61,9 @@ const defaultConfig = (type: string): Record<string, any> => {
 const Inner = () => {
   const { id } = useParams();
   const { user, signOut } = useAuth();
-  const navigate = useNavigate();
   const qc = useQueryClient();
-  const wrapperRef = useRef<HTMLDivElement>(null);
   const { screenToFlowPosition } = useReactFlow();
+  const reactFlow = useReactFlow();
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -72,8 +71,27 @@ const Inner = () => {
   const [name, setName] = useState("");
   const [status, setStatus] = useState("draft");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+
   const saveTimer = useRef<number | null>(null);
-  const initialLoad = useRef(true);
+  const seeding = useRef(false);
+  const dirty = useRef(false);
+  const hasFitView = useRef(false);
+  const nodesRef = useRef<Node[]>([]);
+  const edgesRef = useRef<Edge[]>([]);
+
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+
+  useEffect(() => {
+    edgesRef.current = edges;
+  }, [edges]);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    };
+  }, []);
 
   const { data: sequence } = useQuery({
     queryKey: ["sequence", id],
@@ -100,40 +118,38 @@ const Inner = () => {
     },
   });
 
-  // Load from DB into RF state once
   useEffect(() => {
     if (!sequence) return;
     setName(sequence.name);
     setStatus(sequence.status);
   }, [sequence]);
 
-  const seeding = useRef(false);
-  const dirty = useRef(false);
-  const hasFitView = useRef(false);
-  const reactFlow = useReactFlow();
-
-  // Seed defaults exactly once per sequence (tracked via sequences.seeded)
   useEffect(() => {
     if (!sequence || !id || !user) return;
     if ((sequence as any).seeded) return;
     if (dbNodes.length > 0) return;
     if (seeding.current) return;
+
     seeding.current = true;
     (async () => {
       const triggerCfg = sequence.contact_list_id ? { contact_list_id: sequence.contact_list_id } : {};
       const seedNodes = [
-        { node_type: "trigger",     position_x: 250, position_y: 40,  config: triggerCfg },
-        { node_type: "send_email",  position_x: 250, position_y: 180, config: { mode: "ai", sender_strategy: "all", prompt: "Write a 3-sentence cold email to {{first_name}} introducing our service. Personal, specific, no fluff. Ask for a 15-min call.", subject_hint: "Quick question about {{company}}", send_delay_seconds: 60, send_jitter_seconds: 30 } },
-        { node_type: "wait",        position_x: 250, position_y: 340, config: { duration: 3, unit: "days" } },
-        { node_type: "send_email",  position_x: 250, position_y: 480, config: { mode: "ai", sender_strategy: "all", prompt: "Write a short, friendly follow-up email to {{first_name}}. Reference the previous email gently, restate the value in one sentence, and ask if next week works for a quick chat.", subject_hint: "Following up", send_delay_seconds: 60, send_jitter_seconds: 30 } },
-        { node_type: "end",         position_x: 250, position_y: 640, config: {} },
+        { node_type: "trigger", position_x: 250, position_y: 40, config: triggerCfg },
+        { node_type: "send_email", position_x: 250, position_y: 180, config: { mode: "ai", sender_strategy: "all", prompt: "Write a 3-sentence cold email to {{first_name}} introducing our service. Personal, specific, no fluff. Ask for a 15-min call.", subject_hint: "Quick question about {{company}}", send_delay_seconds: 60, send_jitter_seconds: 30 } },
+        { node_type: "wait", position_x: 250, position_y: 340, config: { duration: 3, unit: "days" } },
+        { node_type: "send_email", position_x: 250, position_y: 480, config: { mode: "ai", sender_strategy: "all", prompt: "Write a short, friendly follow-up email to {{first_name}}. Reference the previous email gently, restate the value in one sentence, and ask if next week works for a quick chat.", subject_hint: "Following up", send_delay_seconds: 60, send_jitter_seconds: 30 } },
+        { node_type: "end", position_x: 250, position_y: 640, config: {} },
       ].map((n) => ({ ...n, sequence_id: id, user_id: user.id }));
 
       const { data: insertedNodes, error: nodeErr } = await supabase
         .from("sequence_nodes")
         .insert(seedNodes)
         .select();
-      if (nodeErr || !insertedNodes) { seeding.current = false; return; }
+
+      if (nodeErr || !insertedNodes) {
+        seeding.current = false;
+        return;
+      }
 
       const edgePayload = [];
       for (let i = 0; i < insertedNodes.length - 1; i++) {
@@ -145,9 +161,11 @@ const Inner = () => {
           source_handle: "default",
         });
       }
+
       if (edgePayload.length > 0) {
         await supabase.from("sequence_edges").insert(edgePayload);
       }
+
       await supabase.from("sequences").update({ seeded: true } as any).eq("id", id);
       qc.invalidateQueries({ queryKey: ["sequence", id] });
       qc.invalidateQueries({ queryKey: ["seq-nodes", id] });
@@ -155,104 +173,134 @@ const Inner = () => {
     })();
   }, [dbNodes, sequence, id, user, qc]);
 
-  // Reconcile DB → local whenever DB changes AND we're not dirty (unsaved local edits)
   useEffect(() => {
     if (dirty.current) return;
-    if (dbNodes.length === 0) return;
-    setNodes(
-      dbNodes.map((n: any) => ({
-        id: n.id,
-        type: n.node_type,
-        position: { x: n.position_x, y: n.position_y },
-        data: { config: n.config, node_type: n.node_type },
-      })),
-    );
-    setEdges(
-      dbEdges.map((e: any) => ({
-        id: e.id,
-        source: e.source_node_id,
-        target: e.target_node_id,
-        sourceHandle: e.source_handle === "default" ? null : e.source_handle,
-        animated: sequence?.status === "active",
-      })),
-    );
+
+    const nextNodes = dbNodes.map((n: any) => ({
+      id: n.id,
+      type: n.node_type,
+      position: { x: n.position_x, y: n.position_y },
+      data: { config: n.config, node_type: n.node_type },
+    }));
+
+    const nextEdges = dbEdges.map((e: any) => ({
+      id: e.id,
+      source: e.source_node_id,
+      target: e.target_node_id,
+      sourceHandle: e.source_handle === "default" ? null : e.source_handle,
+      animated: sequence?.status === "active",
+    }));
+
+    nodesRef.current = nextNodes;
+    edgesRef.current = nextEdges;
+    setNodes(nextNodes);
+    setEdges(nextEdges);
   }, [dbNodes, dbEdges, sequence?.status]);
 
-  // Fit view exactly once when nodes first appear
   useEffect(() => {
     if (hasFitView.current) return;
     if (nodes.length === 0) return;
     hasFitView.current = true;
-    // Defer to next frame so RF measures nodes first
     requestAnimationFrame(() => reactFlow.fitView({ padding: 0.2, duration: 200 }));
   }, [nodes.length, reactFlow]);
 
-  const triggerSave = useCallback(() => {
+  const triggerSave = useCallback((nextNodes?: Node[], nextEdges?: Edge[]) => {
+    if (!id || !user) return;
+
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     dirty.current = true;
     setSaveState("saving");
+
     saveTimer.current = window.setTimeout(async () => {
+      const nodesToSave = nextNodes ?? nodesRef.current;
+      const edgesToSave = nextEdges ?? edgesRef.current;
+
       try {
-        const nodePayload = nodes.map((n) => ({
+        const nodePayload = nodesToSave.map((n) => ({
           id: n.id,
-          sequence_id: id!,
-          user_id: user!.id,
+          sequence_id: id,
+          user_id: user.id,
           node_type: (n.data as any).node_type ?? n.type!,
           position_x: n.position.x,
           position_y: n.position.y,
           config: (n.data as any).config ?? {},
         }));
+
         if (nodePayload.length > 0) {
-          await supabase.from("sequence_nodes").upsert(nodePayload, { onConflict: "id" });
+          const { error } = await supabase.from("sequence_nodes").upsert(nodePayload, { onConflict: "id" });
+          if (error) throw error;
         }
-        await supabase.from("sequence_edges").delete().eq("sequence_id", id!);
-        const edgePayload = edges.map((e) => ({
-          sequence_id: id!,
-          user_id: user!.id,
+
+        const { error: deleteEdgesError } = await supabase.from("sequence_edges").delete().eq("sequence_id", id);
+        if (deleteEdgesError) throw deleteEdgesError;
+
+        const edgePayload = edgesToSave.map((e) => ({
+          sequence_id: id,
+          user_id: user.id,
           source_node_id: e.source,
           target_node_id: e.target,
           source_handle: e.sourceHandle ?? "default",
         }));
+
         if (edgePayload.length > 0) {
-          await supabase.from("sequence_edges").insert(edgePayload);
+          const { error } = await supabase.from("sequence_edges").insert(edgePayload);
+          if (error) throw error;
         }
+
         setSaveState("saved");
         dirty.current = false;
-        setTimeout(() => setSaveState("idle"), 1200);
+        window.setTimeout(() => setSaveState("idle"), 1200);
       } catch (e: any) {
         setSaveState("idle");
         dirty.current = false;
         toast({ title: "Save failed", description: e.message, variant: "destructive" });
       }
     }, 1000);
-  }, [nodes, edges, id, user]);
+  }, [id, user]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
-    setNodes((nds) => applyNodeChanges(changes, nds));
-    if (changes.some((c) => c.type === "position" || c.type === "remove")) triggerSave();
+    setNodes((current) => {
+      const next = applyNodeChanges(changes, current);
+      nodesRef.current = next;
+      if (changes.some((c) => c.type === "position" || c.type === "remove")) {
+        triggerSave(next, edgesRef.current);
+      }
+      return next;
+    });
   }, [triggerSave]);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
-    setEdges((eds) => applyEdgeChanges(changes, eds));
-    if (changes.some((c) => c.type === "remove")) triggerSave();
+    setEdges((current) => {
+      const next = applyEdgeChanges(changes, current);
+      edgesRef.current = next;
+      if (changes.some((c) => c.type === "remove")) {
+        triggerSave(nodesRef.current, next);
+      }
+      return next;
+    });
   }, [triggerSave]);
 
   const onConnect = useCallback((conn: Connection) => {
-    setEdges((eds) => addEdge({ ...conn, animated: status === "active" }, eds));
-    triggerSave();
+    setEdges((current) => {
+      const next = addEdge({ ...conn, animated: status === "active" }, current);
+      edgesRef.current = next;
+      triggerSave(nodesRef.current, next);
+      return next;
+    });
   }, [triggerSave, status]);
 
   const onDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault();
     const type = e.dataTransfer.getData("application/reactflow");
-    if (!type) return;
+    if (!type || !id || !user) return;
+
     const position = screenToFlowPosition({ x: e.clientX, y: e.clientY });
     const config = defaultConfig(type);
     const { data, error } = await supabase
       .from("sequence_nodes")
       .insert({
-        sequence_id: id!,
-        user_id: user!.id,
+        sequence_id: id,
+        user_id: user.id,
         node_type: type,
         position_x: position.x,
         position_y: position.y,
@@ -260,19 +308,25 @@ const Inner = () => {
       })
       .select()
       .single();
+
     if (error) {
       toast({ title: "Could not add node", description: error.message, variant: "destructive" });
       return;
     }
-    setNodes((nds) => [
-      ...nds,
-      {
-        id: data.id,
-        type,
-        position,
-        data: { config, node_type: type },
-      },
-    ]);
+
+    setNodes((current) => {
+      const next = [
+        ...current,
+        {
+          id: data.id,
+          type,
+          position,
+          data: { config, node_type: type },
+        },
+      ];
+      nodesRef.current = next;
+      return next;
+    });
   }, [screenToFlowPosition, id, user]);
 
   const onDragOver = useCallback((e: React.DragEvent) => {
@@ -281,21 +335,35 @@ const Inner = () => {
   }, []);
 
   const updateNodeConfig = useCallback((nodeId: string, config: Record<string, any>) => {
-    setNodes((nds) => nds.map((n) => n.id === nodeId ? { ...n, data: { ...n.data, config } } : n));
-    // If trigger node config changes the contact_list_id, also update the sequence
-    const node = nodes.find((n) => n.id === nodeId);
+    const nextNodes = nodesRef.current.map((n) => n.id === nodeId ? { ...n, data: { ...n.data, config } } : n);
+    nodesRef.current = nextNodes;
+    setNodes(nextNodes);
+
+    const node = nextNodes.find((n) => n.id === nodeId);
     if (node?.type === "trigger" && config.contact_list_id) {
       supabase.from("sequences").update({ contact_list_id: config.contact_list_id }).eq("id", id!).then();
     }
-    triggerSave();
-  }, [nodes, id, triggerSave]);
+
+    triggerSave(nextNodes, edgesRef.current);
+  }, [id, triggerSave]);
 
   const deleteNode = useCallback(async (nodeId: string) => {
-    setNodes((nds) => nds.filter((n) => n.id !== nodeId));
-    setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
+    const nextNodes = nodesRef.current.filter((n) => n.id !== nodeId);
+    const nextEdges = edgesRef.current.filter((e) => e.source !== nodeId && e.target !== nodeId);
+
+    nodesRef.current = nextNodes;
+    edgesRef.current = nextEdges;
+    setNodes(nextNodes);
+    setEdges(nextEdges);
     setSelectedId(null);
-    await supabase.from("sequence_nodes").delete().eq("id", nodeId);
-    triggerSave();
+
+    const { error } = await supabase.from("sequence_nodes").delete().eq("id", nodeId);
+    if (error) {
+      toast({ title: "Delete failed", description: error.message, variant: "destructive" });
+      return;
+    }
+
+    triggerSave(nextNodes, nextEdges);
   }, [triggerSave]);
 
   const renameSequence = async (n: string) => {
@@ -306,7 +374,11 @@ const Inner = () => {
   const toggleStatus = async () => {
     const next = status === "active" ? "draft" : "active";
     setStatus(next);
-    setEdges((eds) => eds.map((e) => ({ ...e, animated: next === "active" })));
+    setEdges((current) => {
+      const updated = current.map((e) => ({ ...e, animated: next === "active" }));
+      edgesRef.current = updated;
+      return updated;
+    });
     await supabase.from("sequences").update({ status: next }).eq("id", id!);
   };
 
@@ -315,7 +387,11 @@ const Inner = () => {
       if (status !== "active") {
         await supabase.from("sequences").update({ status: "active" }).eq("id", id!);
         setStatus("active");
-        setEdges((eds) => eds.map((e) => ({ ...e, animated: true })));
+        setEdges((current) => {
+          const updated = current.map((e) => ({ ...e, animated: true }));
+          edgesRef.current = updated;
+          return updated;
+        });
       }
       const { data, error } = await supabase.functions.invoke("enroll-contacts", { body: { sequence_id: id } });
       if (error) throw error;
@@ -377,7 +453,7 @@ const Inner = () => {
 
       <div className="flex-1 flex overflow-hidden">
         <NodePalette />
-        <div className="flex-1 relative" ref={wrapperRef} onDrop={onDrop} onDragOver={onDragOver}>
+        <div className="flex-1 relative" onDrop={onDrop} onDragOver={onDragOver}>
           <ReactFlow
             nodes={nodes}
             edges={edges}
