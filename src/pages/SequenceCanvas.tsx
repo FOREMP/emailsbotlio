@@ -32,6 +32,7 @@ import { WaitNode } from "@/components/sequence-canvas/nodes/WaitNode";
 import { LogActivityNode } from "@/components/sequence-canvas/nodes/LogActivityNode";
 import { ConditionNode } from "@/components/sequence-canvas/nodes/ConditionNode";
 import { EndNode } from "@/components/sequence-canvas/nodes/EndNode";
+import { ThrottleNode } from "@/components/sequence-canvas/nodes/ThrottleNode";
 
 const nodeTypes = {
   trigger: TriggerNode,
@@ -40,6 +41,7 @@ const nodeTypes = {
   log_activity: LogActivityNode,
   condition: ConditionNode,
   end: EndNode,
+  throttle: ThrottleNode,
 };
 
 const defaultConfig = (type: string): Record<string, any> => {
@@ -48,6 +50,7 @@ const defaultConfig = (type: string): Record<string, any> => {
     case "wait": return { duration: 1, unit: "days" };
     case "log_activity": return { activity_type: "contacted", note: "" };
     case "condition": return { condition_type: "opened", wait_window_hours: 24 };
+    case "throttle": return { max_per_day: 50 };
     default: return {};
   }
 };
