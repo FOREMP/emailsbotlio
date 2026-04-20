@@ -130,8 +130,8 @@ Deno.serve(async (req) => {
   }
 
   // Append branded footer: Best regards, {sender name}, {BRAND}
-  const brand = deriveBrand(domain, (domainRow as any).brand)
-  finalBody = appendFooter(finalBody, chosenSender.from_name, brand)
+  const footerBrand = deriveBrand(domain, (domainRow as any).brand)
+  finalBody = appendFooter(finalBody, chosenSender.from_name, footerBrand)
 
   const messageId = crypto.randomUUID()
 
