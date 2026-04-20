@@ -340,12 +340,22 @@ Deno.serve(async (req) => {
           candidate = stockholmWallToUTC(tmr.getUTCFullYear(), tmr.getUTCMonth() + 1, tmr.getUTCDate(), hh || 0, mm || 0)
           candidateDayName = dayMap[tmr.getUTCDay()]
         }
-        // Walk forward until allowed day
-        for (let i = 0; i < 8; i++) {
-          if (allowedDays.length === 0 || allowedDays.includes(candidateDayName)) break
+        // Walk forward until allowed day (hard cap at 8 days)
+        let foundAllowed = allowedDays.length === 0 || allowedDays.includes(candidateDayName)
+        for (let i = 0; i < 8 && !foundAllowed; i++) {
           const nextDay = new Date(candidate.getTime() + 86_400_000)
           candidate = stockholmWallToUTC(nextDay.getUTCFullYear(), nextDay.getUTCMonth() + 1, nextDay.getUTCDate(), hh || 0, mm || 0)
           candidateDayName = dayMap[nextDay.getUTCDay()]
+          if (allowedDays.length === 0 || allowedDays.includes(candidateDayName)) { foundAllowed = true; break }
+        }
+        if (!foundAllowed) {
+          console.warn(`[enr ${enr.id}] schedule: no allowed day within 8 days → failed`)
+          await supabase.from('enrollments').update({
+            status: 'failed',
+            last_error: `schedule node has no valid day within 8 days (allowed: ${allowedDays.join(',') || 'none'})`,
+            error_at: nowIso,
+          }).eq('id', enr.id)
+          failed++; continue
         }
 
         const dayAllowedToday = allowedDays.length === 0 || allowedDays.includes(todayName)
