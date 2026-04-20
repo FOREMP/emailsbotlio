@@ -13,8 +13,132 @@ function jsonResponse(data: Record<string, unknown>, status = 200): Response {
   })
 }
 
+async function ensureGlobalSuppression(
+  supabase: ReturnType<typeof createClient>,
+  email: string,
+) {
+  const normalizedEmail = email.toLowerCase()
+
+  const { data: existing, error: lookupError } = await supabase
+    .from('suppressed_emails')
+    .select('id')
+    .eq('email', normalizedEmail)
+    .maybeSingle()
+
+  if (lookupError) {
+    throw lookupError
+  }
+
+  if (!existing) {
+    const { error: insertError } = await supabase.from('suppressed_emails').insert({
+      email: normalizedEmail,
+      reason: 'unsubscribe',
+    })
+
+    if (insertError) {
+      throw insertError
+    }
+  }
+
+  return normalizedEmail
+}
+
+async function syncDoNotContactAndEnrollments(
+  supabase: ReturnType<typeof createClient>,
+  email: string,
+) {
+  const normalizedEmail = email.toLowerCase()
+
+  const { data: senders, error: sendersError } = await supabase
+    .from('sent_emails')
+    .select('user_id')
+    .ilike('recipient_email', email)
+
+  if (sendersError) {
+    throw sendersError
+  }
+
+  const userIds = Array.from(
+    new Set((senders ?? []).map((row: any) => row.user_id).filter(Boolean)),
+  )
+
+  for (const uid of userIds) {
+    const { error: dncError } = await supabase.from('do_not_contact').upsert(
+      {
+        user_id: uid,
+        email: normalizedEmail,
+        reason: 'unsubscribed_via_email',
+      },
+      { onConflict: 'user_id,email' },
+    )
+
+    if (dncError) {
+      const { data: existingDnc, error: existingDncError } = await supabase
+        .from('do_not_contact')
+        .select('id')
+        .eq('user_id', uid)
+        .ilike('email', normalizedEmail)
+        .maybeSingle()
+
+      if (existingDncError) {
+        throw existingDncError
+      }
+
+      if (!existingDnc) {
+        const { error: dncInsertError } = await supabase
+          .from('do_not_contact')
+          .insert({
+            user_id: uid,
+            email: normalizedEmail,
+            reason: 'unsubscribed_via_email',
+          })
+
+        if (dncInsertError) {
+          throw dncInsertError
+        }
+      }
+    }
+
+    const { data: contactRows, error: contactsError } = await supabase
+      .from('contacts')
+      .select('id')
+      .eq('user_id', uid)
+      .ilike('email', email)
+
+    if (contactsError) {
+      throw contactsError
+    }
+
+    const contactIds = (contactRows ?? []).map((contact: any) => contact.id)
+
+    if (contactIds.length > 0) {
+      const { error: enrollmentsError } = await supabase
+        .from('enrollments')
+        .update({ status: 'unsubscribed' })
+        .eq('user_id', uid)
+        .in('contact_id', contactIds)
+        .eq('status', 'active')
+
+      if (enrollmentsError) {
+        throw enrollmentsError
+      }
+    }
+  }
+
+  return userIds.length
+}
+
+async function syncUnsubscribeState(
+  supabase: ReturnType<typeof createClient>,
+  email: string,
+) {
+  const normalizedEmail = await ensureGlobalSuppression(supabase, email)
+  const usersAffected = await syncDoNotContactAndEnrollments(supabase, email)
+
+  return { normalizedEmail, usersAffected }
+}
+
 Deno.serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
   }
@@ -30,20 +154,14 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: 'Server configuration error' }, 500)
   }
 
-  // Extract token from query params (GET) or body (POST)
   const url = new URL(req.url)
   let token: string | null = url.searchParams.get('token')
 
   if (req.method === 'POST') {
-    // Detect RFC 8058 one-click unsubscribe: POST with form-encoded body
-    // containing "List-Unsubscribe=One-Click". Email clients (Gmail, Apple Mail,
-    // etc.) send this when the user clicks "Unsubscribe" in the mail UI.
     const contentType = req.headers.get('content-type') ?? ''
     if (contentType.includes('application/x-www-form-urlencoded')) {
       const formText = await req.text()
       const params = new URLSearchParams(formText)
-      // For one-click, token comes from query param (already set above).
-      // Otherwise, token may be in the form body.
       if (!params.get('List-Unsubscribe')) {
         const formToken = params.get('token')
         if (formToken) {
@@ -51,7 +169,6 @@ Deno.serve(async (req) => {
         }
       }
     } else {
-      // JSON body (from the app's unsubscribe page)
       try {
         const body = await req.json()
         if (body.token) {
@@ -69,7 +186,6 @@ Deno.serve(async (req) => {
 
   const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
-  // Look up the token
   const { data: tokenRecord, error: lookupError } = await supabase
     .from('email_unsubscribe_tokens')
     .select('*')
@@ -81,16 +197,30 @@ Deno.serve(async (req) => {
   }
 
   if (tokenRecord.used_at) {
+    try {
+      const { normalizedEmail, usersAffected } = await syncUnsubscribeState(
+        supabase,
+        tokenRecord.email,
+      )
+      console.log('Email already unsubscribed', {
+        email: normalizedEmail,
+        users: usersAffected,
+      })
+    } catch (error) {
+      console.error('Failed to repair existing unsubscribe state', {
+        error,
+        email: tokenRecord.email,
+      })
+      return jsonResponse({ error: 'Failed to process unsubscribe' }, 500)
+    }
+
     return jsonResponse({ valid: false, reason: 'already_unsubscribed' })
   }
 
-  // GET: Validate token (the app's unsubscribe page calls this on load)
   if (req.method === 'GET') {
     return jsonResponse({ valid: true })
   }
 
-  // POST: Process the unsubscribe
-  // Atomic check-and-update to avoid TOCTOU race
   const { data: updated, error: updateError } = await supabase
     .from('email_unsubscribe_tokens')
     .update({ used_at: new Date().toISOString() })
@@ -105,78 +235,43 @@ Deno.serve(async (req) => {
   }
 
   if (!updated) {
+    try {
+      const { normalizedEmail, usersAffected } = await syncUnsubscribeState(
+        supabase,
+        tokenRecord.email,
+      )
+      console.log('Email already unsubscribed after race', {
+        email: normalizedEmail,
+        users: usersAffected,
+      })
+    } catch (error) {
+      console.error('Failed to repair raced unsubscribe state', {
+        error,
+        email: tokenRecord.email,
+      })
+      return jsonResponse({ error: 'Failed to process unsubscribe' }, 500)
+    }
+
     return jsonResponse({ success: false, reason: 'already_unsubscribed' })
   }
 
-  // Add email to suppressed list (upsert to handle duplicates)
-  const { error: suppressError } = await supabase
-    .from('suppressed_emails')
-    .upsert(
-      { email: tokenRecord.email.toLowerCase(), reason: 'unsubscribe' },
-      { onConflict: 'email' },
+  try {
+    const { normalizedEmail, usersAffected } = await syncUnsubscribeState(
+      supabase,
+      tokenRecord.email,
     )
 
-  if (suppressError) {
-    console.error('Failed to suppress email', {
-      error: suppressError,
+    console.log('Email unsubscribed', {
+      email: normalizedEmail,
+      users: usersAffected,
+    })
+
+    return jsonResponse({ success: true })
+  } catch (error) {
+    console.error('Failed to finalize unsubscribe state', {
+      error,
       email: tokenRecord.email,
     })
     return jsonResponse({ error: 'Failed to process unsubscribe' }, 500)
   }
-
-  // Add email to per-user do_not_contact list for every user that has sent
-  // an email to this address. Also cancel any active enrollments so in-flight
-  // sequences stop immediately.
-  const recipientLower = tokenRecord.email.toLowerCase()
-  const { data: senders } = await supabase
-    .from('sent_emails')
-    .select('user_id')
-    .eq('recipient_email', tokenRecord.email)
-
-  const userIds = Array.from(
-    new Set((senders ?? []).map((r: any) => r.user_id).filter(Boolean)),
-  )
-
-  for (const uid of userIds) {
-    const { error: dncError } = await supabase
-      .from('do_not_contact')
-      .upsert(
-        { user_id: uid, email: recipientLower, reason: 'unsubscribed_via_email' },
-        { onConflict: 'user_id,email' },
-      )
-    if (dncError) {
-      // Fallback: try insert (in case no unique constraint exists)
-      const { data: existing } = await supabase
-        .from('do_not_contact')
-        .select('id')
-        .eq('user_id', uid)
-        .eq('email', recipientLower)
-        .maybeSingle()
-      if (!existing) {
-        await supabase
-          .from('do_not_contact')
-          .insert({ user_id: uid, email: recipientLower, reason: 'unsubscribed_via_email' })
-      }
-    }
-
-    // Cancel active enrollments for this user/contact
-    const { data: contactRows } = await supabase
-      .from('contacts')
-      .select('id')
-      .eq('user_id', uid)
-      .ilike('email', tokenRecord.email)
-    const contactIds = (contactRows ?? []).map((c: any) => c.id)
-    if (contactIds.length > 0) {
-      await supabase
-        .from('enrollments')
-        .update({ status: 'unsubscribed' })
-        .eq('user_id', uid)
-        .in('contact_id', contactIds)
-        .eq('status', 'active')
-    }
-  }
-
-  console.log('Email unsubscribed', { email: tokenRecord.email, users: userIds.length })
-
-  return jsonResponse({ success: true })
 })
