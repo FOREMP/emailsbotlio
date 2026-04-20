@@ -64,17 +64,37 @@ const Sequences = () => {
     },
   });
 
-  const { data: enrollCounts = {} } = useQuery({
-    queryKey: ["sequence-enroll-counts", sequences.map((s) => s.id)],
+  const { data: enrollStats = {} } = useQuery({
+    queryKey: ["sequence-enroll-stats", sequences.map((s) => s.id)],
     enabled: sequences.length > 0,
     queryFn: async () => {
-      const { data } = await supabase.from("enrollments").select("sequence_id");
-      const counts: Record<string, number> = {};
-      (data ?? []).forEach((r) => {
-        counts[r.sequence_id] = (counts[r.sequence_id] ?? 0) + 1;
+      const { data } = await supabase
+        .from("enrollments")
+        .select("sequence_id, status, last_error");
+      const stats: Record<string, { total: number; active: number; completed: number; failed: number; unsubscribed: number; lastError?: string | null }> = {};
+      (data ?? []).forEach((r: any) => {
+        const s = stats[r.sequence_id] ??= { total: 0, active: 0, completed: 0, failed: 0, unsubscribed: 0 };
+        s.total++;
+        if (r.status === "active") s.active++;
+        else if (r.status === "completed") s.completed++;
+        else if (r.status === "failed") { s.failed++; if (r.last_error && !s.lastError) s.lastError = r.last_error; }
+        else if (r.status === "unsubscribed") s.unsubscribed++;
       });
-      return counts;
+      return stats;
     },
+  });
+
+  const runNow = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await supabase.functions.invoke("run-sequences", { body: {} });
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (data: any) => {
+      toast({ title: "Worker ran", description: `processed=${data?.processed ?? 0} sent=${data?.sent ?? 0} advanced=${data?.advanced ?? 0} failed=${data?.failed ?? 0}` });
+      qc.invalidateQueries({ queryKey: ["sequence-enroll-stats"] });
+    },
+    onError: (e: Error) => toast({ title: "Run failed", description: e.message, variant: "destructive" }),
   });
 
   const create = useMutation({
