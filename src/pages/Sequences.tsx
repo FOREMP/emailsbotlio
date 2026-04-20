@@ -84,6 +84,16 @@ const Sequences = () => {
     },
   });
 
+  const { data: domains = [] } = useQuery({
+    queryKey: ["sending_domains"],
+    queryFn: async () => {
+      const { data } = await supabase.from("sending_domains").select("domain, is_verified, is_active");
+      return data ?? [];
+    },
+  });
+  const unverified = (domains as any[]).filter((d) => d.is_active && !d.is_verified);
+  const verified = (domains as any[]).filter((d) => d.is_active && d.is_verified);
+
   const runNow = useMutation({
     mutationFn: async () => {
       const { data, error } = await supabase.functions.invoke("run-sequences", { body: {} });
@@ -160,6 +170,20 @@ const Sequences = () => {
             <Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" /> New Sequence</Button>
           </div>
         </div>
+
+        {unverified.length > 0 && (
+          <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 p-4 flex items-start gap-3">
+            <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+            <div className="text-sm">
+              <p className="font-medium text-destructive">
+                {unverified.length} sending domain{unverified.length === 1 ? "" : "s"} not verified — emails from {unverified.map((d: any) => d.domain).join(", ")} will fail.
+              </p>
+              <p className="text-muted-foreground mt-1">
+                Only {verified.map((d: any) => d.domain).join(", ") || "(none)"} can currently send. Verify the others under Cloud → Emails → Manage Domains.
+              </p>
+            </div>
+          </div>
+        )}
 
         <div className="rounded-xl border border-border bg-card shadow-card overflow-hidden">
           {isLoading ? (
