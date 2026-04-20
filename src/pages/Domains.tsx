@@ -78,7 +78,7 @@ const Domains = () => {
                     </TableCell>
                     <TableCell>
                       {d.is_verified ? (
-                        <Badge className="bg-green-600 hover:bg-green-600/90 gap-1">
+                        <Badge className="gap-1">
                           <CheckCircle2 className="h-3 w-3" /> Verified — can send
                         </Badge>
                       ) : (

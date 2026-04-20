@@ -12,6 +12,7 @@ import Dashboard from "./pages/Dashboard.tsx";
 import Senders from "./pages/Senders.tsx";
 import Contacts from "./pages/Contacts.tsx";
 import Files from "./pages/Files.tsx";
+import Domains from "./pages/Domains.tsx";
 import Sequences from "./pages/Sequences.tsx";
 import SequenceCanvas from "./pages/SequenceCanvas.tsx";
 import Auth from "./pages/Auth.tsx";
@@ -41,6 +42,7 @@ const App = () => (
             <Route path="/senders" element={protect(<Senders />)} />
             <Route path="/contacts" element={protect(<Contacts />)} />
             <Route path="/files" element={protect(<Files />)} />
+            <Route path="/domains" element={protect(<Domains />)} />
             <Route path="/sequences" element={protect(<Sequences />)} />
             <Route path="/sequences/:id" element={protect(<SequenceCanvas />, true)} />
             <Route path="/unsubscribe" element={<Unsubscribe />} />
