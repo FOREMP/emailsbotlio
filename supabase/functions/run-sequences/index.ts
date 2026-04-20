@@ -82,15 +82,32 @@ Deno.serve(async (req) => {
       }
 
       // Determine current node — prefer wired duplicates
+      const wiredTrigger = (nodes ?? []).filter((n: any) => n.node_type === 'trigger')
+        .find((n: any) => (edges ?? []).some((e: any) => e.source_node_id === n.id))
+        ?? (nodes ?? []).find((n: any) => n.node_type === 'trigger')
+
       let currentNode = enr.current_node_id
         ? findNodePreferWired(nodes ?? [], edges ?? [], enr.current_node_id)
-        : (nodes ?? []).filter((n: any) => n.node_type === 'trigger')
-            .find((n: any) => (edges ?? []).some((e: any) => e.source_node_id === n.id))
-          ?? (nodes ?? []).find((n: any) => n.node_type === 'trigger')
+        : wiredTrigger
+
+      // Recover from stale current_node_id by falling back to the trigger
+      if (!currentNode && wiredTrigger) {
+        console.warn(`[enr ${enr.id}] stale current_node_id ${enr.current_node_id} → recovering to trigger`)
+        currentNode = wiredTrigger
+        await supabase.from('enrollments').update({
+          current_node_id: wiredTrigger.id,
+          last_error: `recovered from missing node ${enr.current_node_id}`,
+          error_at: nowIso,
+        }).eq('id', enr.id)
+      }
 
       if (!currentNode) {
         console.warn(`[enr ${enr.id}] no current node found → failed`)
-        await supabase.from('enrollments').update({ status: 'failed' }).eq('id', enr.id)
+        await supabase.from('enrollments').update({
+          status: 'failed',
+          last_error: 'sequence has no trigger node',
+          error_at: nowIso,
+        }).eq('id', enr.id)
         failed++; continue
       }
 

@@ -59,16 +59,37 @@ Deno.serve(async (req) => {
       });
     }
 
+    // Load all nodes + edges for this sequence so we can resolve a REAL trigger
+    const [{ data: allNodes }, { data: allEdges }] = await Promise.all([
+      supabase.from("sequence_nodes").select("id, node_type, config").eq("sequence_id", sequenceId),
+      supabase.from("sequence_edges").select("source_node_id, target_node_id").eq("sequence_id", sequenceId),
+    ]);
+
+    const triggers = (allNodes ?? []).filter((n) => n.node_type === "trigger");
+    // Prefer a trigger that has an outgoing edge (the "real" wired one)
+    const trigger =
+      triggers.find((t) => (allEdges ?? []).some((e) => e.source_node_id === t.id)) ??
+      triggers[0] ?? null;
+
+    if (!trigger) {
+      return new Response(JSON.stringify({ error: "Sequence has no trigger node" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const triggerHasNext = (allEdges ?? []).some((e) => e.source_node_id === trigger.id);
+    if (!triggerHasNext) {
+      return new Response(JSON.stringify({ error: "Trigger node is not connected to any next step" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     // Resolve contact list — body override > sequence default > trigger node config
     let listId: string | null = body?.list_id ?? seq.contact_list_id ?? null;
     if (!listId) {
-      const { data: triggerNode } = await supabase
-        .from("sequence_nodes")
-        .select("config")
-        .eq("sequence_id", sequenceId)
-        .eq("node_type", "trigger")
-        .maybeSingle();
-      listId = (triggerNode?.config as any)?.contact_list_id ?? null;
+      listId = (trigger.config as any)?.contact_list_id ?? null;
     }
     if (!listId) {
       return new Response(JSON.stringify({ error: "Sequence has no contact list" }), {
@@ -76,15 +97,6 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-
-    // Find the trigger node so new enrollments start on the node AFTER trigger
-    const { data: triggerRow } = await supabase
-      .from("sequence_nodes")
-      .select("id")
-      .eq("sequence_id", sequenceId)
-      .eq("node_type", "trigger")
-      .maybeSingle();
-    const triggerNodeId: string | null = triggerRow?.id ?? null;
 
     // Load all contacts in list
     const { data: contacts, error: contactsErr } = await supabase
@@ -95,17 +107,20 @@ Deno.serve(async (req) => {
 
     if (contactsErr) throw contactsErr;
 
-    // Load DNC
-    const { data: dnc } = await supabase
-      .from("do_not_contact")
-      .select("email")
-      .eq("user_id", user.id);
-    const dncSet = new Set((dnc ?? []).map((d) => d.email?.toLowerCase()));
+    // Load DNC + global suppression
+    const [{ data: dnc }, { data: supp }] = await Promise.all([
+      supabase.from("do_not_contact").select("email").eq("user_id", user.id),
+      supabase.from("suppressed_emails").select("email"),
+    ]);
+    const dncSet = new Set([
+      ...((dnc ?? []).map((d) => d.email?.toLowerCase()).filter(Boolean) as string[]),
+      ...((supp ?? []).map((d: any) => d.email?.toLowerCase()).filter(Boolean) as string[]),
+    ]);
 
-    // Load existing enrollments
+    // Load existing enrollments (any status) for dedup
     const { data: existing } = await supabase
       .from("enrollments")
-      .select("contact_id")
+      .select("contact_id, status")
       .eq("user_id", user.id)
       .eq("sequence_id", sequenceId);
     const enrolledSet = new Set((existing ?? []).map((e) => e.contact_id));
@@ -125,7 +140,7 @@ Deno.serve(async (req) => {
         sequence_id: sequenceId,
         contact_id: c.id,
         current_step: 0,
-        current_node_id: triggerNodeId,
+        current_node_id: trigger.id, // always a real, currently-existing node
         status: "active",
         next_send_at: nowIso,
       });
@@ -133,7 +148,6 @@ Deno.serve(async (req) => {
 
     let enrolled = 0;
     if (toInsert.length > 0) {
-      // Use upsert with the unique index to be safe against races
       const { data: ins, error: insertErr } = await supabase
         .from("enrollments")
         .upsert(toInsert, { onConflict: "sequence_id,contact_id", ignoreDuplicates: true })
