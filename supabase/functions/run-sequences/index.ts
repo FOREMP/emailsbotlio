@@ -215,10 +215,9 @@ Deno.serve(async (req) => {
         // Fail fast if user has zero active senders (instead of silent indefinite defer)
         const { data: anyActive } = await supabase
           .from('senders')
-          .select('id')
+          .select('id, from_email')
           .eq('user_id', enr.user_id)
           .eq('is_active', true)
-          .limit(1)
         if (!anyActive || anyActive.length === 0) {
           console.warn(`[enr ${enr.id}] user has no active senders → failed`)
           await supabase.from('enrollments').update({
@@ -229,21 +228,50 @@ Deno.serve(async (req) => {
           failed++; continue
         }
 
+        // Restrict to verified-domain senders only
+        const verifiedActive = anyActive.filter((s: any) => verifiedDomains.has((s.from_email as string).split('@')[1]))
+        if (verifiedActive.length === 0) {
+          console.warn(`[enr ${enr.id}] no verified-domain senders → failed`)
+          await supabase.from('enrollments').update({
+            status: 'failed',
+            last_error: `no verified sending domain — only ${[...verifiedDomains].join(', ') || '(none)'} can send. Verify your other domains in Cloud → Emails.`,
+            error_at: nowIso,
+          }).eq('id', enr.id)
+          failed++; continue
+        }
+
         if (cfg.sender_strategy === 'specific' && cfg.sender_id) {
+          const specific = anyActive.find((s: any) => s.id === cfg.sender_id)
+          if (!specific) {
+            await supabase.from('enrollments').update({
+              status: 'failed',
+              last_error: 'configured specific sender no longer exists or is inactive',
+              error_at: nowIso,
+            }).eq('id', enr.id)
+            failed++; continue
+          }
+          const dom = (specific.from_email as string).split('@')[1]
+          if (!verifiedDomains.has(dom)) {
+            await supabase.from('enrollments').update({
+              status: 'failed',
+              last_error: `sender domain "${dom}" not verified with Lovable Emails`,
+              error_at: nowIso,
+            }).eq('id', enr.id)
+            failed++; continue
+          }
           preSenderId = cfg.sender_id
         } else {
-          const { data: pool } = await supabase.from('senders').select('id, from_email').eq('user_id', enr.user_id).eq('is_active', true)
-          let candidates = pool ?? []
+          let candidates = verifiedActive
           if (cfg.sender_strategy === 'brand' && cfg.brand) {
             const filtered = candidates.filter((s: any) => {
               const dom = (s.from_email as string).split('@')[1] ?? ''
               return dom.startsWith(`${cfg.brand}.`) || dom === cfg.brand
             })
             if (filtered.length === 0) {
-              console.warn(`[enr ${enr.id}] no senders match brand "${cfg.brand}" → failed`)
+              console.warn(`[enr ${enr.id}] no verified senders match brand "${cfg.brand}" → failed`)
               await supabase.from('enrollments').update({
                 status: 'failed',
-                last_error: `no senders match brand "${cfg.brand}"`,
+                last_error: `no verified senders match brand "${cfg.brand}"`,
                 error_at: nowIso,
               }).eq('id', enr.id)
               failed++; continue
@@ -256,10 +284,13 @@ Deno.serve(async (req) => {
           }
         }
         if (!preSenderId) {
+          // Sender daily cap is the hard ceiling — defer to tomorrow and mark deferred_at
+          // so this enrollment is processed FIRST on tomorrow's tick (Pass A).
           const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
           await supabase.from('enrollments').update({
             next_send_at: tomorrow.toISOString(),
-            last_error: 'all senders at daily cap',
+            deferred_at: nowIso,
+            last_error: 'all eligible senders at daily cap — queued for tomorrow',
             error_at: nowIso,
           }).eq('id', enr.id)
           console.log(`[enr ${enr.id}] all senders at daily cap → deferred to ${tomorrow.toISOString()}`)
@@ -271,7 +302,8 @@ Deno.serve(async (req) => {
             const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
             await supabase.from('enrollments').update({
               next_send_at: tomorrow.toISOString(),
-              last_error: 'specific sender at daily cap',
+              deferred_at: nowIso,
+              last_error: 'specific sender at daily cap — queued for tomorrow',
               error_at: nowIso,
             }).eq('id', enr.id)
             console.log(`[enr ${enr.id}] specific sender at daily cap → deferred`)
