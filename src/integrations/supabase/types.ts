@@ -178,7 +178,9 @@ export type Database = {
           created_at: string
           current_node_id: string | null
           current_step: number
+          error_at: string | null
           id: string
+          last_error: string | null
           last_sent_at: string | null
           next_send_at: string | null
           sequence_id: string
@@ -191,7 +193,9 @@ export type Database = {
           created_at?: string
           current_node_id?: string | null
           current_step?: number
+          error_at?: string | null
           id?: string
+          last_error?: string | null
           last_sent_at?: string | null
           next_send_at?: string | null
           sequence_id: string
@@ -204,7 +208,9 @@ export type Database = {
           created_at?: string
           current_node_id?: string | null
           current_step?: number
+          error_at?: string | null
           id?: string
+          last_error?: string | null
           last_sent_at?: string | null
           next_send_at?: string | null
           sequence_id?: string
