@@ -171,6 +171,20 @@ const Sequences = () => {
           </div>
         </div>
 
+        {unverified.length > 0 && (
+          <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 p-4 flex items-start gap-3">
+            <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+            <div className="text-sm">
+              <p className="font-medium text-destructive">
+                {unverified.length} sending domain{unverified.length === 1 ? "" : "s"} not verified — emails from {unverified.map((d: any) => d.domain).join(", ")} will fail.
+              </p>
+              <p className="text-muted-foreground mt-1">
+                Only {verified.map((d: any) => d.domain).join(", ") || "(none)"} can currently send. Verify the others under Cloud → Emails → Manage Domains.
+              </p>
+            </div>
+          </div>
+        )}
+
         <div className="rounded-xl border border-border bg-card shadow-card overflow-hidden">
           {isLoading ? (
             <div className="p-8 text-center text-muted-foreground text-sm">Loading…</div>
