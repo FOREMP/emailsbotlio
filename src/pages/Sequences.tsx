@@ -195,7 +195,7 @@ const Sequences = () => {
                       </TableCell>
                       <TableCell>{stepCounts[s.id] ?? 0}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{list?.name ?? "—"}</TableCell>
-                      <TableCell>{enrollCounts[s.id] ?? 0}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{(enrollStats as any)[s.id]?.total ?? 0}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {new Date(s.created_at).toLocaleDateString()}
                       </TableCell>
