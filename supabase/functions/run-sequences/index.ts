@@ -32,19 +32,52 @@ Deno.serve(async (req) => {
 
   const nowIso = new Date().toISOString()
 
-  const { data: due, error } = await supabase
+  // Load verified sending domains once per tick
+  const { data: verifiedDomainRows } = await supabase
+    .from('sending_domains')
+    .select('domain')
+    .eq('is_active', true)
+    .eq('is_verified', true)
+  const verifiedDomains = new Set((verifiedDomainRows ?? []).map((d: any) => d.domain as string))
+
+  // Two-pass query: prioritise follow-ups (last_sent_at NOT NULL) and previously-deferred
+  // enrollments before brand-new ones, so yesterday's leftovers and mid-sequence sends
+  // drain first.
+  const passA = await supabase
     .from('enrollments')
     .select('*')
     .eq('status', 'active')
     .or(`next_send_at.is.null,next_send_at.lte.${nowIso}`)
+    .or('last_sent_at.not.is.null,deferred_at.not.is.null')
+    .order('deferred_at', { ascending: true, nullsFirst: false })
+    .order('last_sent_at', { ascending: true, nullsFirst: false })
     .limit(MAX_PER_RUN)
-
-  if (error) {
-    console.error('[run-sequences] enrollments query failed', error.message)
-    return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+  if (passA.error) {
+    console.error('[run-sequences] passA failed', passA.error.message)
+    return new Response(JSON.stringify({ error: passA.error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
   }
 
-  console.log(`[run-sequences] picked ${due?.length ?? 0} due enrollments`)
+  const remaining = MAX_PER_RUN - (passA.data?.length ?? 0)
+  let passBData: any[] = []
+  if (remaining > 0) {
+    const passB = await supabase
+      .from('enrollments')
+      .select('*')
+      .eq('status', 'active')
+      .or(`next_send_at.is.null,next_send_at.lte.${nowIso}`)
+      .is('last_sent_at', null)
+      .is('deferred_at', null)
+      .order('created_at', { ascending: true })
+      .limit(remaining)
+    if (passB.error) {
+      console.error('[run-sequences] passB failed', passB.error.message)
+    } else {
+      passBData = passB.data ?? []
+    }
+  }
+
+  const due = [...(passA.data ?? []), ...passBData]
+  console.log(`[run-sequences] picked ${due.length} due (followups=${passA.data?.length ?? 0}, new=${passBData.length})`)
 
   let processed = 0
   let advanced = 0

@@ -72,20 +72,37 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ skipped: 'do_not_contact' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
   }
 
+  // Load verified domains (only these can actually send)
+  const { data: verifiedDomainRows } = await supabase
+    .from('sending_domains')
+    .select('*')
+    .eq('is_active', true)
+    .eq('is_verified', true)
+  const verifiedDomains = new Set((verifiedDomainRows ?? []).map((d: any) => d.domain as string))
+  if (verifiedDomains.size === 0) {
+    return new Response(JSON.stringify({ error: 'no verified sending domain configured' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+  }
+
   // Pick sender
   let chosenSender: any = null
   if (sender_id) {
     const { data } = await supabase.from('senders').select('*').eq('id', sender_id).eq('user_id', user_id).maybeSingle()
     chosenSender = data
+    if (chosenSender) {
+      const dom = (chosenSender.from_email as string).split('@')[1]
+      if (!verifiedDomains.has(dom)) {
+        return new Response(JSON.stringify({ error: `sender domain "${dom}" is not verified with Lovable Emails — only ${[...verifiedDomains].join(', ')} can send` }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+      }
+    }
   } else {
     let q = supabase.from('senders').select('*').eq('user_id', user_id).eq('is_active', true)
     const { data: all } = await q
-    let pool = all ?? []
+    let pool = (all ?? []).filter((s: any) => verifiedDomains.has((s.from_email as string).split('@')[1]))
     if (strategy === 'brand' && brand) {
       pool = pool.filter((s: any) => (s.from_email as string).endsWith(`@${brand}.io`) || (s.from_email as string).endsWith(`@${brand}.eu`) || (s.from_email as string).endsWith(`@${brand}.email`) || (s.from_email as string).endsWith(`@${brand}.one`))
     }
     if (pool.length === 0) {
-      return new Response(JSON.stringify({ error: 'no senders available' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+      return new Response(JSON.stringify({ error: `no verified senders available — only ${[...verifiedDomains].join(', ')} are verified with Lovable Emails` }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
     chosenSender = pool[Math.floor(Math.random() * pool.length)]
   }
@@ -96,9 +113,9 @@ Deno.serve(async (req) => {
   // Look up domain registry → derive reply-to + sender subdomain
   const fromEmail = chosenSender.from_email as string
   const domain = fromEmail.split('@')[1]
-  const { data: domainRow } = await supabase.from('sending_domains').select('*').eq('domain', domain).eq('is_active', true).maybeSingle()
+  const domainRow = (verifiedDomainRows ?? []).find((d: any) => d.domain === domain)
   if (!domainRow) {
-    return new Response(JSON.stringify({ error: `domain ${domain} not in sending_domains registry` }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    return new Response(JSON.stringify({ error: `domain ${domain} not verified or not in registry` }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
   }
   const senderDomain = `${domainRow.sender_subdomain}.${domain}` // e.g. notify.foremp.eu
   const replyTo = domainRow.reply_to_email
