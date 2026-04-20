@@ -84,6 +84,16 @@ const Sequences = () => {
     },
   });
 
+  const { data: domains = [] } = useQuery({
+    queryKey: ["sending_domains"],
+    queryFn: async () => {
+      const { data } = await supabase.from("sending_domains").select("domain, is_verified, is_active");
+      return data ?? [];
+    },
+  });
+  const unverified = (domains as any[]).filter((d) => d.is_active && !d.is_verified);
+  const verified = (domains as any[]).filter((d) => d.is_active && d.is_verified);
+
   const runNow = useMutation({
     mutationFn: async () => {
       const { data, error } = await supabase.functions.invoke("run-sequences", { body: {} });

@@ -30,6 +30,7 @@ interface SendingDomain {
   brand: "foremp" | "botlio";
   reply_to_email: string;
   is_active: boolean;
+  is_verified?: boolean;
 }
 
 const brandClass = (b: string) =>
@@ -291,9 +292,14 @@ const Senders = () => {
               const d = domains.find((x) => x.domain === dom);
               return (
                 <div key={dom}>
-                  <div className="flex items-center gap-2 mb-2 px-1">
+                  <div className="flex items-center gap-2 mb-2 px-1 flex-wrap">
                     <h3 className="font-semibold">{dom}</h3>
                     {d && <Badge variant="outline" className={brandClass(d.brand)}>{d.brand}</Badge>}
+                    {d && !d.is_verified && (
+                      <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/30">
+                        Unverified domain — cannot send
+                      </Badge>
+                    )}
                     {d && <span className="text-xs text-muted-foreground">replies → {d.reply_to_email}</span>}
                   </div>
                   <div className="grid gap-2">
