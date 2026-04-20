@@ -3,6 +3,13 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// Strip trailing sign-off blocks the model may add — the send function appends its own footer.
+function stripSignOff(text: string): string {
+  if (!text) return text;
+  const pattern = /\n+\s*(Best regards|Kind regards|Sincerely|Cheers|Regards|Vänliga hälsningar|Med vänlig hälsning|Mvh|MVH|Hälsningar|Bästa hälsningar)[\s\S]*$/i;
+  return text.replace(pattern, "").replace(/\s+$/, "");
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -25,9 +32,14 @@ Deno.serve(async (req) => {
       });
     }
 
-    const contactBlock = JSON.stringify(contact, null, 2);
-    const system = `You are an expert cold-outreach copywriter. Always reply in strict JSON: {"subject":"...","body":"..."}. Keep emails concise, personal, and action-oriented. Plain text only.`;
-    const user = `Contact data:\n${contactBlock}\n\nWriting brief:\n${prompt}\n\n${subject_hint ? `Subject hint: ${subject_hint}` : ""}\n\nReturn JSON with "subject" and "body".`;
+    // Minimal system instruction — only enforce JSON shape so we can parse.
+    const system = `Return ONLY a JSON object: {"subject":"...","body":"..."}. No other text. Do not include any closing signature, sign-off, "Best regards", "Vänliga hälsningar", sender name, or brand line in the body — those are appended automatically.`;
+
+    // Pass user's prompt verbatim. Append contact JSON only if the prompt references variables ({{...}}).
+    const referencesVars = /\{\{[\w.]+\}\}/.test(prompt);
+    const user = referencesVars
+      ? `${prompt}\n\nContact data (for variable substitution):\n${JSON.stringify(contact, null, 2)}${subject_hint ? `\n\nSubject hint: ${subject_hint}` : ""}`
+      : `${prompt}${subject_hint ? `\n\nSubject hint: ${subject_hint}` : ""}`;
 
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -53,7 +65,9 @@ Deno.serve(async (req) => {
     let parsed: { subject?: string; body?: string } = {};
     try { parsed = JSON.parse(content); } catch { parsed = { subject: subject_hint || "Hello", body: content }; }
 
-    return new Response(JSON.stringify({ subject: parsed.subject ?? "", body: parsed.body ?? "" }), {
+    const cleanBody = stripSignOff(parsed.body ?? "");
+
+    return new Response(JSON.stringify({ subject: parsed.subject ?? "", body: cleanBody }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
