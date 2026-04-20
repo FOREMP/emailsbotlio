@@ -27,8 +27,15 @@ function deriveBrand(domain: string, brandFromDb?: string | null): string {
   return root.toUpperCase()
 }
 
+function stripExistingSignOff(text: string): string {
+  if (!text) return text
+  const pattern = /\n+\s*(Best regards|Kind regards|Sincerely|Cheers|Regards|Vänliga hälsningar|Med vänlig hälsning|Mvh|MVH|Hälsningar|Bästa hälsningar)[\s\S]*$/i
+  return text.replace(pattern, '').replace(/\s+$/, '')
+}
+
 function appendFooter(bodyText: string, senderName: string, brand: string): string {
-  return `${bodyText.replace(/\s+$/, '')}\n\nBest regards,\n\n${senderName}\n\n${brand}`
+  const cleaned = stripExistingSignOff(bodyText)
+  return `${cleaned}\n\nBest regards,\n${senderName}\n${brand}`
 }
 
 Deno.serve(async (req) => {
