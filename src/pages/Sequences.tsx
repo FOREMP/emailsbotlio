@@ -6,7 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus, Play, Pause, Trash2, Pencil } from "lucide-react";
+import { Plus, Play, Pause, Trash2, Pencil, Zap, AlertCircle } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -64,17 +64,37 @@ const Sequences = () => {
     },
   });
 
-  const { data: enrollCounts = {} } = useQuery({
-    queryKey: ["sequence-enroll-counts", sequences.map((s) => s.id)],
+  const { data: enrollStats = {} } = useQuery({
+    queryKey: ["sequence-enroll-stats", sequences.map((s) => s.id)],
     enabled: sequences.length > 0,
     queryFn: async () => {
-      const { data } = await supabase.from("enrollments").select("sequence_id");
-      const counts: Record<string, number> = {};
-      (data ?? []).forEach((r) => {
-        counts[r.sequence_id] = (counts[r.sequence_id] ?? 0) + 1;
+      const { data } = await supabase
+        .from("enrollments")
+        .select("sequence_id, status, last_error");
+      const stats: Record<string, { total: number; active: number; completed: number; failed: number; unsubscribed: number; lastError?: string | null }> = {};
+      (data ?? []).forEach((r: any) => {
+        const s = stats[r.sequence_id] ??= { total: 0, active: 0, completed: 0, failed: 0, unsubscribed: 0 };
+        s.total++;
+        if (r.status === "active") s.active++;
+        else if (r.status === "completed") s.completed++;
+        else if (r.status === "failed") { s.failed++; if (r.last_error && !s.lastError) s.lastError = r.last_error; }
+        else if (r.status === "unsubscribed") s.unsubscribed++;
       });
-      return counts;
+      return stats;
     },
+  });
+
+  const runNow = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await supabase.functions.invoke("run-sequences", { body: {} });
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (data: any) => {
+      toast({ title: "Worker ran", description: `processed=${data?.processed ?? 0} sent=${data?.sent ?? 0} advanced=${data?.advanced ?? 0} failed=${data?.failed ?? 0}` });
+      qc.invalidateQueries({ queryKey: ["sequence-enroll-stats"] });
+    },
+    onError: (e: Error) => toast({ title: "Run failed", description: e.message, variant: "destructive" }),
   });
 
   const create = useMutation({
@@ -133,7 +153,12 @@ const Sequences = () => {
             <h1 className="text-2xl font-bold tracking-tight">Sequences</h1>
             <p className="text-muted-foreground text-sm mt-1">Build multi-step outreach campaigns.</p>
           </div>
-          <Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" /> New Sequence</Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => runNow.mutate()} disabled={runNow.isPending}>
+              <Zap className="h-4 w-4 mr-1.5" /> {runNow.isPending ? "Running…" : "Run now"}
+            </Button>
+            <Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" /> New Sequence</Button>
+          </div>
         </div>
 
         <div className="rounded-xl border border-border bg-card shadow-card overflow-hidden">
@@ -152,7 +177,7 @@ const Sequences = () => {
                   <TableHead>Status</TableHead>
                   <TableHead>Steps</TableHead>
                   <TableHead>List</TableHead>
-                  <TableHead>Enrolled</TableHead>
+                  <TableHead>Health</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -170,7 +195,24 @@ const Sequences = () => {
                       </TableCell>
                       <TableCell>{stepCounts[s.id] ?? 0}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{list?.name ?? "—"}</TableCell>
-                      <TableCell>{enrollCounts[s.id] ?? 0}</TableCell>
+                      <TableCell>
+                        {(() => {
+                          const st = (enrollStats as any)[s.id];
+                          if (!st || st.total === 0) return <span className="text-muted-foreground text-sm">0</span>;
+                          return (
+                            <div className="flex items-center gap-2 text-xs">
+                              <span title="active" className="text-accent font-medium">{st.active} active</span>
+                              {st.completed > 0 && <span title="completed" className="text-muted-foreground">{st.completed} done</span>}
+                              {st.failed > 0 && (
+                                <span title={st.lastError ?? "failed"} className="text-destructive flex items-center gap-0.5 font-medium">
+                                  <AlertCircle className="h-3 w-3" />{st.failed}
+                                </span>
+                              )}
+                              {st.unsubscribed > 0 && <span title="unsubscribed" className="text-yellow-600">{st.unsubscribed} unsub</span>}
+                            </div>
+                          );
+                        })()}
+                      </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {new Date(s.created_at).toLocaleDateString()}
                       </TableCell>

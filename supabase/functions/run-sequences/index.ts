@@ -82,15 +82,32 @@ Deno.serve(async (req) => {
       }
 
       // Determine current node — prefer wired duplicates
+      const wiredTrigger = (nodes ?? []).filter((n: any) => n.node_type === 'trigger')
+        .find((n: any) => (edges ?? []).some((e: any) => e.source_node_id === n.id))
+        ?? (nodes ?? []).find((n: any) => n.node_type === 'trigger')
+
       let currentNode = enr.current_node_id
         ? findNodePreferWired(nodes ?? [], edges ?? [], enr.current_node_id)
-        : (nodes ?? []).filter((n: any) => n.node_type === 'trigger')
-            .find((n: any) => (edges ?? []).some((e: any) => e.source_node_id === n.id))
-          ?? (nodes ?? []).find((n: any) => n.node_type === 'trigger')
+        : wiredTrigger
+
+      // Recover from stale current_node_id by falling back to the trigger
+      if (!currentNode && wiredTrigger) {
+        console.warn(`[enr ${enr.id}] stale current_node_id ${enr.current_node_id} → recovering to trigger`)
+        currentNode = wiredTrigger
+        await supabase.from('enrollments').update({
+          current_node_id: wiredTrigger.id,
+          last_error: `recovered from missing node ${enr.current_node_id}`,
+          error_at: nowIso,
+        }).eq('id', enr.id)
+      }
 
       if (!currentNode) {
         console.warn(`[enr ${enr.id}] no current node found → failed`)
-        await supabase.from('enrollments').update({ status: 'failed' }).eq('id', enr.id)
+        await supabase.from('enrollments').update({
+          status: 'failed',
+          last_error: 'sequence has no trigger node',
+          error_at: nowIso,
+        }).eq('id', enr.id)
         failed++; continue
       }
 
@@ -99,13 +116,21 @@ Deno.serve(async (req) => {
         const next = (edges ?? []).find((e: any) => e.source_node_id === currentNode.id)
         if (!next) {
           console.warn(`[enr ${enr.id}] trigger has no outgoing edge → failed`)
-          await supabase.from('enrollments').update({ status: 'failed' }).eq('id', enr.id)
+          await supabase.from('enrollments').update({
+            status: 'failed',
+            last_error: 'trigger node is not connected to any next step',
+            error_at: nowIso,
+          }).eq('id', enr.id)
           failed++; continue
         }
         currentNode = (nodes ?? []).find((n: any) => n.id === next.target_node_id)
         if (!currentNode) {
           console.warn(`[enr ${enr.id}] trigger.next target missing → failed`)
-          await supabase.from('enrollments').update({ status: 'failed' }).eq('id', enr.id)
+          await supabase.from('enrollments').update({
+            status: 'failed',
+            last_error: 'next node after trigger is missing',
+            error_at: nowIso,
+          }).eq('id', enr.id)
           failed++; continue
         }
         console.log(`[enr ${enr.id}] advanced trigger → ${currentNode.node_type}(${currentNode.id})`)
@@ -152,40 +177,70 @@ Deno.serve(async (req) => {
       }
 
       if (currentNode.node_type === 'send_email') {
-        // Pre-check: pick a sender and verify it has remaining daily quota
         let preSenderId: string | null = null
+
+        // Fail fast if user has zero active senders (instead of silent indefinite defer)
+        const { data: anyActive } = await supabase
+          .from('senders')
+          .select('id')
+          .eq('user_id', enr.user_id)
+          .eq('is_active', true)
+          .limit(1)
+        if (!anyActive || anyActive.length === 0) {
+          console.warn(`[enr ${enr.id}] user has no active senders → failed`)
+          await supabase.from('enrollments').update({
+            status: 'failed',
+            last_error: 'no active senders configured for this account',
+            error_at: nowIso,
+          }).eq('id', enr.id)
+          failed++; continue
+        }
+
         if (cfg.sender_strategy === 'specific' && cfg.sender_id) {
           preSenderId = cfg.sender_id
         } else {
-          // Find any active sender for this user with remaining quota
-          let q = supabase.from('senders').select('id, from_email').eq('user_id', enr.user_id).eq('is_active', true)
-          const { data: pool } = await q
+          const { data: pool } = await supabase.from('senders').select('id, from_email').eq('user_id', enr.user_id).eq('is_active', true)
           let candidates = pool ?? []
           if (cfg.sender_strategy === 'brand' && cfg.brand) {
-            candidates = candidates.filter((s: any) => {
+            const filtered = candidates.filter((s: any) => {
               const dom = (s.from_email as string).split('@')[1] ?? ''
               return dom.startsWith(`${cfg.brand}.`) || dom === cfg.brand
             })
+            if (filtered.length === 0) {
+              console.warn(`[enr ${enr.id}] no senders match brand "${cfg.brand}" → failed`)
+              await supabase.from('enrollments').update({
+                status: 'failed',
+                last_error: `no senders match brand "${cfg.brand}"`,
+                error_at: nowIso,
+              }).eq('id', enr.id)
+              failed++; continue
+            }
+            candidates = filtered
           }
-          // Check remaining quota for each, pick one with capacity
           for (const c of candidates.sort(() => Math.random() - 0.5)) {
             const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: c.id })
             if ((rem ?? 0) > 0) { preSenderId = c.id; break }
           }
         }
         if (!preSenderId) {
-          // All senders capped → defer to next UTC midnight
           const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
-          await supabase.from('enrollments').update({ next_send_at: tomorrow.toISOString() }).eq('id', enr.id)
+          await supabase.from('enrollments').update({
+            next_send_at: tomorrow.toISOString(),
+            last_error: 'all senders at daily cap',
+            error_at: nowIso,
+          }).eq('id', enr.id)
           console.log(`[enr ${enr.id}] all senders at daily cap → deferred to ${tomorrow.toISOString()}`)
           continue
         }
-        // For specific-strategy, also verify that one has capacity
         if (cfg.sender_strategy === 'specific') {
           const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: preSenderId })
           if ((rem ?? 0) <= 0) {
             const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
-            await supabase.from('enrollments').update({ next_send_at: tomorrow.toISOString() }).eq('id', enr.id)
+            await supabase.from('enrollments').update({
+              next_send_at: tomorrow.toISOString(),
+              last_error: 'specific sender at daily cap',
+              error_at: nowIso,
+            }).eq('id', enr.id)
             console.log(`[enr ${enr.id}] specific sender at daily cap → deferred`)
             continue
           }
@@ -285,12 +340,22 @@ Deno.serve(async (req) => {
           candidate = stockholmWallToUTC(tmr.getUTCFullYear(), tmr.getUTCMonth() + 1, tmr.getUTCDate(), hh || 0, mm || 0)
           candidateDayName = dayMap[tmr.getUTCDay()]
         }
-        // Walk forward until allowed day
-        for (let i = 0; i < 8; i++) {
-          if (allowedDays.length === 0 || allowedDays.includes(candidateDayName)) break
+        // Walk forward until allowed day (hard cap at 8 days)
+        let foundAllowed = allowedDays.length === 0 || allowedDays.includes(candidateDayName)
+        for (let i = 0; i < 8 && !foundAllowed; i++) {
           const nextDay = new Date(candidate.getTime() + 86_400_000)
           candidate = stockholmWallToUTC(nextDay.getUTCFullYear(), nextDay.getUTCMonth() + 1, nextDay.getUTCDate(), hh || 0, mm || 0)
           candidateDayName = dayMap[nextDay.getUTCDay()]
+          if (allowedDays.length === 0 || allowedDays.includes(candidateDayName)) { foundAllowed = true; break }
+        }
+        if (!foundAllowed) {
+          console.warn(`[enr ${enr.id}] schedule: no allowed day within 8 days → failed`)
+          await supabase.from('enrollments').update({
+            status: 'failed',
+            last_error: `schedule node has no valid day within 8 days (allowed: ${allowedDays.join(',') || 'none'})`,
+            error_at: nowIso,
+          }).eq('id', enr.id)
+          failed++; continue
         }
 
         const dayAllowedToday = allowedDays.length === 0 || allowedDays.includes(todayName)
