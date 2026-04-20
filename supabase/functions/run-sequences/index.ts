@@ -341,7 +341,7 @@ Deno.serve(async (req) => {
 
         const next = (edges ?? []).find((e: any) => e.source_node_id === currentNode.id)
         if (!next) {
-          await supabase.from('enrollments').update({ status: 'completed', last_sent_at: nowIso }).eq('id', enr.id)
+          await supabase.from('enrollments').update({ status: 'completed', last_sent_at: nowIso, deferred_at: null }).eq('id', enr.id)
           console.log(`[enr ${enr.id}] no next after send → completed`)
           continue
         }
@@ -349,6 +349,7 @@ Deno.serve(async (req) => {
           current_node_id: next.target_node_id,
           last_sent_at: nowIso,
           next_send_at: nowIso,
+          deferred_at: null,
         }).eq('id', enr.id)
         advanced++
         continue
