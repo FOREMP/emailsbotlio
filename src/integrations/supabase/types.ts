@@ -178,6 +178,7 @@ export type Database = {
           created_at: string
           current_node_id: string | null
           current_step: number
+          deferred_at: string | null
           error_at: string | null
           id: string
           last_error: string | null
@@ -193,6 +194,7 @@ export type Database = {
           created_at?: string
           current_node_id?: string | null
           current_step?: number
+          deferred_at?: string | null
           error_at?: string | null
           id?: string
           last_error?: string | null
@@ -208,6 +210,7 @@ export type Database = {
           created_at?: string
           current_node_id?: string | null
           current_step?: number
+          deferred_at?: string | null
           error_at?: string | null
           id?: string
           last_error?: string | null
@@ -544,6 +547,7 @@ export type Database = {
           domain: string
           id: string
           is_active: boolean
+          is_verified: boolean
           reply_to_email: string
           sender_subdomain: string
           updated_at: string
@@ -554,6 +558,7 @@ export type Database = {
           domain: string
           id?: string
           is_active?: boolean
+          is_verified?: boolean
           reply_to_email: string
           sender_subdomain?: string
           updated_at?: string
@@ -564,6 +569,7 @@ export type Database = {
           domain?: string
           id?: string
           is_active?: boolean
+          is_verified?: boolean
           reply_to_email?: string
           sender_subdomain?: string
           updated_at?: string
