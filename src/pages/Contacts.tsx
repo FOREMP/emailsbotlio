@@ -7,7 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Plus, Users, Upload, ArrowLeft, Trash2 } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Plus, Users, Upload, ArrowLeft, Trash2, ShieldX } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import FileImportDialog from "@/components/FileImportDialog";
@@ -22,8 +23,8 @@ const Contacts = () => {
   const [contactDialogOpen, setContactDialogOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [contactForm, setContactForm] = useState({ first_name: "", last_name: "", email: "", phone: "" });
+  const [overviewTab, setOverviewTab] = useState<"lists" | "suppressed">("lists");
 
-  // Fetch lists
   const { data: lists = [], isLoading: listsLoading } = useQuery({
     queryKey: ["contact_lists"],
     queryFn: async () => {
@@ -36,7 +37,6 @@ const Contacts = () => {
     },
   });
 
-  // Fetch contacts for selected list
   const { data: contacts = [], isLoading: contactsLoading } = useQuery({
     queryKey: ["contacts", selectedList],
     enabled: !!selectedList,
@@ -51,7 +51,18 @@ const Contacts = () => {
     },
   });
 
-  // Last-contacted timestamps per contact in this list
+  const { data: suppressedEmails = [], isLoading: suppressedLoading } = useQuery({
+    queryKey: ["suppressed_emails"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("suppressed_emails")
+        .select("id, email, reason, created_at")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+  });
+
   const { data: lastContacted = {} } = useQuery({
     queryKey: ["last-contacted", selectedList, contacts.length],
     enabled: !!selectedList && contacts.length > 0,
@@ -71,7 +82,6 @@ const Contacts = () => {
     },
   });
 
-  // Create list
   const createList = useMutation({
     mutationFn: async () => {
       const { error } = await supabase.from("contact_lists").insert({
@@ -91,7 +101,6 @@ const Contacts = () => {
     onError: (e) => toast.error(e.message),
   });
 
-  // Add contact
   const addContact = useMutation({
     mutationFn: async () => {
       const { error } = await supabase.from("contacts").insert({
@@ -110,7 +119,6 @@ const Contacts = () => {
     onError: (e) => toast.error(e.message),
   });
 
-  // Delete list
   const deleteList = useMutation({
     mutationFn: async (id: string) => {
       const { error } = await supabase.from("contact_lists").delete().eq("id", id);
@@ -124,7 +132,6 @@ const Contacts = () => {
     onError: (e) => toast.error(e.message),
   });
 
-  // Delete contact
   const deleteContact = useMutation({
     mutationFn: async (id: string) => {
       const { error } = await supabase.from("contacts").delete().eq("id", id);
@@ -137,7 +144,6 @@ const Contacts = () => {
     onError: (e) => toast.error(e.message),
   });
 
-  // File import
   const [importing, setImporting] = useState(false);
   const handleFileImport = async (
     importedContacts: { first_name: string; last_name: string; email: string; phone: string; custom_fields: Record<string, string> }[],
@@ -160,7 +166,6 @@ const Contacts = () => {
       const { error } = await supabase.from("contacts").insert(contactsToInsert);
       if (error) throw error;
 
-      // Update list columns metadata (merge with existing)
       const existingList = lists.find((l) => l.id === selectedList);
       const existingCols: string[] = Array.isArray((existingList as any)?.columns) ? (existingList as any).columns : [];
       const mergedCols = [...new Set([...existingCols, ...customColumns])];
@@ -169,7 +174,6 @@ const Contacts = () => {
         await supabase.from("contact_lists").update({ columns: mergedCols } as any).eq("id", selectedList);
       }
 
-      // Log the import (metadata only — we don't store the actual file)
       await supabase.from("imported_files").insert({
         user_id: user!.id,
         list_id: selectedList,
@@ -199,6 +203,7 @@ const Contacts = () => {
 
   const selectedListData = lists.find((l) => l.id === selectedList);
   const listCustomColumns: string[] = Array.isArray((selectedListData as any)?.columns) ? (selectedListData as any).columns : [];
+  const suppressedSet = new Set(suppressedEmails.map((item) => item.email.toLowerCase()));
 
   return (
     <>
@@ -210,13 +215,14 @@ const Contacts = () => {
         </Link>
       </div>
 
-        {!selectedList ? (
-          <>
-            <div className="flex items-center justify-between mb-6">
-              <div>
-                <h1 className="text-2xl font-bold tracking-tight">Contact Lists</h1>
-                <p className="text-muted-foreground text-sm mt-1">Organize your contacts into lists for targeted campaigns.</p>
-              </div>
+      {!selectedList ? (
+        <>
+          <div className="flex items-center justify-between mb-6 gap-4">
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">Contacts</h1>
+              <p className="text-muted-foreground text-sm mt-1">Manage contact lists and review everyone the system is blocking from future sends.</p>
+            </div>
+            {overviewTab === "lists" && (
               <Dialog open={listDialogOpen} onOpenChange={setListDialogOpen}>
                 <DialogTrigger asChild>
                   <Button className="gradient-primary border-0 text-primary-foreground hover:opacity-90">
@@ -242,180 +248,233 @@ const Contacts = () => {
                   </div>
                 </DialogContent>
               </Dialog>
-            </div>
-
-            {listsLoading ? (
-              <p className="text-muted-foreground text-sm">Loading…</p>
-            ) : lists.length === 0 ? (
-              <div className="rounded-xl border border-border bg-card shadow-card p-12 text-center">
-                <Users className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
-                <p className="text-muted-foreground text-sm mb-4">No contact lists yet. Create your first one to start importing contacts.</p>
-              </div>
-            ) : (
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {lists.map((list) => {
-                  const cols: string[] = Array.isArray((list as any)?.columns) ? (list as any).columns : [];
-                  return (
-                    <div
-                      key={list.id}
-                      className="rounded-xl border border-border bg-card p-5 shadow-card hover:shadow-elevated transition-all cursor-pointer group"
-                      onClick={() => setSelectedList(list.id)}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <h3 className="font-semibold">{list.name}</h3>
-                          {list.description && <p className="text-sm text-muted-foreground mt-1">{list.description}</p>}
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="opacity-0 group-hover:opacity-100 transition-opacity text-destructive"
-                          onClick={(e) => { e.stopPropagation(); deleteList.mutate(list.id); }}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                      {cols.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-2">
-                          {cols.slice(0, 5).map((col) => (
-                            <Badge key={col} variant="secondary" className="text-xs font-mono">
-                              {`{{${col}}}`}
-                            </Badge>
-                          ))}
-                          {cols.length > 5 && (
-                            <Badge variant="outline" className="text-xs">+{cols.length - 5} more</Badge>
-                          )}
-                        </div>
-                      )}
-                      <p className="text-xs text-muted-foreground mt-3">Created {new Date(list.created_at).toLocaleDateString()}</p>
-                    </div>
-                  );
-                })}
-              </div>
             )}
-          </>
-        ) : (
-          <>
-            <div className="flex items-center justify-between mb-6">
-              <div>
-                <button onClick={() => setSelectedList(null)} className="text-sm text-muted-foreground hover:text-foreground mb-1 flex items-center gap-1">
-                  <ArrowLeft className="h-3 w-3" /> Back to lists
-                </button>
-                <h1 className="text-2xl font-bold tracking-tight">{selectedListData?.name}</h1>
-                {selectedListData?.description && <p className="text-muted-foreground text-sm mt-1">{selectedListData.description}</p>}
-                {listCustomColumns.length > 0 && (
-                  <div className="flex flex-wrap gap-1 mt-2">
-                    {listCustomColumns.map((col) => (
-                      <Badge key={col} variant="secondary" className="text-xs font-mono">
-                        {`{{${col}}}`}
-                      </Badge>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={() => setImportDialogOpen(true)}>
-                  <Upload className="h-4 w-4 mr-1.5" /> Import File
-                </Button>
-                <Dialog open={contactDialogOpen} onOpenChange={setContactDialogOpen}>
-                  <DialogTrigger asChild>
-                    <Button size="sm" className="gradient-primary border-0 text-primary-foreground hover:opacity-90">
-                      <Plus className="h-4 w-4 mr-1.5" /> Add Contact
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Add Contact</DialogTitle>
-                    </DialogHeader>
-                    <div className="space-y-4 pt-2">
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <Label>First Name</Label>
-                          <Input value={contactForm.first_name} onChange={(e) => setContactForm((f) => ({ ...f, first_name: e.target.value }))} />
-                        </div>
-                        <div>
-                          <Label>Last Name</Label>
-                          <Input value={contactForm.last_name} onChange={(e) => setContactForm((f) => ({ ...f, last_name: e.target.value }))} />
-                        </div>
-                      </div>
-                      <div>
-                        <Label>Email</Label>
-                        <Input type="email" value={contactForm.email} onChange={(e) => setContactForm((f) => ({ ...f, email: e.target.value }))} />
-                      </div>
-                      <div>
-                        <Label>Phone</Label>
-                        <Input value={contactForm.phone} onChange={(e) => setContactForm((f) => ({ ...f, phone: e.target.value }))} />
-                      </div>
-                      <Button onClick={() => addContact.mutate()} disabled={(!contactForm.email && !contactForm.phone) || addContact.isPending} className="w-full">
-                        {addContact.isPending ? "Adding…" : "Add Contact"}
-                      </Button>
-                    </div>
-                  </DialogContent>
-                </Dialog>
-              </div>
-            </div>
+          </div>
 
-            <FileImportDialog
-              open={importDialogOpen}
-              onOpenChange={setImportDialogOpen}
-              onImport={handleFileImport}
-              importing={importing}
-              existingColumns={listCustomColumns}
-            />
+          <Tabs value={overviewTab} onValueChange={(value) => setOverviewTab(value as "lists" | "suppressed") }>
+            <TabsList>
+              <TabsTrigger value="lists">Lists</TabsTrigger>
+              <TabsTrigger value="suppressed">Suppressed</TabsTrigger>
+            </TabsList>
 
-            {contactsLoading ? (
-              <p className="text-muted-foreground text-sm">Loading…</p>
-            ) : contacts.length === 0 ? (
-              <div className="rounded-xl border border-border bg-card shadow-card p-12 text-center">
-                <Users className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
-                <p className="text-muted-foreground text-sm">No contacts in this list yet. Add one manually or import a file.</p>
-              </div>
-            ) : (
-              <div className="rounded-xl border border-border bg-card shadow-card overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-border bg-muted/50">
-                        <th className="text-left px-4 py-3 font-medium text-muted-foreground">Name</th>
-                        <th className="text-left px-4 py-3 font-medium text-muted-foreground">Email</th>
-                        <th className="text-left px-4 py-3 font-medium text-muted-foreground">Phone</th>
-                        {listCustomColumns.map((col) => (
-                          <th key={col} className="text-left px-4 py-3 font-medium text-muted-foreground whitespace-nowrap">{col}</th>
-                        ))}
-                        <th className="text-left px-4 py-3 font-medium text-muted-foreground whitespace-nowrap">Last contacted</th>
-                        <th className="text-right px-4 py-3 font-medium text-muted-foreground">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {contacts.map((c) => {
-                        const cf = (c.custom_fields as Record<string, string> | null) ?? {};
-                        const lc = (lastContacted as Record<string, string>)[c.id];
-                        return (
-                          <tr key={c.id} className="border-b border-border last:border-0 hover:bg-muted/30">
-                            <td className="px-4 py-3">{[c.first_name, c.last_name].filter(Boolean).join(" ") || "—"}</td>
-                            <td className="px-4 py-3 text-muted-foreground">{c.email || "—"}</td>
-                            <td className="px-4 py-3 text-muted-foreground">{c.phone || "—"}</td>
-                            {listCustomColumns.map((col) => (
-                              <td key={col} className="px-4 py-3 text-muted-foreground">{cf[col] || "—"}</td>
+            <TabsContent value="lists">
+              {listsLoading ? (
+                <p className="text-muted-foreground text-sm">Loading…</p>
+              ) : lists.length === 0 ? (
+                <div className="rounded-xl border border-border bg-card shadow-card p-12 text-center">
+                  <Users className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+                  <p className="text-muted-foreground text-sm mb-4">No contact lists yet. Create your first one to start importing contacts.</p>
+                </div>
+              ) : (
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {lists.map((list) => {
+                    const cols: string[] = Array.isArray((list as any)?.columns) ? (list as any).columns : [];
+                    return (
+                      <div
+                        key={list.id}
+                        className="rounded-xl border border-border bg-card p-5 shadow-card hover:shadow-elevated transition-all cursor-pointer group"
+                        onClick={() => setSelectedList(list.id)}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <h3 className="font-semibold">{list.name}</h3>
+                            {list.description && <p className="text-sm text-muted-foreground mt-1">{list.description}</p>}
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="opacity-0 group-hover:opacity-100 transition-opacity text-destructive"
+                            onClick={(e) => { e.stopPropagation(); deleteList.mutate(list.id); }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                        {cols.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {cols.slice(0, 5).map((col) => (
+                              <Badge key={col} variant="secondary" className="text-xs font-mono">
+                                {`{{${col}}}`}
+                              </Badge>
                             ))}
-                            <td className="px-4 py-3 text-muted-foreground whitespace-nowrap text-xs">
-                              {lc ? new Date(lc).toLocaleString() : <span className="text-muted-foreground/50">—</span>}
+                            {cols.length > 5 && (
+                              <Badge variant="outline" className="text-xs">+{cols.length - 5} more</Badge>
+                            )}
+                          </div>
+                        )}
+                        <p className="text-xs text-muted-foreground mt-3">Created {new Date(list.created_at).toLocaleDateString()}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="suppressed">
+              {suppressedLoading ? (
+                <p className="text-muted-foreground text-sm">Loading…</p>
+              ) : suppressedEmails.length === 0 ? (
+                <div className="rounded-xl border border-border bg-card shadow-card p-12 text-center">
+                  <ShieldX className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+                  <p className="text-muted-foreground text-sm">No suppressed emails yet.</p>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-border bg-card shadow-card overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border bg-muted/50">
+                          <th className="text-left px-4 py-3 font-medium text-muted-foreground">Email</th>
+                          <th className="text-left px-4 py-3 font-medium text-muted-foreground">Reason</th>
+                          <th className="text-left px-4 py-3 font-medium text-muted-foreground">Added</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {suppressedEmails.map((item) => (
+                          <tr key={item.id} className="border-b border-border last:border-0 hover:bg-muted/30">
+                            <td className="px-4 py-3">{item.email}</td>
+                            <td className="px-4 py-3">
+                              <Badge variant="secondary">{item.reason || "suppressed"}</Badge>
                             </td>
-                            <td className="px-4 py-3 text-right">
-                              <Button variant="ghost" size="sm" className="text-destructive" onClick={() => deleteContact.mutate(c.id)}>
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </Button>
+                            <td className="px-4 py-3 text-muted-foreground whitespace-nowrap text-xs">
+                              {new Date(item.created_at).toLocaleString()}
                             </td>
                           </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
+              )}
+            </TabsContent>
+          </Tabs>
+        </>
+      ) : (
+        <>
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <button onClick={() => setSelectedList(null)} className="text-sm text-muted-foreground hover:text-foreground mb-1 flex items-center gap-1">
+                <ArrowLeft className="h-3 w-3" /> Back to lists
+              </button>
+              <h1 className="text-2xl font-bold tracking-tight">{selectedListData?.name}</h1>
+              {selectedListData?.description && <p className="text-muted-foreground text-sm mt-1">{selectedListData.description}</p>}
+              {listCustomColumns.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {listCustomColumns.map((col) => (
+                    <Badge key={col} variant="secondary" className="text-xs font-mono">
+                      {`{{${col}}}`}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setImportDialogOpen(true)}>
+                <Upload className="h-4 w-4 mr-1.5" /> Import File
+              </Button>
+              <Dialog open={contactDialogOpen} onOpenChange={setContactDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button size="sm" className="gradient-primary border-0 text-primary-foreground hover:opacity-90">
+                    <Plus className="h-4 w-4 mr-1.5" /> Add Contact
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Add Contact</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-4 pt-2">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label>First Name</Label>
+                        <Input value={contactForm.first_name} onChange={(e) => setContactForm((f) => ({ ...f, first_name: e.target.value }))} />
+                      </div>
+                      <div>
+                        <Label>Last Name</Label>
+                        <Input value={contactForm.last_name} onChange={(e) => setContactForm((f) => ({ ...f, last_name: e.target.value }))} />
+                      </div>
+                    </div>
+                    <div>
+                      <Label>Email</Label>
+                      <Input type="email" value={contactForm.email} onChange={(e) => setContactForm((f) => ({ ...f, email: e.target.value }))} />
+                    </div>
+                    <div>
+                      <Label>Phone</Label>
+                      <Input value={contactForm.phone} onChange={(e) => setContactForm((f) => ({ ...f, phone: e.target.value }))} />
+                    </div>
+                    <Button onClick={() => addContact.mutate()} disabled={(!contactForm.email && !contactForm.phone) || addContact.isPending} className="w-full">
+                      {addContact.isPending ? "Adding…" : "Add Contact"}
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
+          </div>
+
+          <FileImportDialog
+            open={importDialogOpen}
+            onOpenChange={setImportDialogOpen}
+            onImport={handleFileImport}
+            importing={importing}
+            existingColumns={listCustomColumns}
+          />
+
+          {contactsLoading ? (
+            <p className="text-muted-foreground text-sm">Loading…</p>
+          ) : contacts.length === 0 ? (
+            <div className="rounded-xl border border-border bg-card shadow-card p-12 text-center">
+              <Users className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+              <p className="text-muted-foreground text-sm">No contacts in this list yet. Add one manually or import a file.</p>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-border bg-card shadow-card overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/50">
+                      <th className="text-left px-4 py-3 font-medium text-muted-foreground">Name</th>
+                      <th className="text-left px-4 py-3 font-medium text-muted-foreground">Email</th>
+                      <th className="text-left px-4 py-3 font-medium text-muted-foreground">Phone</th>
+                      {listCustomColumns.map((col) => (
+                        <th key={col} className="text-left px-4 py-3 font-medium text-muted-foreground whitespace-nowrap">{col}</th>
+                      ))}
+                      <th className="text-left px-4 py-3 font-medium text-muted-foreground whitespace-nowrap">Status</th>
+                      <th className="text-left px-4 py-3 font-medium text-muted-foreground whitespace-nowrap">Last contacted</th>
+                      <th className="text-right px-4 py-3 font-medium text-muted-foreground">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {contacts.map((c) => {
+                      const cf = (c.custom_fields as Record<string, string> | null) ?? {};
+                      const lc = (lastContacted as Record<string, string>)[c.id];
+                      const isSuppressed = !!c.email && suppressedSet.has(c.email.toLowerCase());
+                      return (
+                        <tr key={c.id} className="border-b border-border last:border-0 hover:bg-muted/30">
+                          <td className="px-4 py-3">{[c.first_name, c.last_name].filter(Boolean).join(" ") || "—"}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{c.email || "—"}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{c.phone || "—"}</td>
+                          {listCustomColumns.map((col) => (
+                            <td key={col} className="px-4 py-3 text-muted-foreground">{cf[col] || "—"}</td>
+                          ))}
+                          <td className="px-4 py-3">
+                            {isSuppressed ? <Badge variant="secondary">Suppressed</Badge> : <span className="text-muted-foreground/50">—</span>}
+                          </td>
+                          <td className="px-4 py-3 text-muted-foreground whitespace-nowrap text-xs">
+                            {lc ? new Date(lc).toLocaleString() : <span className="text-muted-foreground/50">—</span>}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <Button variant="ghost" size="sm" className="text-destructive" onClick={() => deleteContact.mutate(c.id)}>
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-            )}
-          </>
-        )}
+            </div>
+          )}
+        </>
+      )}
     </>
   );
 };

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -9,49 +9,66 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as strin
 
 type State = "loading" | "valid" | "already" | "invalid" | "submitting" | "done" | "error";
 
+type UnsubscribeResponse = {
+  valid?: boolean;
+  success?: boolean;
+  reason?: string;
+  error?: string;
+};
+
 const Unsubscribe = () => {
   const [params] = useSearchParams();
   const token = params.get("token");
   const [state, setState] = useState<State>("loading");
   const [errorMsg, setErrorMsg] = useState<string>("");
 
+  const requestHeaders = useMemo(
+    () => ({
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      "Content-Type": "application/json",
+    }),
+    []
+  );
+
   useEffect(() => {
     if (!token) {
       setState("invalid");
       return;
     }
+
     (async () => {
       try {
         const res = await fetch(
           `${SUPABASE_URL}/functions/v1/handle-email-unsubscribe?token=${encodeURIComponent(token)}`,
-          { headers: { apikey: SUPABASE_ANON_KEY } }
+          { headers: requestHeaders }
         );
-        const data = await res.json();
+        const data = (await res.json()) as UnsubscribeResponse;
+
         if (data.valid) setState("valid");
         else if (data.reason === "already_unsubscribed") setState("already");
-        else setState("invalid");
+        else if (data.error) {
+          setErrorMsg(data.error);
+          setState("error");
+        } else setState("invalid");
       } catch {
+        setErrorMsg("We couldn't validate this unsubscribe link.");
         setState("error");
       }
     })();
-  }, [token]);
+  }, [requestHeaders, token]);
 
   const confirm = async () => {
     if (!token) return;
     setState("submitting");
     try {
-      const res = await fetch(
-        `${SUPABASE_URL}/functions/v1/handle-email-unsubscribe`,
-        {
-          method: "POST",
-          headers: {
-            apikey: SUPABASE_ANON_KEY,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ token }),
-        }
-      );
-      const data = await res.json();
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/handle-email-unsubscribe`, {
+        method: "POST",
+        headers: requestHeaders,
+        body: JSON.stringify({ token }),
+      });
+      const data = (await res.json()) as UnsubscribeResponse;
+
       if (data.success) setState("done");
       else if (data.reason === "already_unsubscribed") setState("already");
       else {
@@ -59,6 +76,7 @@ const Unsubscribe = () => {
         setState("error");
       }
     } catch {
+      setErrorMsg("We couldn't complete your unsubscribe right now.");
       setState("error");
     }
   };
