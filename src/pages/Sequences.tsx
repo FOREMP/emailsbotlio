@@ -153,7 +153,12 @@ const Sequences = () => {
             <h1 className="text-2xl font-bold tracking-tight">Sequences</h1>
             <p className="text-muted-foreground text-sm mt-1">Build multi-step outreach campaigns.</p>
           </div>
-          <Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" /> New Sequence</Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => runNow.mutate()} disabled={runNow.isPending}>
+              <Zap className="h-4 w-4 mr-1.5" /> {runNow.isPending ? "Running…" : "Run now"}
+            </Button>
+            <Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" /> New Sequence</Button>
+          </div>
         </div>
 
         <div className="rounded-xl border border-border bg-card shadow-card overflow-hidden">
@@ -172,7 +177,7 @@ const Sequences = () => {
                   <TableHead>Status</TableHead>
                   <TableHead>Steps</TableHead>
                   <TableHead>List</TableHead>
-                  <TableHead>Enrolled</TableHead>
+                  <TableHead>Health</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
