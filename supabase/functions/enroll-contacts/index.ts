@@ -65,22 +65,47 @@ Deno.serve(async (req) => {
       supabase.from("sequence_edges").select("source_node_id, target_node_id").eq("sequence_id", sequenceId),
     ]);
 
-    const triggers = (allNodes ?? []).filter((n) => n.node_type === "trigger");
-    // Prefer a trigger that has an outgoing edge (the "real" wired one)
-    const trigger =
-      triggers.find((t) => (allEdges ?? []).some((e) => e.source_node_id === t.id)) ??
-      triggers[0] ?? null;
+    const nodes = allNodes ?? [];
+    const edges = allEdges ?? [];
 
-    if (!trigger) {
-      return new Response(JSON.stringify({ error: "Sequence has no trigger node" }), {
+    if (nodes.length === 0) {
+      return new Response(JSON.stringify({ error: "Sequence has no nodes" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const triggerHasNext = (allEdges ?? []).some((e) => e.source_node_id === trigger.id);
+    // Prefer an explicit trigger node, but fall back to the entry node
+    // (any node with no incoming edges that has at least one outgoing edge,
+    // or — if the graph is a single chain — just the first node in the chain).
+    const triggers = nodes.filter((n) => n.node_type === "trigger");
+    let trigger =
+      triggers.find((t) => edges.some((e) => e.source_node_id === t.id)) ??
+      triggers[0] ?? null;
+
+    if (!trigger) {
+      const targetIds = new Set(edges.map((e) => e.target_node_id));
+      const sourceIds = new Set(edges.map((e) => e.source_node_id));
+      // entry = no incoming edges AND has outgoing edges (or is the only node)
+      const entry =
+        nodes.find((n) => !targetIds.has(n.id) && sourceIds.has(n.id)) ??
+        nodes.find((n) => !targetIds.has(n.id)) ??
+        nodes[0];
+      trigger = entry;
+    }
+
+    if (!trigger) {
+      return new Response(JSON.stringify({ error: "Sequence has no entry node" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const triggerHasNext =
+      edges.some((e) => e.source_node_id === trigger.id) ||
+      ["send_email", "end"].includes(trigger.node_type);
     if (!triggerHasNext) {
-      return new Response(JSON.stringify({ error: "Trigger node is not connected to any next step" }), {
+      return new Response(JSON.stringify({ error: "Entry node is not connected to any next step" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
