@@ -195,7 +195,24 @@ const Sequences = () => {
                       </TableCell>
                       <TableCell>{stepCounts[s.id] ?? 0}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{list?.name ?? "—"}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{(enrollStats as any)[s.id]?.total ?? 0}</TableCell>
+                      <TableCell>
+                        {(() => {
+                          const st = (enrollStats as any)[s.id];
+                          if (!st || st.total === 0) return <span className="text-muted-foreground text-sm">0</span>;
+                          return (
+                            <div className="flex items-center gap-2 text-xs">
+                              <span title="active" className="text-accent font-medium">{st.active} active</span>
+                              {st.completed > 0 && <span title="completed" className="text-muted-foreground">{st.completed} done</span>}
+                              {st.failed > 0 && (
+                                <span title={st.lastError ?? "failed"} className="text-destructive flex items-center gap-0.5 font-medium">
+                                  <AlertCircle className="h-3 w-3" />{st.failed}
+                                </span>
+                              )}
+                              {st.unsubscribed > 0 && <span title="unsubscribed" className="text-yellow-600">{st.unsubscribed} unsub</span>}
+                            </div>
+                          );
+                        })()}
+                      </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {new Date(s.created_at).toLocaleDateString()}
                       </TableCell>
