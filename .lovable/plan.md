@@ -1,78 +1,62 @@
 
+# Fix Sequence Crashes Between Throttle, Sender Caps, and Wait Nodes
 
-## Plan: Clean up AI prompt, fix footer formatting, add Domains page
+## The Problem
 
-### 1. Strip the internal copywriter prompt (use only user's prompt)
-**File:** `supabase/functions/generate-email/index.ts`
+When publishing a sequence with multiple emails separated by Wait nodes and limited by Throttle nodes + per-sender daily caps, the second email sometimes never sends. The whole enrollment effectively "crashes" silently — no error surfaces to the UI, and the contact is stuck mid-sequence.
 
-Currently the function injects a `system` prompt ("You are an expert cold-outreach copywriter…") AND wraps the user's input with `Contact data:\n…\n\nWriting brief:\n…\n\nReturn JSON…`. This contaminates the user's intent.
+## Root Causes Found in `run-sequences`
 
-Change to: pass the user's prompt **verbatim** as the only instruction. Keep just a minimal JSON-format instruction so we can still parse the response:
-- `system`: `Return ONLY a JSON object: {"subject":"...","body":"..."}. No other text.`
-- `user`: the raw `prompt` from the request, plus the contact JSON appended only if the prompt references variables. Subject hint stays optional.
+1. **Throttle counts are spent on failures.** The throttle node inserts a `throttle_pass` row and advances *before* the email is actually attempted. If the next step (send_email) fails, defers to a sender cap, or errors, that throttle slot is gone for the day. After a few failures the daily quota is fully "used" with zero emails sent.
 
-Also: **strip any "Best regards / signature / footer" lines the model returns** before saving, since the send function appends its own footer. Use a regex that trims trailing `Best regards`, `Vänliga hälsningar`, `Med vänlig hälsning`, `Mvh`, signatures, and brand caps lines.
+2. **Sender daily-cap defers are silent.** When all senders are at their cap, the enrollment is pushed to next UTC midnight with no UI feedback. Looks like a crash.
 
-### 2. Fix footer formatting (no double blank lines)
-**File:** `supabase/functions/send-cold-email/index.ts` — `appendFooter()`
+3. **Send failures back off only 5 minutes but never retry-bound.** Repeated transient failures from `send-cold-email` (no verified domain, generate-email failure, 502s) loop indefinitely. There is no failure counter and no terminal "give up" state — and they keep eating throttle slots upstream.
 
-Current output:
-```
-{body}
+4. **Wait → Throttle → Send chain has no atomic step.** The runner processes one node per tick. After Wait expires, the next tick hits Throttle (consumes slot), the tick after hits Send. If Send fails, throttle slot already burned. The two operations are not coupled.
 
-Vänliga hälsningar,
-King Mongenen   ← from AI body
+5. **`last_sent_at` is set to `nowIso` after send; the next-tick selection prefers rows where `last_sent_at IS NOT NULL`.** Fine in isolation, but combined with the 5-minute back-off on failure, a failing enrollment monopolises Pass A and starves new enrollments.
 
-Best regards,         ← appended
+6. **No per-enrollment error counter / max attempts.** `last_error` is overwritten each tick; nobody knows how many times this has retried.
 
-Eric Wahlbom
+## The Fix
 
-FOREMP
-```
+### 1. Throttle node: count *successful sends downstream*, not passes
+Change the throttle node to look at actual `email_sent` activities from `contact_activity` for this sequence on the same day, instead of inserting a `throttle_pass` row up front. The slot is only "consumed" when an email actually went out. This removes the desync between throttle accounting and reality.
 
-Two problems:
-- AI already wrote a sign-off ("Vänliga hälsningar, King Mongenen") and we stack a second one on top.
-- Appended footer uses double newlines between every line → visually loose.
+### 2. Couple throttle + send into one tick
+When the runner hits a `throttle` node and the next downstream node is `send_email` (directly, or after a fixed pass-through), evaluate the throttle and immediately attempt the send in the same iteration. If the send fails or the sender cap blocks, *do not* count the throttle slot.
 
-Fix:
-- Before appending, detect & strip any existing trailing sign-off block in the body (regex matching `Best regards|Vänliga hälsningar|Med vänlig hälsning|Mvh|Sincerely|Cheers` followed by 1–3 lines, to end of string).
-- New footer format (single blank line between body and footer, single newlines inside it):
-  ```
-  {body trimmed}
+### 3. Add `attempt_count` and terminal failure on enrollments
+Add an `attempt_count` integer column on `enrollments`. Increment on each send failure. After N attempts (e.g. 5) mark `status = 'failed'` with a clear `last_error`. This stops infinite loops and surfaces real failures to the UI.
 
-  Best regards,
-  {sender from_name}
-  {BRAND}
-  ```
-- Update `plainToHtml` so it preserves these single newlines as `<br>` (currently `white-space:pre-wrap` already does, so just trim the body cleanly).
+### 4. Surface sender-cap defers as a visible state
+When all senders are at the daily cap, set a new `enrollments.status = 'waiting_capacity'` (or keep `active` but expose `deferred_at` + `last_error` clearly in the Sequences UI). Add a small banner/badge in the sequence detail page: "X contacts paused — sender daily cap reached, will resume tomorrow."
 
-### 3. New "Domains" page so user can inspect verification status
-**Files:**
-- New: `src/pages/Domains.tsx`
-- `src/App.tsx` — add `/domains` route
-- `src/components/AppLayout.tsx` (or `Header.tsx`) — add nav link
+### 5. Reset `attempt_count` and clear `deferred_at` after a successful send
+So that natural progress through Wait → Send → Wait → Send doesn't carry stale failure state forward.
 
-Page contents (read-only, no editing — `sending_domains` has no INSERT/UPDATE RLS for end users):
-- Table of all 6 domains with columns: **Domain**, **Brand**, **Sender subdomain** (e.g. `notify.foremp.one`), **Reply-to**, **Active**, **Verified**.
-- Verified column shows green "Verified — can send" badge or red "Not verified — cannot send" badge.
-- For unverified rows, an info card below lists the 5 unverified domains and explains: each must be added in **Cloud → Emails → Manage Domains** and DNS-delegated to Lovable's nameservers. Once Lovable shows the domain as active, an admin flips `is_verified = true`.
-- Currently 1 verified (`foremp.one`) and 5 unverified (`botlio.email`, `botlio.eu`, `botlio.io`, `foremp.email`, `foremp.eu`).
+### 6. Fix Pass A query
+The `.or('last_sent_at.not.is.null,deferred_at.not.is.null')` is layered on top of another `.or()` for `next_send_at`, which produces an OR-of-ORs that may not be what we want. Rewrite into a single explicit filter so follow-ups are deterministically prioritised.
 
-### 4. Files touched
-- `supabase/functions/generate-email/index.ts` — strip internal copywriter prompt + scrub model sign-offs
-- `supabase/functions/send-cold-email/index.ts` — strip body sign-off, tighten footer spacing
-- `src/pages/Domains.tsx` — new
-- `src/App.tsx` — register route
-- `src/components/AppLayout.tsx` — nav link to Domains
+### 7. Add structured logging at every decision point
+Each defer/skip/failure logs `enr_id`, `node_type`, `reason`, `next_send_at`. Makes future debugging instant from the edge logs.
 
-### Validation
-- Create AI-mode `send_email` node with prompt `"Write a 2-sentence email in Swedish to {{first_name}} about discounting their Foremp BA subscription. Subject: short hook."` and verify the sent email reflects ONLY that brief — no generic "expert cold outreach" tone.
-- Confirm the footer reads exactly:
-  ```
-  Best regards,
-  Eric Wahlbom
-  FOREMP
-  ```
-  (one blank line between body and `Best regards`, single newlines inside).
-- Open `/domains`, see all 6 domains with correct verified/unverified badges.
+## What the User Will See
 
+- Publishing a sequence with throttle + wait + multiple sends now reliably delivers email 2, 3, … even when senders are tight.
+- Sequence detail page shows a clear count of contacts in three buckets: **Active**, **Paused (waiting capacity)**, **Failed**.
+- Hovering "Paused" tells you which sender(s) hit their cap and when they resume.
+- Failed enrollments show the actual error after 5 attempts instead of silently looping.
+
+## Technical Implementation Summary
+
+- **Migration**: add `attempt_count integer NOT NULL DEFAULT 0` to `enrollments`; allow `status = 'waiting_capacity'`.
+- **`run-sequences/index.ts`**: rewrite throttle branch to count `email_sent` activities; couple throttle → send in one tick; add attempt counter and terminal-fail logic; reset counters on success; rewrite Pass A query.
+- **`Sequences.tsx`** (and/or sequence detail page): show Paused / Failed counts and reason tooltips.
+- **Redeploy** `run-sequences` after edits.
+
+## Out of Scope (Confirm If You Want These Too)
+
+- Switching to a durable queue (pgmq) for sends — bigger refactor; current edge-function approach is fine once the above bugs are fixed.
+- Per-sequence concurrency caps independent of per-sender caps.
