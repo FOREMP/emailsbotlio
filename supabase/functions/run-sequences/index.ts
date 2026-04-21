@@ -171,7 +171,10 @@ Deno.serve(async (req) => {
       const cfg = currentNode.config ?? {}
       console.log(`[enr ${enr.id}] processing ${currentNode.node_type}(${currentNode.id})`)
 
-      // Daily-limit (throttle) node: count today's send_email-after-this-node activity
+      // Daily-limit (throttle) node: count *actual sends* downstream from this throttle
+      // today. We no longer pre-mark a "throttle_pass" before the send, because send
+      // failures and sender-cap defers used to silently consume slots. The slot is only
+      // consumed when an email_sent activity exists.
       if (currentNode.node_type === 'throttle') {
         const max = Number(cfg.max_per_day ?? 50)
         const startOfDay = new Date(); startOfDay.setUTCHours(0, 0, 0, 0)
@@ -179,30 +182,25 @@ Deno.serve(async (req) => {
           .from('contact_activity')
           .select('id', { count: 'exact', head: true })
           .eq('sequence_id', enr.sequence_id)
-          .eq('node_id', currentNode.id)
-          .eq('activity_type', 'throttle_pass')
+          .eq('activity_type', 'email_sent')
           .gte('created_at', startOfDay.toISOString())
         if ((count ?? 0) >= max) {
-          // Defer this enrollment to next UTC midnight
           const tomorrow = new Date(startOfDay.getTime() + 24 * 3600_000)
-          await supabase.from('enrollments').update({ next_send_at: tomorrow.toISOString() }).eq('id', enr.id)
-          console.log(`[enr ${enr.id}] throttle full (${count}/${max}) → deferred to ${tomorrow.toISOString()}`)
+          await supabase.from('enrollments').update({
+            next_send_at: tomorrow.toISOString(),
+            status: 'waiting_capacity',
+            last_error: `daily send cap reached (${count}/${max}) — resumes ${tomorrow.toISOString().slice(0, 10)}`,
+          }).eq('id', enr.id)
+          console.log(`[enr ${enr.id}] throttle full (${count}/${max}) → waiting_capacity until ${tomorrow.toISOString()}`)
           continue
         }
-        // Mark this pass and advance
-        await supabase.from('contact_activity').insert({
-          user_id: enr.user_id,
-          contact_id: enr.contact_id,
-          sequence_id: enr.sequence_id,
-          node_id: currentNode.id,
-          activity_type: 'throttle_pass',
-          metadata: { used: (count ?? 0) + 1, max },
-        })
+        // Capacity available — advance to the next node WITHOUT recording anything.
         const next = (edges ?? []).find((e: any) => e.source_node_id === currentNode.id)
         if (!next) { await supabase.from('enrollments').update({ status: 'completed' }).eq('id', enr.id); continue }
         await supabase.from('enrollments').update({
           current_node_id: next.target_node_id,
           next_send_at: nowIso,
+          status: 'active',
         }).eq('id', enr.id)
         advanced++
         continue
