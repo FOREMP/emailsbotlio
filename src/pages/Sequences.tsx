@@ -71,11 +71,12 @@ const Sequences = () => {
       const { data } = await supabase
         .from("enrollments")
         .select("sequence_id, status, last_error");
-      const stats: Record<string, { total: number; active: number; completed: number; failed: number; unsubscribed: number; lastError?: string | null }> = {};
+      const stats: Record<string, { total: number; active: number; waiting: number; completed: number; failed: number; unsubscribed: number; lastError?: string | null; waitingReason?: string | null }> = {};
       (data ?? []).forEach((r: any) => {
-        const s = stats[r.sequence_id] ??= { total: 0, active: 0, completed: 0, failed: 0, unsubscribed: 0 };
+        const s = stats[r.sequence_id] ??= { total: 0, active: 0, waiting: 0, completed: 0, failed: 0, unsubscribed: 0 };
         s.total++;
         if (r.status === "active") s.active++;
+        else if (r.status === "waiting_capacity") { s.waiting++; if (r.last_error && !s.waitingReason) s.waitingReason = r.last_error; }
         else if (r.status === "completed") s.completed++;
         else if (r.status === "failed") { s.failed++; if (r.last_error && !s.lastError) s.lastError = r.last_error; }
         else if (r.status === "unsubscribed") s.unsubscribed++;
@@ -224,8 +225,13 @@ const Sequences = () => {
                           const st = (enrollStats as any)[s.id];
                           if (!st || st.total === 0) return <span className="text-muted-foreground text-sm">0</span>;
                           return (
-                            <div className="flex items-center gap-2 text-xs">
+                            <div className="flex items-center gap-2 text-xs flex-wrap">
                               <span title="active" className="text-accent font-medium">{st.active} active</span>
+                              {st.waiting > 0 && (
+                                <span title={st.waitingReason ?? "waiting for sender capacity — resumes tomorrow"} className="text-yellow-600 font-medium">
+                                  {st.waiting} paused
+                                </span>
+                              )}
                               {st.completed > 0 && <span title="completed" className="text-muted-foreground">{st.completed} done</span>}
                               {st.failed > 0 && (
                                 <span title={st.lastError ?? "failed"} className="text-destructive flex items-center gap-0.5 font-medium">

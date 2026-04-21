@@ -40,17 +40,15 @@ Deno.serve(async (req) => {
     .eq('is_verified', true)
   const verifiedDomains = new Set((verifiedDomainRows ?? []).map((d: any) => d.domain as string))
 
-  // Two-pass query: prioritise follow-ups (last_sent_at NOT NULL) and previously-deferred
-  // enrollments before brand-new ones, so yesterday's leftovers and mid-sequence sends
-  // drain first.
+  // Pick due enrollments (active OR previously waiting on capacity).
+  // Prioritise follow-ups + capacity-waiters first, then brand-new enrollments.
   const passA = await supabase
     .from('enrollments')
     .select('*')
-    .eq('status', 'active')
+    .in('status', ['active', 'waiting_capacity'])
     .or(`next_send_at.is.null,next_send_at.lte.${nowIso}`)
-    .or('last_sent_at.not.is.null,deferred_at.not.is.null')
-    .order('deferred_at', { ascending: true, nullsFirst: false })
-    .order('last_sent_at', { ascending: true, nullsFirst: false })
+    .not('last_sent_at', 'is', null)
+    .order('last_sent_at', { ascending: true })
     .limit(MAX_PER_RUN)
   if (passA.error) {
     console.error('[run-sequences] passA failed', passA.error.message)
@@ -63,10 +61,9 @@ Deno.serve(async (req) => {
     const passB = await supabase
       .from('enrollments')
       .select('*')
-      .eq('status', 'active')
+      .in('status', ['active', 'waiting_capacity'])
       .or(`next_send_at.is.null,next_send_at.lte.${nowIso}`)
       .is('last_sent_at', null)
-      .is('deferred_at', null)
       .order('created_at', { ascending: true })
       .limit(remaining)
     if (passB.error) {
@@ -78,6 +75,8 @@ Deno.serve(async (req) => {
 
   const due = [...(passA.data ?? []), ...passBData]
   console.log(`[run-sequences] picked ${due.length} due (followups=${passA.data?.length ?? 0}, new=${passBData.length})`)
+
+  const MAX_ATTEMPTS = 5
 
   let processed = 0
   let advanced = 0
@@ -172,7 +171,10 @@ Deno.serve(async (req) => {
       const cfg = currentNode.config ?? {}
       console.log(`[enr ${enr.id}] processing ${currentNode.node_type}(${currentNode.id})`)
 
-      // Daily-limit (throttle) node: count today's send_email-after-this-node activity
+      // Daily-limit (throttle) node: count *actual sends* downstream from this throttle
+      // today. We no longer pre-mark a "throttle_pass" before the send, because send
+      // failures and sender-cap defers used to silently consume slots. The slot is only
+      // consumed when an email_sent activity exists.
       if (currentNode.node_type === 'throttle') {
         const max = Number(cfg.max_per_day ?? 50)
         const startOfDay = new Date(); startOfDay.setUTCHours(0, 0, 0, 0)
@@ -180,30 +182,25 @@ Deno.serve(async (req) => {
           .from('contact_activity')
           .select('id', { count: 'exact', head: true })
           .eq('sequence_id', enr.sequence_id)
-          .eq('node_id', currentNode.id)
-          .eq('activity_type', 'throttle_pass')
+          .eq('activity_type', 'email_sent')
           .gte('created_at', startOfDay.toISOString())
         if ((count ?? 0) >= max) {
-          // Defer this enrollment to next UTC midnight
           const tomorrow = new Date(startOfDay.getTime() + 24 * 3600_000)
-          await supabase.from('enrollments').update({ next_send_at: tomorrow.toISOString() }).eq('id', enr.id)
-          console.log(`[enr ${enr.id}] throttle full (${count}/${max}) → deferred to ${tomorrow.toISOString()}`)
+          await supabase.from('enrollments').update({
+            next_send_at: tomorrow.toISOString(),
+            status: 'waiting_capacity',
+            last_error: `daily send cap reached (${count}/${max}) — resumes ${tomorrow.toISOString().slice(0, 10)}`,
+          }).eq('id', enr.id)
+          console.log(`[enr ${enr.id}] throttle full (${count}/${max}) → waiting_capacity until ${tomorrow.toISOString()}`)
           continue
         }
-        // Mark this pass and advance
-        await supabase.from('contact_activity').insert({
-          user_id: enr.user_id,
-          contact_id: enr.contact_id,
-          sequence_id: enr.sequence_id,
-          node_id: currentNode.id,
-          activity_type: 'throttle_pass',
-          metadata: { used: (count ?? 0) + 1, max },
-        })
+        // Capacity available — advance to the next node WITHOUT recording anything.
         const next = (edges ?? []).find((e: any) => e.source_node_id === currentNode.id)
         if (!next) { await supabase.from('enrollments').update({ status: 'completed' }).eq('id', enr.id); continue }
         await supabase.from('enrollments').update({
           current_node_id: next.target_node_id,
           next_send_at: nowIso,
+          status: 'active',
         }).eq('id', enr.id)
         advanced++
         continue
@@ -284,16 +281,17 @@ Deno.serve(async (req) => {
           }
         }
         if (!preSenderId) {
-          // Sender daily cap is the hard ceiling — defer to tomorrow and mark deferred_at
-          // so this enrollment is processed FIRST on tomorrow's tick (Pass A).
+          // All eligible senders at daily cap — defer to next UTC midnight and surface
+          // it as a visible "waiting_capacity" status so the UI can show it.
           const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
           await supabase.from('enrollments').update({
             next_send_at: tomorrow.toISOString(),
             deferred_at: nowIso,
-            last_error: 'all eligible senders at daily cap — queued for tomorrow',
+            status: 'waiting_capacity',
+            last_error: 'all eligible senders at daily cap — resumes tomorrow',
             error_at: nowIso,
           }).eq('id', enr.id)
-          console.log(`[enr ${enr.id}] all senders at daily cap → deferred to ${tomorrow.toISOString()}`)
+          console.log(`[enr ${enr.id}] all senders at daily cap → waiting_capacity until ${tomorrow.toISOString()}`)
           continue
         }
         if (cfg.sender_strategy === 'specific') {
@@ -303,10 +301,11 @@ Deno.serve(async (req) => {
             await supabase.from('enrollments').update({
               next_send_at: tomorrow.toISOString(),
               deferred_at: nowIso,
-              last_error: 'specific sender at daily cap — queued for tomorrow',
+              status: 'waiting_capacity',
+              last_error: 'specific sender at daily cap — resumes tomorrow',
               error_at: nowIso,
             }).eq('id', enr.id)
-            console.log(`[enr ${enr.id}] specific sender at daily cap → deferred`)
+            console.log(`[enr ${enr.id}] specific sender at daily cap → waiting_capacity`)
             continue
           }
         }
@@ -329,11 +328,27 @@ Deno.serve(async (req) => {
         })
         if (r.error || (r.data as any)?.error) {
           const msg = (r.data as any)?.error || r.error?.message || 'unknown send error'
-          console.error(`[enr ${enr.id}] send-cold-email failed: ${msg}`)
-          errors.push({ enr: enr.id, err: msg })
-          await supabase.from('enrollments').update({
-            next_send_at: new Date(Date.now() + 5 * 60_000).toISOString(),
-          }).eq('id', enr.id)
+          const nextAttempt = (enr.attempt_count ?? 0) + 1
+          console.error(`[enr ${enr.id}] send-cold-email failed (attempt ${nextAttempt}/${MAX_ATTEMPTS}): ${msg}`)
+          errors.push({ enr: enr.id, err: msg, attempt: nextAttempt })
+          if (nextAttempt >= MAX_ATTEMPTS) {
+            await supabase.from('enrollments').update({
+              status: 'failed',
+              attempt_count: nextAttempt,
+              last_error: `send failed after ${MAX_ATTEMPTS} attempts: ${msg}`,
+              error_at: nowIso,
+            }).eq('id', enr.id)
+            failed++
+          } else {
+            // Exponential-ish back-off: 5min, 15min, 45min, 2h, ...
+            const backoffMin = 5 * Math.pow(3, nextAttempt - 1)
+            await supabase.from('enrollments').update({
+              attempt_count: nextAttempt,
+              next_send_at: new Date(Date.now() + backoffMin * 60_000).toISOString(),
+              last_error: msg,
+              error_at: nowIso,
+            }).eq('id', enr.id)
+          }
           continue
         }
         sent++
@@ -341,7 +356,10 @@ Deno.serve(async (req) => {
 
         const next = (edges ?? []).find((e: any) => e.source_node_id === currentNode.id)
         if (!next) {
-          await supabase.from('enrollments').update({ status: 'completed', last_sent_at: nowIso, deferred_at: null }).eq('id', enr.id)
+          await supabase.from('enrollments').update({
+            status: 'completed', last_sent_at: nowIso, deferred_at: null,
+            attempt_count: 0, last_error: null,
+          }).eq('id', enr.id)
           console.log(`[enr ${enr.id}] no next after send → completed`)
           continue
         }
@@ -350,6 +368,9 @@ Deno.serve(async (req) => {
           last_sent_at: nowIso,
           next_send_at: nowIso,
           deferred_at: null,
+          status: 'active',
+          attempt_count: 0,
+          last_error: null,
         }).eq('id', enr.id)
         advanced++
         continue
