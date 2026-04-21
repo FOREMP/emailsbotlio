@@ -40,17 +40,15 @@ Deno.serve(async (req) => {
     .eq('is_verified', true)
   const verifiedDomains = new Set((verifiedDomainRows ?? []).map((d: any) => d.domain as string))
 
-  // Two-pass query: prioritise follow-ups (last_sent_at NOT NULL) and previously-deferred
-  // enrollments before brand-new ones, so yesterday's leftovers and mid-sequence sends
-  // drain first.
+  // Pick due enrollments (active OR previously waiting on capacity).
+  // Prioritise follow-ups + capacity-waiters first, then brand-new enrollments.
   const passA = await supabase
     .from('enrollments')
     .select('*')
-    .eq('status', 'active')
+    .in('status', ['active', 'waiting_capacity'])
     .or(`next_send_at.is.null,next_send_at.lte.${nowIso}`)
-    .or('last_sent_at.not.is.null,deferred_at.not.is.null')
-    .order('deferred_at', { ascending: true, nullsFirst: false })
-    .order('last_sent_at', { ascending: true, nullsFirst: false })
+    .not('last_sent_at', 'is', null)
+    .order('last_sent_at', { ascending: true })
     .limit(MAX_PER_RUN)
   if (passA.error) {
     console.error('[run-sequences] passA failed', passA.error.message)
@@ -63,10 +61,9 @@ Deno.serve(async (req) => {
     const passB = await supabase
       .from('enrollments')
       .select('*')
-      .eq('status', 'active')
+      .in('status', ['active', 'waiting_capacity'])
       .or(`next_send_at.is.null,next_send_at.lte.${nowIso}`)
       .is('last_sent_at', null)
-      .is('deferred_at', null)
       .order('created_at', { ascending: true })
       .limit(remaining)
     if (passB.error) {
@@ -78,6 +75,8 @@ Deno.serve(async (req) => {
 
   const due = [...(passA.data ?? []), ...passBData]
   console.log(`[run-sequences] picked ${due.length} due (followups=${passA.data?.length ?? 0}, new=${passBData.length})`)
+
+  const MAX_ATTEMPTS = 5
 
   let processed = 0
   let advanced = 0
