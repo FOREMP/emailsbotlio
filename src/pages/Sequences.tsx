@@ -225,8 +225,13 @@ const Sequences = () => {
                           const st = (enrollStats as any)[s.id];
                           if (!st || st.total === 0) return <span className="text-muted-foreground text-sm">0</span>;
                           return (
-                            <div className="flex items-center gap-2 text-xs">
+                            <div className="flex items-center gap-2 text-xs flex-wrap">
                               <span title="active" className="text-accent font-medium">{st.active} active</span>
+                              {st.waiting > 0 && (
+                                <span title={st.waitingReason ?? "waiting for sender capacity — resumes tomorrow"} className="text-yellow-600 font-medium">
+                                  {st.waiting} paused
+                                </span>
+                              )}
                               {st.completed > 0 && <span title="completed" className="text-muted-foreground">{st.completed} done</span>}
                               {st.failed > 0 && (
                                 <span title={st.lastError ?? "failed"} className="text-destructive flex items-center gap-0.5 font-medium">
