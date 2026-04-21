@@ -71,11 +71,12 @@ const Sequences = () => {
       const { data } = await supabase
         .from("enrollments")
         .select("sequence_id, status, last_error");
-      const stats: Record<string, { total: number; active: number; completed: number; failed: number; unsubscribed: number; lastError?: string | null }> = {};
+      const stats: Record<string, { total: number; active: number; waiting: number; completed: number; failed: number; unsubscribed: number; lastError?: string | null; waitingReason?: string | null }> = {};
       (data ?? []).forEach((r: any) => {
-        const s = stats[r.sequence_id] ??= { total: 0, active: 0, completed: 0, failed: 0, unsubscribed: 0 };
+        const s = stats[r.sequence_id] ??= { total: 0, active: 0, waiting: 0, completed: 0, failed: 0, unsubscribed: 0 };
         s.total++;
         if (r.status === "active") s.active++;
+        else if (r.status === "waiting_capacity") { s.waiting++; if (r.last_error && !s.waitingReason) s.waitingReason = r.last_error; }
         else if (r.status === "completed") s.completed++;
         else if (r.status === "failed") { s.failed++; if (r.last_error && !s.lastError) s.lastError = r.last_error; }
         else if (r.status === "unsubscribed") s.unsubscribed++;
