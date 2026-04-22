@@ -14,6 +14,7 @@ interface Domain {
   reply_to_email: string;
   is_active: boolean;
   is_verified: boolean;
+  postal_address: string | null;
 }
 
 const Domains = () => {
@@ -33,6 +34,7 @@ const Domains = () => {
   }, []);
 
   const unverified = domains.filter((d) => !d.is_verified);
+  const missingPostal = domains.filter((d) => d.is_verified && d.is_active && !d.postal_address?.trim());
 
   return (
     <div className="space-y-6">
@@ -58,6 +60,7 @@ const Domains = () => {
                   <TableHead>Brand</TableHead>
                   <TableHead>Sender subdomain</TableHead>
                   <TableHead>Reply-to</TableHead>
+                  <TableHead>Postal address</TableHead>
                   <TableHead>Active</TableHead>
                   <TableHead>Status</TableHead>
                 </TableRow>
@@ -71,6 +74,13 @@ const Domains = () => {
                       {d.sender_subdomain}.{d.domain}
                     </TableCell>
                     <TableCell className="text-xs">{d.reply_to_email}</TableCell>
+                    <TableCell className="text-xs">
+                      {d.postal_address?.trim() ? (
+                        <span className="text-muted-foreground">{d.postal_address}</span>
+                      ) : (
+                        <Badge variant="outline" className="text-xs">Not set (GDPR)</Badge>
+                      )}
+                    </TableCell>
                     <TableCell>
                       <Badge variant={d.is_active ? "default" : "secondary"}>
                         {d.is_active ? "Yes" : "No"}
