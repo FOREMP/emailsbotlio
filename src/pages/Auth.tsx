@@ -13,7 +13,10 @@ const Auth = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
+  const [accessCode, setAccessCode] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const SIGNUP_ACCESS_CODE = "FOREMPemail";
   const [confirmationSent, setConfirmationSent] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -29,6 +32,9 @@ const Auth = () => {
 
     try {
       if (isSignUp) {
+        if (accessCode !== SIGNUP_ACCESS_CODE) {
+          throw new Error("Invalid access code. Sign-up is restricted.");
+        }
         const { error } = await supabase.auth.signUp({
           email,
           password,
@@ -134,6 +140,19 @@ const Auth = () => {
               minLength={6}
             />
           </div>
+          {isSignUp && (
+            <div>
+              <label className="text-sm font-medium mb-1.5 block">Access code</label>
+              <Input
+                type="password"
+                placeholder="Required to create an account"
+                value={accessCode}
+                onChange={(e) => setAccessCode(e.target.value)}
+                required
+              />
+              <p className="text-xs text-muted-foreground mt-1">Sign-up is restricted. Ask the team for the access code.</p>
+            </div>
+          )}
           <Button
             type="submit"
             disabled={loading}
