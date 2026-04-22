@@ -420,6 +420,49 @@ const Contacts = () => {
                 </div>
               )}
             </TabsContent>
+
+            <TabsContent value="erasures">
+              <p className="text-xs text-muted-foreground mb-3">
+                Audit log of contacts erased under GDPR's right to be forgotten. Emails are stored
+                as SHA-256 hashes — never as plaintext — so we can prove an erasure happened
+                without keeping the personal data.
+              </p>
+              {erasuresLoading ? (
+                <p className="text-muted-foreground text-sm">Loading…</p>
+              ) : erasures.length === 0 ? (
+                <div className="rounded-xl border border-border bg-card shadow-card p-12 text-center">
+                  <ShieldOff className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+                  <p className="text-muted-foreground text-sm">No erasures recorded yet.</p>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-border bg-card shadow-card overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border bg-muted/50">
+                          <th className="text-left px-4 py-3 font-medium text-muted-foreground">Email hash (SHA-256)</th>
+                          <th className="text-left px-4 py-3 font-medium text-muted-foreground">Reason</th>
+                          <th className="text-left px-4 py-3 font-medium text-muted-foreground">Erased at</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {erasures.map((row) => (
+                          <tr key={row.id} className="border-b border-border last:border-0 hover:bg-muted/30">
+                            <td className="px-4 py-3 font-mono text-xs">{row.email_hash.slice(0, 16)}…</td>
+                            <td className="px-4 py-3">
+                              <Badge variant="secondary">{row.reason || "user_requested"}</Badge>
+                            </td>
+                            <td className="px-4 py-3 text-muted-foreground whitespace-nowrap text-xs">
+                              {new Date(row.erased_at).toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </TabsContent>
           </Tabs>
         </>
       ) : (
@@ -535,9 +578,37 @@ const Contacts = () => {
                             {lc ? new Date(lc).toLocaleString() : <span className="text-muted-foreground/50">—</span>}
                           </td>
                           <td className="px-4 py-3 text-right">
-                            <Button variant="ghost" size="sm" className="text-destructive" onClick={() => deleteContact.mutate(c.id)}>
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
+                            <div className="flex items-center justify-end gap-1">
+                              <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                  <Button variant="ghost" size="sm" className="text-amber-700" title="Erase under GDPR (irreversible — also blocks future contact)">
+                                    <ShieldOff className="h-3.5 w-3.5" />
+                                  </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>Erase this contact (GDPR)?</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                      This deletes the contact, adds {c.email || "their email"} to your
+                                      Do-Not-Contact list, cancels any active enrollments, and records a
+                                      hashed audit row. This action satisfies GDPR Art. 17 (right to be
+                                      forgotten) and cannot be undone.
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                    <AlertDialogAction
+                                      onClick={() => eraseContact.mutate({ id: c.id, email: c.email })}
+                                    >
+                                      Erase permanently
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
+                              <Button variant="ghost" size="sm" className="text-destructive" title="Remove from this list (does not block future contact)" onClick={() => deleteContact.mutate(c.id)}>
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
                           </td>
                         </tr>
                       );
