@@ -313,6 +313,14 @@ Deno.serve(async (req) => {
           }
         }
 
+        // If the previous tick advanced through a throttle, it stamped the throttle id
+        // into last_error as `__pending_throttle:<id>`. Forward it so send-cold-email
+        // tags the email_sent activity for accurate throttle accounting.
+        let pendingThrottleId: string | null = null
+        if (typeof enr.last_error === 'string' && enr.last_error.startsWith('__pending_throttle:')) {
+          pendingThrottleId = enr.last_error.slice('__pending_throttle:'.length) || null
+        }
+
         const r = await supabase.functions.invoke('send-cold-email', {
           body: {
             user_id: enr.user_id,
@@ -322,6 +330,7 @@ Deno.serve(async (req) => {
             sequence_id: enr.sequence_id,
             enrollment_id: enr.id,
             node_id: currentNode.id,
+            throttle_node_id: pendingThrottleId,
             mode: cfg.mode ?? 'ai',
             subject: cfg.subject,
             body: cfg.body,
