@@ -123,6 +123,9 @@ Deno.serve(async (req) => {
       });
     }
 
+    // Optional: bypass cross-sequence "already contacted" skip for this enrollment
+    const allowRecontact = body?.allow_recontact === true;
+
     // Load all contacts in list
     const { data: contacts, error: contactsErr } = await supabase
       .from("contacts")
@@ -142,7 +145,7 @@ Deno.serve(async (req) => {
       ...((supp ?? []).map((d: any) => d.email?.toLowerCase()).filter(Boolean) as string[]),
     ]);
 
-    // Load existing enrollments (any status) for dedup
+    // Load existing enrollments (any status) for dedup within this sequence
     const { data: existing } = await supabase
       .from("enrollments")
       .select("contact_id, status")
@@ -150,16 +153,35 @@ Deno.serve(async (req) => {
       .eq("sequence_id", sequenceId);
     const enrolledSet = new Set((existing ?? []).map((e) => e.contact_id));
 
+    // Cross-sequence dedup: any contact this user has already successfully emailed
+    // (or queued an email to) from ANY sequence is skipped by default. The user can
+    // opt in to re-contact by passing allow_recontact: true.
+    const previouslyContactedSet = new Set<string>();
+    if (!allowRecontact) {
+      const { data: priorSends } = await supabase
+        .from("sent_emails")
+        .select("recipient_email")
+        .eq("user_id", user.id)
+        .in("status", ["sent", "queued"])
+        .limit(50000);
+      for (const row of priorSends ?? []) {
+        if (row.recipient_email) previouslyContactedSet.add(row.recipient_email.toLowerCase());
+      }
+    }
+
     let suppressed = 0;
     let alreadyEnrolled = 0;
+    let alreadyContacted = 0;
     let noEmail = 0;
     const nowIso = new Date().toISOString();
     const toInsert: Array<Record<string, unknown>> = [];
 
     for (const c of contacts ?? []) {
       if (!c.email) { noEmail++; continue; }
-      if (dncSet.has(c.email.toLowerCase())) { suppressed++; continue; }
+      const emailLower = c.email.toLowerCase();
+      if (dncSet.has(emailLower)) { suppressed++; continue; }
       if (enrolledSet.has(c.id)) { alreadyEnrolled++; continue; }
+      if (!allowRecontact && previouslyContactedSet.has(emailLower)) { alreadyContacted++; continue; }
       toInsert.push({
         user_id: user.id,
         sequence_id: sequenceId,
@@ -186,6 +208,7 @@ Deno.serve(async (req) => {
         enrolled,
         suppressed,
         already_enrolled: alreadyEnrolled,
+        already_contacted: alreadyContacted,
         no_email: noEmail,
         total_contacts: contacts?.length ?? 0,
       }),

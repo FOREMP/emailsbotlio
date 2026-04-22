@@ -59,6 +59,7 @@ Deno.serve(async (req) => {
     sequence_id,
     enrollment_id,
     node_id,
+    throttle_node_id,     // optional: id of the throttle node that gated this send
     mode,                 // 'ai' | 'template' | 'test'
     subject,              // required for template/test
     body: bodyText,       // required for template/test
@@ -232,7 +233,13 @@ Deno.serve(async (req) => {
       sequence_id,
       node_id: node_id ?? null,
       activity_type: 'email_sent',
-      metadata: { sender_id: chosenSender.id, from: fromEmail, subject: finalSubject, message_id: messageId },
+      metadata: {
+        sender_id: chosenSender.id,
+        from: fromEmail,
+        subject: finalSubject,
+        message_id: messageId,
+        throttle_node_id: throttle_node_id ?? null,
+      },
     })
   }
 

@@ -378,7 +378,7 @@ const Inner = () => {
   };
 
   const publish = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (opts: { allow_recontact?: boolean } = {}) => {
       if (status !== "active") {
         await supabase.from("sequences").update({ status: "active" }).eq("id", id!);
         setStatus("active");
@@ -388,13 +388,15 @@ const Inner = () => {
           return updated;
         });
       }
-      const { data, error } = await supabase.functions.invoke("enroll-contacts", { body: { sequence_id: id } });
+      const { data, error } = await supabase.functions.invoke("enroll-contacts", {
+        body: { sequence_id: id, allow_recontact: opts.allow_recontact === true },
+      });
       if (error) throw error;
       return data;
     },
     onSuccess: (d: any) => toast({
       title: "Sequence published 🚀",
-      description: `Now active. ${d?.enrolled ?? 0} new · ${d?.already_enrolled ?? 0} already enrolled · ${d?.suppressed ?? 0} suppressed · ${d?.no_email ?? 0} no email`,
+      description: `Now active. ${d?.enrolled ?? 0} new · ${d?.already_enrolled ?? 0} already in this sequence · ${d?.already_contacted ?? 0} skipped (contacted before) · ${d?.suppressed ?? 0} unsubscribed · ${d?.no_email ?? 0} no email`,
     }),
     onError: (e: Error) => toast({ title: "Publish failed", description: e.message, variant: "destructive" }),
   });
@@ -437,7 +439,16 @@ const Inner = () => {
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <Button size="sm" onClick={() => publish.mutate()} disabled={publish.isPending || !contactListId} className="gradient-primary border-0 text-primary-foreground">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => publish.mutate({ allow_recontact: true })}
+              disabled={publish.isPending || !contactListId}
+              title="Enroll contacts even if you've already emailed them from another sequence"
+            >
+              Publish & re-contact
+            </Button>
+            <Button size="sm" onClick={() => publish.mutate({})} disabled={publish.isPending || !contactListId} className="gradient-primary border-0 text-primary-foreground">
               <Send className="h-3.5 w-3.5 mr-1.5" />
               {publish.isPending ? "Publishing…" : status === "active" ? "Re-publish" : "Publish"}
             </Button>
