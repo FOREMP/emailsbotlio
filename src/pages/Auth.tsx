@@ -140,6 +140,19 @@ const Auth = () => {
               minLength={6}
             />
           </div>
+          {isSignUp && (
+            <div>
+              <label className="text-sm font-medium mb-1.5 block">Access code</label>
+              <Input
+                type="password"
+                placeholder="Required to create an account"
+                value={accessCode}
+                onChange={(e) => setAccessCode(e.target.value)}
+                required
+              />
+              <p className="text-xs text-muted-foreground mt-1">Sign-up is restricted. Ask the team for the access code.</p>
+            </div>
+          )}
           <Button
             type="submit"
             disabled={loading}
