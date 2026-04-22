@@ -23,7 +23,7 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json();
-    const { contact = {}, prompt = "", subject_hint = "" } = body ?? {};
+    const { contact = {}, prompt = "", subject_hint = "", is_followup = false } = body ?? {};
 
     if (!prompt || typeof prompt !== "string") {
       return new Response(JSON.stringify({ error: "prompt is required" }), {
@@ -32,10 +32,12 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Minimal system instruction — only enforce JSON shape so we can parse.
-    const system = `Return ONLY a JSON object: {"subject":"...","body":"..."}. No other text. Do not include any closing signature, sign-off, "Best regards", "Vänliga hälsningar", sender name, or brand line in the body — those are appended automatically.`;
+    const followupHint = is_followup
+      ? ` This is a SHORT follow-up to a previous email to the same person. Acknowledge the prior message implicitly (e.g. "circling back", "wanted to follow up"), keep it under 80 words, no greeting line repeating the recipient's name, and end with a single concrete ask.`
+      : "";
 
-    // Pass user's prompt verbatim. Append contact JSON only if the prompt references variables ({{...}}).
+    const system = `Return ONLY a JSON object: {"subject":"...","body":"..."}. No other text. Do not include any closing signature, sign-off, "Best regards", "Vänliga hälsningar", sender name, or brand line in the body — those are appended automatically.${followupHint}`;
+
     const referencesVars = /\{\{[\w.]+\}\}/.test(prompt);
     const user = referencesVars
       ? `${prompt}\n\nContact data (for variable substitution):\n${JSON.stringify(contact, null, 2)}${subject_hint ? `\n\nSubject hint: ${subject_hint}` : ""}`
