@@ -21,10 +21,15 @@ function plainToHtml(s: string): string {
   return `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.55;white-space:pre-wrap">${escapeHtml(s)}</div>`
 }
 
-function deriveBrand(domain: string, brandFromDb?: string | null): string {
-  if (brandFromDb && brandFromDb.trim()) return brandFromDb.trim().toUpperCase()
-  const root = domain.split('.')[0] ?? domain
-  return root.toUpperCase()
+function deriveCompany(domain: string, brandFromDb?: string | null): string {
+  if (brandFromDb && brandFromDb.trim()) {
+    const b = brandFromDb.trim()
+    // If admin stored an all-caps brand, normalise to Title Case for the footer
+    if (b === b.toUpperCase()) return b.charAt(0) + b.slice(1).toLowerCase()
+    return b
+  }
+  const root = (domain.split('.')[0] ?? domain).toLowerCase()
+  return root.charAt(0).toUpperCase() + root.slice(1)
 }
 
 function stripExistingSignOff(text: string): string {
@@ -33,9 +38,26 @@ function stripExistingSignOff(text: string): string {
   return text.replace(pattern, '').replace(/\s+$/, '')
 }
 
-function appendFooter(bodyText: string, senderName: string, brand: string): string {
+function appendFooter(
+  bodyText: string,
+  senderName: string,
+  company: string,
+  unsubscribeUrl: string,
+  postalAddress?: string | null,
+): string {
   const cleaned = stripExistingSignOff(bodyText)
-  return `${cleaned}\n\nBest regards,\n${senderName}\n${brand}`
+  const signoff = `Best regards,\n${senderName}\n${company}`
+  const legal: string[] = []
+  if (postalAddress && postalAddress.trim()) legal.push(postalAddress.trim())
+  legal.push(`Don't want to hear from us? Unsubscribe: ${unsubscribeUrl}`)
+  return `${cleaned}\n\n${signoff}\n\n---\n${legal.join('\n')}`
+}
+
+function normaliseFollowupSubject(orig: string): string {
+  const trimmed = (orig ?? '').trim()
+  if (!trimmed) return 'Re: (follow-up)'
+  if (/^re:\s*/i.test(trimmed)) return trimmed // already prefixed
+  return `Re: ${trimmed}`
 }
 
 Deno.serve(async (req) => {
