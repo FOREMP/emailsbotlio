@@ -8,7 +8,7 @@ export const ThrottleNode = ({ data, selected }: NodeProps) => {
     <NodeShell
       icon={Gauge}
       title="Daily Limit"
-      subtitle={`Max ${cfg.max_per_day ?? 50} sends / day`}
+      subtitle={`Max ${cfg.max_per_day ?? 50} sends / day · this node only`}
       colorClass="border-emerald-500/60 bg-emerald-500/5"
       iconColorClass="bg-emerald-500"
       selected={selected}
