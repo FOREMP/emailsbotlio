@@ -13,7 +13,10 @@ const Auth = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
+  const [accessCode, setAccessCode] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const SIGNUP_ACCESS_CODE = "FOREMPemail";
   const [confirmationSent, setConfirmationSent] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
