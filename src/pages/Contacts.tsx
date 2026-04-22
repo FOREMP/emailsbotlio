@@ -62,6 +62,19 @@ const Contacts = () => {
     },
   });
 
+  const { data: erasures = [], isLoading: erasuresLoading } = useQuery({
+    queryKey: ["gdpr_erasures"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("gdpr_erasures")
+        .select("id, email_hash, reason, erased_at")
+        .order("erased_at", { ascending: false })
+        .limit(200);
+      if (error) throw error;
+      return data;
+    },
+  });
+
   const { data: suppressedEmails = [], isLoading: suppressedLoading } = useQuery({
     queryKey: ["suppressed_emails"],
     queryFn: async () => {
