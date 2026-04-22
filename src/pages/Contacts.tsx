@@ -182,12 +182,17 @@ const Contacts = () => {
         .map((b) => b.toString(16).padStart(2, "0"))
         .join("");
 
-      await supabase
+      const { data: existingDnc } = await supabase
         .from("do_not_contact")
-        .upsert(
-          { user_id: user!.id, email: emailLower, reason: "gdpr_erasure" },
-          { onConflict: "user_id,email", ignoreDuplicates: true },
-        );
+        .select("id")
+        .eq("user_id", user!.id)
+        .eq("email", emailLower)
+        .maybeSingle();
+      if (!existingDnc) {
+        await supabase
+          .from("do_not_contact")
+          .insert({ user_id: user!.id, email: emailLower, reason: "gdpr_erasure" });
+      }
 
       await supabase
         .from("enrollments")
@@ -319,10 +324,11 @@ const Contacts = () => {
             )}
           </div>
 
-          <Tabs value={overviewTab} onValueChange={(value) => setOverviewTab(value as "lists" | "suppressed") }>
+          <Tabs value={overviewTab} onValueChange={(value) => setOverviewTab(value as "lists" | "suppressed" | "erasures") }>
             <TabsList>
               <TabsTrigger value="lists">Lists</TabsTrigger>
               <TabsTrigger value="suppressed">Suppressed</TabsTrigger>
+              <TabsTrigger value="erasures">GDPR erasures</TabsTrigger>
             </TabsList>
 
             <TabsContent value="lists">
