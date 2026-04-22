@@ -234,6 +234,30 @@ export type Database = {
           },
         ]
       }
+      gdpr_erasures: {
+        Row: {
+          email_hash: string
+          erased_at: string
+          id: string
+          reason: string | null
+          user_id: string
+        }
+        Insert: {
+          email_hash: string
+          erased_at?: string
+          id?: string
+          reason?: string | null
+          user_id: string
+        }
+        Update: {
+          email_hash?: string
+          erased_at?: string
+          id?: string
+          reason?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       imported_files: {
         Row: {
           column_count: number
@@ -551,6 +575,7 @@ export type Database = {
           id: string
           is_active: boolean
           is_verified: boolean
+          postal_address: string | null
           reply_to_email: string
           sender_subdomain: string
           updated_at: string
@@ -562,6 +587,7 @@ export type Database = {
           id?: string
           is_active?: boolean
           is_verified?: boolean
+          postal_address?: string | null
           reply_to_email: string
           sender_subdomain?: string
           updated_at?: string
@@ -573,6 +599,7 @@ export type Database = {
           id?: string
           is_active?: boolean
           is_verified?: boolean
+          postal_address?: string | null
           reply_to_email?: string
           sender_subdomain?: string
           updated_at?: string
