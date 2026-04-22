@@ -1,75 +1,74 @@
 
 
-# Audit of Your Sequence Scenario + Two Fixes
+# Audit Result + Three Targeted Fixes
 
-## Your Scenario, Step by Step
+I re-traced your scenario end to end. Here is what's currently true, what needs adjusting, and what is unfortunately not possible.
 
-> Upload list → schedule 21:30 → send to 3 contacts → wait 30 min → send follow-up → if they unsubscribe in those 30 min, cancel → then End. Also: future sequences should skip already-contacted people.
+## Audit (post-fix verification)
 
-Here's what works today and what doesn't.
+| Area | Status |
+|---|---|
+| Schedule node fires at the configured Stockholm time | ✅ Works |
+| Throttle is now per-node (so 30-min follow-ups aren't blocked by initial batch) | ✅ Fixed last round |
+| Wait 30 min between emails | ✅ Works |
+| Unsubscribe during wait → enrollment cancelled before next send | ✅ Works (re-checked every tick against `do_not_contact` + `suppressed_emails`) |
+| End node closes sequence | ✅ Works |
+| New sequence skips contacts already emailed | ✅ Fixed last round (with optional "Publish & re-contact" override) |
+| Footer format | ⚠️ Already 3 lines, but want a polish — see Fix 1 |
+| Follow-ups thread to the original email | ❌ Not fully possible — see Fix 2 |
+| GDPR posture | ⚠️ Mostly there, missing 3 small items — see Fix 3 |
 
-| # | Requirement | Status | Notes |
-|---|---|---|---|
-| 1 | Schedule node fires at 21:30 (Stockholm) | ✅ Works | Time-zone aware, day-of-week filter works |
-| 2 | First email sends to all 3 contacts | ✅ Works | Throttle + sender caps respected |
-| 3 | Wait 30 minutes between emails | ✅ Works | `wait` node supports minutes |
-| 4 | Unsubscribe during wait cancels the follow-up | ✅ Works | Every tick re-checks DNC + global suppression *before* processing the next node and sets enrollment to `unsubscribed` |
-| 5 | End node closes the sequence cleanly | ✅ Works | Sets `completed` |
-| 6 | Sending is recorded (audit trail) | ✅ Works | Rows in `sent_emails` + `contact_activity` (`email_sent`) per send |
-| 7 | **A new sequence skips contacts already contacted before** | ❌ **NOT implemented** | Today only *unsubscribed* contacts are skipped. Anyone you previously emailed (but who didn't unsubscribe) WILL be emailed again from a new sequence |
-| 8 | **Throttle + 30-min follow-up in same day** | ⚠️ **Bug for your exact setup** | Throttle counts all `email_sent` for the sequence today. With `max_per_day=3` and 3 contacts, the first 3 emails consume the whole daily quota → the 30-minute follow-ups get pushed to tomorrow |
+## Fix 1 — Footer: "Best regards, / name / company" exactly
 
-So 5 of your 7 expectations work. Two need fixing.
+The footer is already three lines, but the third line uses an UPPERCASED brand derived from the domain (e.g. `FOREMP`). You want the human-readable company name. Change to:
+- Line 1: `Best regards,`
+- Line 2: sender's display name (e.g. `Eric Wahlbom`)
+- Line 3: company name in normal case — pulled from `sending_domains.brand` if set, otherwise the capitalised root domain (e.g. `Foremp`, not `FOREMP`)
 
----
+Implementation: update `deriveBrand` and `appendFooter` in `supabase/functions/send-cold-email/index.ts`. The existing sign-off stripper already removes any duplicate "Best regards" added by the AI, so this stays clean even when AI mode generates its own sign-off.
 
-## Fix 1 — Throttle Logic for Same-Day Follow-Ups
+## Fix 2 — Threading Follow-Ups (honest answer)
 
-**Problem:** the throttle node counts every `email_sent` for the sequence per day. If you set `max_per_day = 3` to control the *initial* batch, the follow-up sends 30 minutes later trip the same cap and get deferred to tomorrow — the user sees this as "follow-up never sent."
+The Lovable email SDK (`@lovable.dev/email-js@0.0.4`) does **not** expose `In-Reply-To`, `References`, or arbitrary header fields. So a true RFC-compliant thread (where Gmail/Outlook collapses the follow-up into the same conversation) is **not possible today** with our infrastructure.
 
-**Fix:** scope the throttle count to **the specific throttle node** instead of the whole sequence. Each throttle gates only what flows through it. So a throttle in front of the first email allows 3 first-touches/day, and a separate (or absent) throttle on the follow-up branch is independent.
+What we *can* do, which is what most ESPs fall back to and what gets ~90% of the visual benefit:
+- When the runner sends a follow-up email to a contact who already received an earlier email in the same enrollment, **reuse the original subject prefixed with `Re: `** (only one `Re:`, never `Re: Re: Re:`).
+- Most mail clients group messages with the same normalized subject + same participants into one visual conversation, so the recipient sees "two replies in one thread" exactly as you described.
 
 Implementation:
-- In `run-sequences/index.ts`, change the throttle count query from `.eq('sequence_id', …)` to `.eq('node_id', currentNode.id)` so only `email_sent` activities tagged with that throttle's downstream send node (or, more simply, all sends triggered after passing *this specific* throttle) are counted.
-- We already have `node_id` on `contact_activity` — we'll record the originating throttle id alongside the send node id, or count by the *send node fed by this throttle* (one DB roundtrip to look up the next send node from `sequence_edges`). Cleaner: add the throttle's id to the `email_sent` activity metadata when the email is sent through it, and count by that. Decision: **count `email_sent` rows whose `metadata->>'throttle_node_id'` equals the current throttle's id**. The runner stamps `throttle_node_id` into the `send-cold-email` invocation when it just passed a throttle in the same enrollment chain.
+- In `run-sequences/index.ts`, before invoking `send-cold-email` for a `send_email` node, look up the **first** `sent_emails` row for this enrollment. If one exists, pass `subject_override: "Re: <original subject>"` and `is_followup: true` to `send-cold-email`.
+- In `send-cold-email`, if `subject_override` is provided, use it verbatim (skip AI subject generation; AI still writes the body so the follow-up reads naturally as a nudge).
+- The body for follow-ups stays freshly generated/templated — we don't quote the original because the SDK can't attach proper threading headers anyway, and quoted text without proper headers looks worse than a clean short follow-up.
 
-**Side benefit:** if you have multiple throttles in the same sequence (e.g., one per branch), each is independent.
+Trade-off you should know about: without true `In-Reply-To` headers, threading is best-effort. Gmail almost always groups them; Outlook usually does; some clients won't. This is the same compromise other lightweight outreach tools make.
 
-**Documentation tweak in the UI:** small caption under the throttle node — "Limits sends through this node per day. Other throttles in the sequence are independent."
+## Fix 3 — GDPR Compliance Polish
 
----
+Already in place: one-click unsubscribe, suppression list enforced on every send, DNC checked at enrollment and at every runner tick, no third-party tracking pixels, RLS isolates each user's data.
 
-## Fix 2 — Cross-Sequence "Already Contacted" Skip
+Three gaps to close:
 
-**Problem:** today, `enroll-contacts` only blocks duplicate enrollments **within the same sequence** and skips DNC/suppressed emails. It does NOT skip a contact who was successfully emailed by a *different* sequence.
+1. **Unsubscribe footer in the email itself.** Right now the unsubscribe link comes from the Lovable email infrastructure (List-Unsubscribe header + auto-appended footer). Confirm in the audit it is actually being appended for these cold-outreach sends; if not, add a visible plain-text line at the very bottom of every send: `Unsubscribe: https://emailsbotlio.lovable.app/unsubscribe?token=...`. Required by GDPR Art. 21 + ePrivacy + CAN-SPAM. Token already exists per recipient.
+2. **Sender identity in every email.** GDPR + CAN-SPAM require a physical/postal identifier of the sender. Add an optional `postal_address` column to `sending_domains` and append it on a 4th footer line when set. Without an address set, the email still sends but you'll see a one-time warning in the Domains UI.
+3. **"Forget this contact" action.** Add a button on the Contacts page → "Erase contact (GDPR right to be forgotten)" that:
+   - Deletes the contact row
+   - Adds the email to `do_not_contact` and `suppressed_emails` so they can never be re-imported
+   - Marks any active enrollments as `unsubscribed`
+   - Records what was erased (timestamp + email hash, not plaintext) in a small `gdpr_erasures` audit table
 
-**Fix:** during enrollment, also skip any contact who already has at least one `sent_emails` row for this user (status `sent` or `queued`). This makes "we've already contacted them once → don't contact again from a new sequence" the default.
-
-Implementation in `supabase/functions/enroll-contacts/index.ts`:
-1. After loading contacts and DNC, also load `sent_emails` for this user filtered to `recipient_email IN (contact emails)` and `status IN ('sent','queued')`.
-2. Build a `previouslyContactedSet` of lowercased emails.
-3. In the enrollment loop, skip contacts whose email is in that set, and count them in a new `already_contacted` bucket returned to the UI.
-4. Surface this in the Sequences "Enroll" toast: e.g., *"Enrolled 12 — skipped 4 already-contacted, 1 suppressed."*
-
-**Escape hatch (recommended):** add an optional checkbox in the enroll dialog "Allow re-contacting people we've emailed before" (default off). If checked, the new skip is bypassed for that enrollment only. This keeps the safe default while letting you re-engage on purpose.
-
----
-
-## What Stays the Same
-
-- Unsubscribe handling, schedule node, wait node, end node, send_email retry logic, sender caps, audit logging — all work as you expect, no changes.
+Out of scope unless you ask: a public-facing privacy policy page, a data-export endpoint (right to portability for *contacts* — usually only needed if your contacts can log in, which they can't here).
 
 ## Files Touched
 
-- `supabase/functions/run-sequences/index.ts` — scope throttle count to the throttle node; pass `throttle_node_id` to `send-cold-email`.
-- `supabase/functions/send-cold-email/index.ts` — accept `throttle_node_id` and store it in the `email_sent` activity metadata.
-- `supabase/functions/enroll-contacts/index.ts` — add `previouslyContactedSet` filter and `already_contacted` counter; honor optional `allow_recontact` flag from request body.
-- `src/pages/Sequences.tsx` — surface `already_contacted` count in the enrollment toast; add the optional "Allow re-contacting" checkbox in the enroll dialog.
-- Redeploy: `run-sequences`, `send-cold-email`, `enroll-contacts`.
+- `supabase/functions/send-cold-email/index.ts` — new footer (3 lines, normal-case company), accept `subject_override` for follow-ups, append visible unsubscribe line + optional postal address.
+- `supabase/functions/run-sequences/index.ts` — detect follow-up sends, look up original subject, pass `subject_override: "Re: <original>"`.
+- `src/pages/Contacts.tsx` — "Erase contact" button + confirmation dialog.
+- `src/pages/Domains.tsx` — postal-address field per domain (with GDPR helper text).
+- New migration: add `sending_domains.postal_address text`, create `gdpr_erasures` table with RLS.
+- Redeploy: `send-cold-email`, `run-sequences`.
 
-## Out of Scope (ask if you want them too)
+## Caveats Worth Repeating
 
-- Time-window cooldown ("skip if contacted in the last 90 days" instead of forever).
-- Cross-user / org-wide contact-history sharing.
-- A central "Contacted" log page combining `sent_emails` across sequences with filters.
+- True email threading with `In-Reply-To` is **not** available; we use subject-based threading as the best fallback.
+- GDPR is a process, not just code — a privacy policy page, a DPA with sub-processors (Supabase, Lovable Email/Mailgun, Lovable AI), and a lawful basis for cold outreach (legitimate interest assessment) are still your responsibility outside the app.
 
