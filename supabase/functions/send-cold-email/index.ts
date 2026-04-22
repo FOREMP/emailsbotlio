@@ -163,7 +163,7 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: 'prompt required for ai mode' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
     const r = await supabase.functions.invoke('generate-email', {
-      body: { contact, prompt, subject_hint },
+      body: { contact, prompt, subject_hint, is_followup: !!is_followup },
     })
     if (r.error) {
       return new Response(JSON.stringify({ error: 'generate-email failed', detail: r.error.message }), { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
@@ -175,13 +175,14 @@ Deno.serve(async (req) => {
     finalBody = interpolate(bodyText ?? '', vars)
   }
 
+  // Force the subject for follow-ups so most clients group it as one thread
+  if (subject_override && typeof subject_override === 'string' && subject_override.trim()) {
+    finalSubject = normaliseFollowupSubject(subject_override)
+  }
+
   if (!finalSubject || !finalBody) {
     return new Response(JSON.stringify({ error: 'empty subject or body' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
   }
-
-  // Append branded footer: Best regards, {sender name}, {BRAND}
-  const footerBrand = deriveBrand(domain, (domainRow as any).brand)
-  finalBody = appendFooter(finalBody, chosenSender.from_name, footerBrand)
 
   const messageId = crypto.randomUUID()
 
@@ -206,6 +207,20 @@ Deno.serve(async (req) => {
       unsubscribeToken = ins?.token ?? newToken
     }
   }
+
+  // Build the visible unsubscribe URL using the published site
+  const baseUrl = (unsubscribe_base_url && String(unsubscribe_base_url).replace(/\/$/, '')) || 'https://emailsbotlio.lovable.app'
+  const unsubscribeUrl = `${baseUrl}/unsubscribe?token=${encodeURIComponent(unsubscribeToken!)}`
+
+  // Append GDPR-compliant footer: sign-off + (optional) postal address + unsubscribe link
+  const company = deriveCompany(domain, (domainRow as any).brand)
+  finalBody = appendFooter(
+    finalBody,
+    chosenSender.from_name,
+    company,
+    unsubscribeUrl,
+    (domainRow as any).postal_address ?? null,
+  )
 
   // Log pending
   await supabase.from('sent_emails').insert({
