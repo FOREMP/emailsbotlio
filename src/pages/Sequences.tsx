@@ -75,10 +75,12 @@ const Sequences = () => {
       (data ?? []).forEach((r: any) => {
         const s = stats[r.sequence_id] ??= { total: 0, active: 0, waiting: 0, completed: 0, failed: 0, unsubscribed: 0 };
         s.total++;
+        // Internal throttle bookkeeping uses last_error as a marker; never expose it.
+        const visibleError = typeof r.last_error === "string" && r.last_error.startsWith("__pending_throttle:") ? null : r.last_error;
         if (r.status === "active") s.active++;
-        else if (r.status === "waiting_capacity") { s.waiting++; if (r.last_error && !s.waitingReason) s.waitingReason = r.last_error; }
+        else if (r.status === "waiting_capacity") { s.waiting++; if (visibleError && !s.waitingReason) s.waitingReason = visibleError; }
         else if (r.status === "completed") s.completed++;
-        else if (r.status === "failed") { s.failed++; if (r.last_error && !s.lastError) s.lastError = r.last_error; }
+        else if (r.status === "failed") { s.failed++; if (visibleError && !s.lastError) s.lastError = visibleError; }
         else if (r.status === "unsubscribed") s.unsubscribed++;
       });
       return stats;
