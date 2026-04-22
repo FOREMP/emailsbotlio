@@ -32,6 +32,9 @@ const Auth = () => {
 
     try {
       if (isSignUp) {
+        if (accessCode !== SIGNUP_ACCESS_CODE) {
+          throw new Error("Invalid access code. Sign-up is restricted.");
+        }
         const { error } = await supabase.auth.signUp({
           email,
           password,
