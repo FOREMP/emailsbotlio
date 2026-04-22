@@ -168,6 +168,50 @@ const Contacts = () => {
     onError: (e) => toast.error(e.message),
   });
 
+  const eraseContact = useMutation({
+    mutationFn: async (c: { id: string; email: string | null }) => {
+      if (!c.email) {
+        const { error } = await supabase.from("contacts").delete().eq("id", c.id);
+        if (error) throw error;
+        return;
+      }
+      const emailLower = c.email.toLowerCase().trim();
+      const enc = new TextEncoder().encode(emailLower);
+      const buf = await crypto.subtle.digest("SHA-256", enc);
+      const hash = Array.from(new Uint8Array(buf))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+
+      await supabase
+        .from("do_not_contact")
+        .upsert(
+          { user_id: user!.id, email: emailLower, reason: "gdpr_erasure" },
+          { onConflict: "user_id,email", ignoreDuplicates: true },
+        );
+
+      await supabase
+        .from("enrollments")
+        .update({ status: "unsubscribed", last_error: "gdpr_erasure" })
+        .eq("user_id", user!.id)
+        .eq("contact_id", c.id);
+
+      await supabase.from("gdpr_erasures").insert({
+        user_id: user!.id,
+        email_hash: hash,
+        reason: "user_requested",
+      });
+
+      const { error } = await supabase.from("contacts").delete().eq("id", c.id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["contacts", selectedList] });
+      queryClient.invalidateQueries({ queryKey: ["gdpr_erasures"] });
+      toast.success("Contact erased — added to do-not-contact and audited");
+    },
+    onError: (e: any) => toast.error(e.message ?? "Erase failed"),
+  });
+
   const [importing, setImporting] = useState(false);
   const handleFileImport = async (
     importedContacts: { first_name: string; last_name: string; email: string; phone: string; custom_fields: Record<string, string> }[],
