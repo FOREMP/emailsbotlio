@@ -21,10 +21,15 @@ function plainToHtml(s: string): string {
   return `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.55;white-space:pre-wrap">${escapeHtml(s)}</div>`
 }
 
-function deriveBrand(domain: string, brandFromDb?: string | null): string {
-  if (brandFromDb && brandFromDb.trim()) return brandFromDb.trim().toUpperCase()
-  const root = domain.split('.')[0] ?? domain
-  return root.toUpperCase()
+function deriveCompany(domain: string, brandFromDb?: string | null): string {
+  if (brandFromDb && brandFromDb.trim()) {
+    const b = brandFromDb.trim()
+    // If admin stored an all-caps brand, normalise to Title Case for the footer
+    if (b === b.toUpperCase()) return b.charAt(0) + b.slice(1).toLowerCase()
+    return b
+  }
+  const root = (domain.split('.')[0] ?? domain).toLowerCase()
+  return root.charAt(0).toUpperCase() + root.slice(1)
 }
 
 function stripExistingSignOff(text: string): string {
@@ -33,9 +38,26 @@ function stripExistingSignOff(text: string): string {
   return text.replace(pattern, '').replace(/\s+$/, '')
 }
 
-function appendFooter(bodyText: string, senderName: string, brand: string): string {
+function appendFooter(
+  bodyText: string,
+  senderName: string,
+  company: string,
+  unsubscribeUrl: string,
+  postalAddress?: string | null,
+): string {
   const cleaned = stripExistingSignOff(bodyText)
-  return `${cleaned}\n\nBest regards,\n${senderName}\n${brand}`
+  const signoff = `Best regards,\n${senderName}\n${company}`
+  const legal: string[] = []
+  if (postalAddress && postalAddress.trim()) legal.push(postalAddress.trim())
+  legal.push(`Don't want to hear from us? Unsubscribe: ${unsubscribeUrl}`)
+  return `${cleaned}\n\n${signoff}\n\n---\n${legal.join('\n')}`
+}
+
+function normaliseFollowupSubject(orig: string): string {
+  const trimmed = (orig ?? '').trim()
+  if (!trimmed) return 'Re: (follow-up)'
+  if (/^re:\s*/i.test(trimmed)) return trimmed // already prefixed
+  return `Re: ${trimmed}`
 }
 
 Deno.serve(async (req) => {
@@ -52,19 +74,22 @@ Deno.serve(async (req) => {
 
   const {
     user_id,
-    sender_id,            // optional: explicit sender; otherwise rotate per `strategy`
-    strategy,             // 'all' | 'brand' | 'specific'
-    brand,                // when strategy === 'brand'
-    contact,              // { id, email, first_name, last_name, custom_fields }
+    sender_id,
+    strategy,
+    brand,
+    contact,
     sequence_id,
     enrollment_id,
     node_id,
-    throttle_node_id,     // optional: id of the throttle node that gated this send
-    mode,                 // 'ai' | 'template' | 'test'
-    subject,              // required for template/test
-    body: bodyText,       // required for template/test
-    prompt,               // required for ai
+    throttle_node_id,
+    mode,
+    subject,
+    body: bodyText,
+    prompt,
     subject_hint,
+    subject_override,      // forces subject verbatim (used for follow-ups: "Re: <original>")
+    is_followup,           // hint to AI it's a follow-up nudge
+    unsubscribe_base_url,  // optional override
   } = body ?? {}
 
   if (!user_id) return new Response(JSON.stringify({ error: 'user_id required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
@@ -138,7 +163,7 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: 'prompt required for ai mode' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
     const r = await supabase.functions.invoke('generate-email', {
-      body: { contact, prompt, subject_hint },
+      body: { contact, prompt, subject_hint, is_followup: !!is_followup },
     })
     if (r.error) {
       return new Response(JSON.stringify({ error: 'generate-email failed', detail: r.error.message }), { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
@@ -150,13 +175,14 @@ Deno.serve(async (req) => {
     finalBody = interpolate(bodyText ?? '', vars)
   }
 
+  // Force the subject for follow-ups so most clients group it as one thread
+  if (subject_override && typeof subject_override === 'string' && subject_override.trim()) {
+    finalSubject = normaliseFollowupSubject(subject_override)
+  }
+
   if (!finalSubject || !finalBody) {
     return new Response(JSON.stringify({ error: 'empty subject or body' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
   }
-
-  // Append branded footer: Best regards, {sender name}, {BRAND}
-  const footerBrand = deriveBrand(domain, (domainRow as any).brand)
-  finalBody = appendFooter(finalBody, chosenSender.from_name, footerBrand)
 
   const messageId = crypto.randomUUID()
 
@@ -181,6 +207,20 @@ Deno.serve(async (req) => {
       unsubscribeToken = ins?.token ?? newToken
     }
   }
+
+  // Build the visible unsubscribe URL using the published site
+  const baseUrl = (unsubscribe_base_url && String(unsubscribe_base_url).replace(/\/$/, '')) || 'https://emailsbotlio.lovable.app'
+  const unsubscribeUrl = `${baseUrl}/unsubscribe?token=${encodeURIComponent(unsubscribeToken!)}`
+
+  // Append GDPR-compliant footer: sign-off + (optional) postal address + unsubscribe link
+  const company = deriveCompany(domain, (domainRow as any).brand)
+  finalBody = appendFooter(
+    finalBody,
+    chosenSender.from_name,
+    company,
+    unsubscribeUrl,
+    (domainRow as any).postal_address ?? null,
+  )
 
   // Log pending
   await supabase.from('sent_emails').insert({

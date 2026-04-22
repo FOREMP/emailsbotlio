@@ -14,6 +14,7 @@ interface Domain {
   reply_to_email: string;
   is_active: boolean;
   is_verified: boolean;
+  postal_address: string | null;
 }
 
 const Domains = () => {
@@ -33,6 +34,7 @@ const Domains = () => {
   }, []);
 
   const unverified = domains.filter((d) => !d.is_verified);
+  const missingPostal = domains.filter((d) => d.is_verified && d.is_active && !d.postal_address?.trim());
 
   return (
     <div className="space-y-6">
@@ -58,6 +60,7 @@ const Domains = () => {
                   <TableHead>Brand</TableHead>
                   <TableHead>Sender subdomain</TableHead>
                   <TableHead>Reply-to</TableHead>
+                  <TableHead>Postal address</TableHead>
                   <TableHead>Active</TableHead>
                   <TableHead>Status</TableHead>
                 </TableRow>
@@ -71,6 +74,13 @@ const Domains = () => {
                       {d.sender_subdomain}.{d.domain}
                     </TableCell>
                     <TableCell className="text-xs">{d.reply_to_email}</TableCell>
+                    <TableCell className="text-xs">
+                      {d.postal_address?.trim() ? (
+                        <span className="text-muted-foreground">{d.postal_address}</span>
+                      ) : (
+                        <Badge variant="outline" className="text-xs">Not set (GDPR)</Badge>
+                      )}
+                    </TableCell>
                     <TableCell>
                       <Badge variant={d.is_active ? "default" : "secondary"}>
                         {d.is_active ? "Yes" : "No"}
@@ -112,6 +122,28 @@ const Domains = () => {
               delegate its DNS to Lovable's nameservers. Once Lovable shows the domain as active, an
               admin must flip <code className="text-xs bg-muted px-1 py-0.5 rounded">is_verified = true</code> on
               the matching <code className="text-xs bg-muted px-1 py-0.5 rounded">sending_domains</code> row.
+            </p>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {missingPostal.length > 0 && (
+        <Alert>
+          <Info className="h-4 w-4" />
+          <AlertTitle>Add a postal address for full GDPR / CAN-SPAM compliance</AlertTitle>
+          <AlertDescription className="space-y-2 mt-2">
+            <p>
+              {missingPostal.length} verified domain{missingPostal.length === 1 ? "" : "s"} ({" "}
+              <span className="font-mono">{missingPostal.map((d) => d.domain).join(", ")}</span>
+              ) {missingPostal.length === 1 ? "is" : "are"} sending without a postal address in
+              the email footer. GDPR Art. 13 and CAN-SPAM both require a verifiable physical
+              identifier of the sender in every commercial email.
+            </p>
+            <p>
+              Set the address in the{" "}
+              <code className="text-xs bg-muted px-1 py-0.5 rounded">postal_address</code> column
+              on the matching <code className="text-xs bg-muted px-1 py-0.5 rounded">sending_domains</code>{" "}
+              row (use the SQL editor). Emails will keep sending in the meantime.
             </p>
           </AlertDescription>
         </Alert>

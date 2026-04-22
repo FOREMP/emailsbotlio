@@ -8,7 +8,18 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, Users, Upload, ArrowLeft, Trash2, ShieldX } from "lucide-react";
+import { Plus, Users, Upload, ArrowLeft, Trash2, ShieldX, ShieldOff } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import FileImportDialog from "@/components/FileImportDialog";
@@ -23,7 +34,7 @@ const Contacts = () => {
   const [contactDialogOpen, setContactDialogOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [contactForm, setContactForm] = useState({ first_name: "", last_name: "", email: "", phone: "" });
-  const [overviewTab, setOverviewTab] = useState<"lists" | "suppressed">("lists");
+  const [overviewTab, setOverviewTab] = useState<"lists" | "suppressed" | "erasures">("lists");
 
   const { data: lists = [], isLoading: listsLoading } = useQuery({
     queryKey: ["contact_lists"],
@@ -46,6 +57,19 @@ const Contacts = () => {
         .select("*")
         .eq("list_id", selectedList!)
         .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+  });
+
+  const { data: erasures = [], isLoading: erasuresLoading } = useQuery({
+    queryKey: ["gdpr_erasures"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("gdpr_erasures")
+        .select("id, email_hash, reason, erased_at")
+        .order("erased_at", { ascending: false })
+        .limit(200);
       if (error) throw error;
       return data;
     },
@@ -142,6 +166,55 @@ const Contacts = () => {
       toast.success("Contact removed");
     },
     onError: (e) => toast.error(e.message),
+  });
+
+  const eraseContact = useMutation({
+    mutationFn: async (c: { id: string; email: string | null }) => {
+      if (!c.email) {
+        const { error } = await supabase.from("contacts").delete().eq("id", c.id);
+        if (error) throw error;
+        return;
+      }
+      const emailLower = c.email.toLowerCase().trim();
+      const enc = new TextEncoder().encode(emailLower);
+      const buf = await crypto.subtle.digest("SHA-256", enc);
+      const hash = Array.from(new Uint8Array(buf))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+
+      const { data: existingDnc } = await supabase
+        .from("do_not_contact")
+        .select("id")
+        .eq("user_id", user!.id)
+        .eq("email", emailLower)
+        .maybeSingle();
+      if (!existingDnc) {
+        await supabase
+          .from("do_not_contact")
+          .insert({ user_id: user!.id, email: emailLower, reason: "gdpr_erasure" });
+      }
+
+      await supabase
+        .from("enrollments")
+        .update({ status: "unsubscribed", last_error: "gdpr_erasure" })
+        .eq("user_id", user!.id)
+        .eq("contact_id", c.id);
+
+      await supabase.from("gdpr_erasures").insert({
+        user_id: user!.id,
+        email_hash: hash,
+        reason: "user_requested",
+      });
+
+      const { error } = await supabase.from("contacts").delete().eq("id", c.id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["contacts", selectedList] });
+      queryClient.invalidateQueries({ queryKey: ["gdpr_erasures"] });
+      toast.success("Contact erased — added to do-not-contact and audited");
+    },
+    onError: (e: any) => toast.error(e.message ?? "Erase failed"),
   });
 
   const [importing, setImporting] = useState(false);
@@ -251,10 +324,11 @@ const Contacts = () => {
             )}
           </div>
 
-          <Tabs value={overviewTab} onValueChange={(value) => setOverviewTab(value as "lists" | "suppressed") }>
+          <Tabs value={overviewTab} onValueChange={(value) => setOverviewTab(value as "lists" | "suppressed" | "erasures") }>
             <TabsList>
               <TabsTrigger value="lists">Lists</TabsTrigger>
               <TabsTrigger value="suppressed">Suppressed</TabsTrigger>
+              <TabsTrigger value="erasures">GDPR erasures</TabsTrigger>
             </TabsList>
 
             <TabsContent value="lists">
@@ -337,6 +411,49 @@ const Contacts = () => {
                             </td>
                             <td className="px-4 py-3 text-muted-foreground whitespace-nowrap text-xs">
                               {new Date(item.created_at).toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="erasures">
+              <p className="text-xs text-muted-foreground mb-3">
+                Audit log of contacts erased under GDPR's right to be forgotten. Emails are stored
+                as SHA-256 hashes — never as plaintext — so we can prove an erasure happened
+                without keeping the personal data.
+              </p>
+              {erasuresLoading ? (
+                <p className="text-muted-foreground text-sm">Loading…</p>
+              ) : erasures.length === 0 ? (
+                <div className="rounded-xl border border-border bg-card shadow-card p-12 text-center">
+                  <ShieldOff className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+                  <p className="text-muted-foreground text-sm">No erasures recorded yet.</p>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-border bg-card shadow-card overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border bg-muted/50">
+                          <th className="text-left px-4 py-3 font-medium text-muted-foreground">Email hash (SHA-256)</th>
+                          <th className="text-left px-4 py-3 font-medium text-muted-foreground">Reason</th>
+                          <th className="text-left px-4 py-3 font-medium text-muted-foreground">Erased at</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {erasures.map((row) => (
+                          <tr key={row.id} className="border-b border-border last:border-0 hover:bg-muted/30">
+                            <td className="px-4 py-3 font-mono text-xs">{row.email_hash.slice(0, 16)}…</td>
+                            <td className="px-4 py-3">
+                              <Badge variant="secondary">{row.reason || "user_requested"}</Badge>
+                            </td>
+                            <td className="px-4 py-3 text-muted-foreground whitespace-nowrap text-xs">
+                              {new Date(row.erased_at).toLocaleString()}
                             </td>
                           </tr>
                         ))}
@@ -461,9 +578,37 @@ const Contacts = () => {
                             {lc ? new Date(lc).toLocaleString() : <span className="text-muted-foreground/50">—</span>}
                           </td>
                           <td className="px-4 py-3 text-right">
-                            <Button variant="ghost" size="sm" className="text-destructive" onClick={() => deleteContact.mutate(c.id)}>
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
+                            <div className="flex items-center justify-end gap-1">
+                              <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                  <Button variant="ghost" size="sm" className="text-amber-700" title="Erase under GDPR (irreversible — also blocks future contact)">
+                                    <ShieldOff className="h-3.5 w-3.5" />
+                                  </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>Erase this contact (GDPR)?</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                      This deletes the contact, adds {c.email || "their email"} to your
+                                      Do-Not-Contact list, cancels any active enrollments, and records a
+                                      hashed audit row. This action satisfies GDPR Art. 17 (right to be
+                                      forgotten) and cannot be undone.
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                    <AlertDialogAction
+                                      onClick={() => eraseContact.mutate({ id: c.id, email: c.email })}
+                                    >
+                                      Erase permanently
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
+                              <Button variant="ghost" size="sm" className="text-destructive" title="Remove from this list (does not block future contact)" onClick={() => deleteContact.mutate(c.id)}>
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
                           </td>
                         </tr>
                       );
