@@ -439,7 +439,16 @@ const Inner = () => {
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <Button size="sm" onClick={() => publish.mutate()} disabled={publish.isPending || !contactListId} className="gradient-primary border-0 text-primary-foreground">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => publish.mutate({ allow_recontact: true })}
+              disabled={publish.isPending || !contactListId}
+              title="Enroll contacts even if you've already emailed them from another sequence"
+            >
+              Publish & re-contact
+            </Button>
+            <Button size="sm" onClick={() => publish.mutate({})} disabled={publish.isPending || !contactListId} className="gradient-primary border-0 text-primary-foreground">
               <Send className="h-3.5 w-3.5 mr-1.5" />
               {publish.isPending ? "Publishing…" : status === "active" ? "Re-publish" : "Publish"}
             </Button>
