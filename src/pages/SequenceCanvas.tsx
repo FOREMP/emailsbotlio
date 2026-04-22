@@ -378,7 +378,7 @@ const Inner = () => {
   };
 
   const publish = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (opts: { allow_recontact?: boolean } = {}) => {
       if (status !== "active") {
         await supabase.from("sequences").update({ status: "active" }).eq("id", id!);
         setStatus("active");
@@ -388,13 +388,15 @@ const Inner = () => {
           return updated;
         });
       }
-      const { data, error } = await supabase.functions.invoke("enroll-contacts", { body: { sequence_id: id } });
+      const { data, error } = await supabase.functions.invoke("enroll-contacts", {
+        body: { sequence_id: id, allow_recontact: opts.allow_recontact === true },
+      });
       if (error) throw error;
       return data;
     },
     onSuccess: (d: any) => toast({
       title: "Sequence published 🚀",
-      description: `Now active. ${d?.enrolled ?? 0} new · ${d?.already_enrolled ?? 0} already enrolled · ${d?.suppressed ?? 0} suppressed · ${d?.no_email ?? 0} no email`,
+      description: `Now active. ${d?.enrolled ?? 0} new · ${d?.already_enrolled ?? 0} already in this sequence · ${d?.already_contacted ?? 0} skipped (contacted before) · ${d?.suppressed ?? 0} unsubscribed · ${d?.no_email ?? 0} no email`,
     }),
     onError: (e: Error) => toast({ title: "Publish failed", description: e.message, variant: "destructive" }),
   });
