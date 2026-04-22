@@ -321,6 +321,28 @@ Deno.serve(async (req) => {
           pendingThrottleId = enr.last_error.slice('__pending_throttle:'.length) || null
         }
 
+        // Detect follow-up: if this enrollment already sent a previous email,
+        // reuse the original subject prefixed with "Re: " so most mail clients
+        // visually thread the follow-up with the first message. (The Lovable
+        // email SDK doesn't expose In-Reply-To headers, so subject-based
+        // threading is the best-effort fallback.)
+        let subjectOverride: string | null = null
+        let isFollowup = false
+        {
+          const { data: prior } = await supabase
+            .from('sent_emails')
+            .select('subject')
+            .eq('enrollment_id', enr.id)
+            .eq('status', 'sent')
+            .order('sent_at', { ascending: true })
+            .limit(1)
+            .maybeSingle()
+          if (prior?.subject) {
+            subjectOverride = prior.subject
+            isFollowup = true
+          }
+        }
+
         const r = await supabase.functions.invoke('send-cold-email', {
           body: {
             user_id: enr.user_id,
@@ -336,6 +358,8 @@ Deno.serve(async (req) => {
             body: cfg.body,
             prompt: cfg.prompt,
             subject_hint: cfg.subject_hint,
+            subject_override: subjectOverride,
+            is_followup: isFollowup,
           },
         })
         if (r.error || (r.data as any)?.error) {
