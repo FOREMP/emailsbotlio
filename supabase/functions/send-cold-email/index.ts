@@ -74,19 +74,22 @@ Deno.serve(async (req) => {
 
   const {
     user_id,
-    sender_id,            // optional: explicit sender; otherwise rotate per `strategy`
-    strategy,             // 'all' | 'brand' | 'specific'
-    brand,                // when strategy === 'brand'
-    contact,              // { id, email, first_name, last_name, custom_fields }
+    sender_id,
+    strategy,
+    brand,
+    contact,
     sequence_id,
     enrollment_id,
     node_id,
-    throttle_node_id,     // optional: id of the throttle node that gated this send
-    mode,                 // 'ai' | 'template' | 'test'
-    subject,              // required for template/test
-    body: bodyText,       // required for template/test
-    prompt,               // required for ai
+    throttle_node_id,
+    mode,
+    subject,
+    body: bodyText,
+    prompt,
     subject_hint,
+    subject_override,      // forces subject verbatim (used for follow-ups: "Re: <original>")
+    is_followup,           // hint to AI it's a follow-up nudge
+    unsubscribe_base_url,  // optional override
   } = body ?? {}
 
   if (!user_id) return new Response(JSON.stringify({ error: 'user_id required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
