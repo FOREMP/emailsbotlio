@@ -126,6 +126,28 @@ const Domains = () => {
           </AlertDescription>
         </Alert>
       )}
+
+      {missingPostal.length > 0 && (
+        <Alert>
+          <Info className="h-4 w-4" />
+          <AlertTitle>Add a postal address for full GDPR / CAN-SPAM compliance</AlertTitle>
+          <AlertDescription className="space-y-2 mt-2">
+            <p>
+              {missingPostal.length} verified domain{missingPostal.length === 1 ? "" : "s"} ({" "}
+              <span className="font-mono">{missingPostal.map((d) => d.domain).join(", ")}</span>
+              ) {missingPostal.length === 1 ? "is" : "are"} sending without a postal address in
+              the email footer. GDPR Art. 13 and CAN-SPAM both require a verifiable physical
+              identifier of the sender in every commercial email.
+            </p>
+            <p>
+              Set the address in the{" "}
+              <code className="text-xs bg-muted px-1 py-0.5 rounded">postal_address</code> column
+              on the matching <code className="text-xs bg-muted px-1 py-0.5 rounded">sending_domains</code>{" "}
+              row (use the SQL editor). Emails will keep sending in the meantime.
+            </p>
+          </AlertDescription>
+        </Alert>
+      )}
     </div>
   );
 };
