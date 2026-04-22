@@ -171,10 +171,11 @@ Deno.serve(async (req) => {
       const cfg = currentNode.config ?? {}
       console.log(`[enr ${enr.id}] processing ${currentNode.node_type}(${currentNode.id})`)
 
-      // Daily-limit (throttle) node: count *actual sends* downstream from this throttle
-      // today. We no longer pre-mark a "throttle_pass" before the send, because send
-      // failures and sender-cap defers used to silently consume slots. The slot is only
-      // consumed when an email_sent activity exists.
+      // Daily-limit (throttle) node: count *actual sends gated by THIS throttle*
+      // today. Each throttle node is independent — a throttle in front of the first
+      // email does not consume the budget of a throttle on a follow-up branch.
+      // We tag email_sent activities with metadata.throttle_node_id when they pass
+      // through a throttle, and count by that tag here.
       if (currentNode.node_type === 'throttle') {
         const max = Number(cfg.max_per_day ?? 50)
         const startOfDay = new Date(); startOfDay.setUTCHours(0, 0, 0, 0)
@@ -184,23 +185,25 @@ Deno.serve(async (req) => {
           .eq('sequence_id', enr.sequence_id)
           .eq('activity_type', 'email_sent')
           .gte('created_at', startOfDay.toISOString())
+          .filter('metadata->>throttle_node_id', 'eq', currentNode.id)
         if ((count ?? 0) >= max) {
           const tomorrow = new Date(startOfDay.getTime() + 24 * 3600_000)
           await supabase.from('enrollments').update({
             next_send_at: tomorrow.toISOString(),
             status: 'waiting_capacity',
-            last_error: `daily send cap reached (${count}/${max}) — resumes ${tomorrow.toISOString().slice(0, 10)}`,
+            last_error: `daily limit reached for this throttle node (${count}/${max}) — resumes ${tomorrow.toISOString().slice(0, 10)}`,
           }).eq('id', enr.id)
-          console.log(`[enr ${enr.id}] throttle full (${count}/${max}) → waiting_capacity until ${tomorrow.toISOString()}`)
+          console.log(`[enr ${enr.id}] throttle ${currentNode.id} full (${count}/${max}) → waiting_capacity until ${tomorrow.toISOString()}`)
           continue
         }
-        // Capacity available — advance to the next node WITHOUT recording anything.
+        // Capacity available — advance and remember which throttle gated the next send.
         const next = (edges ?? []).find((e: any) => e.source_node_id === currentNode.id)
         if (!next) { await supabase.from('enrollments').update({ status: 'completed' }).eq('id', enr.id); continue }
         await supabase.from('enrollments').update({
           current_node_id: next.target_node_id,
           next_send_at: nowIso,
           status: 'active',
+          last_error: `__pending_throttle:${currentNode.id}`,
         }).eq('id', enr.id)
         advanced++
         continue
