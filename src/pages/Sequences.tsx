@@ -6,7 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus, Play, Pause, Trash2, Pencil, Zap, AlertCircle } from "lucide-react";
+import { Plus, Play, Pause, Trash2, Pencil, Zap, AlertCircle, UserPlus, Info } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -97,6 +97,27 @@ const Sequences = () => {
   const unverified = (domains as any[]).filter((d) => d.is_active && !d.is_verified);
   const verified = (domains as any[]).filter((d) => d.is_active && d.is_verified);
 
+  // Most recent enroll_skipped event per sequence so we can show a yellow banner
+  // explaining why a sequence has 0 active enrollments.
+  const { data: skipEvents = {} } = useQuery({
+    queryKey: ["sequence-skip-events", sequences.map((s) => s.id)],
+    enabled: sequences.length > 0,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("contact_activity")
+        .select("sequence_id, metadata, created_at")
+        .eq("activity_type", "enroll_skipped")
+        .order("created_at", { ascending: false })
+        .limit(200);
+      const out: Record<string, { metadata: any; created_at: string }> = {};
+      (data ?? []).forEach((r: any) => {
+        if (!r.sequence_id) return;
+        if (!out[r.sequence_id]) out[r.sequence_id] = { metadata: r.metadata, created_at: r.created_at };
+      });
+      return out;
+    },
+  });
+
   const runNow = useMutation({
     mutationFn: async () => {
       const { data, error } = await supabase.functions.invoke("run-sequences", { body: {} });
@@ -108,6 +129,26 @@ const Sequences = () => {
       qc.invalidateQueries({ queryKey: ["sequence-enroll-stats"] });
     },
     onError: (e: Error) => toast({ title: "Run failed", description: e.message, variant: "destructive" }),
+  });
+
+  const enrollNow = useMutation({
+    mutationFn: async ({ id, allowRecontact }: { id: string; allowRecontact: boolean }) => {
+      const { data, error } = await supabase.functions.invoke("enroll-contacts", {
+        body: { sequence_id: id, allow_recontact: allowRecontact },
+      });
+      if (error) throw error;
+      return data as { enrolled: number; already_contacted: number; suppressed: number; already_enrolled: number; total_contacts: number };
+    },
+    onSuccess: (data) => {
+      const parts: string[] = [`${data.enrolled} enrolled`];
+      if (data.already_contacted) parts.push(`${data.already_contacted} skipped (previously contacted)`);
+      if (data.already_enrolled) parts.push(`${data.already_enrolled} already in this sequence`);
+      if (data.suppressed) parts.push(`${data.suppressed} suppressed`);
+      toast({ title: "Enrollment complete", description: parts.join(" · ") });
+      qc.invalidateQueries({ queryKey: ["sequence-enroll-stats"] });
+      qc.invalidateQueries({ queryKey: ["sequence-skip-events"] });
+    },
+    onError: (e: Error) => toast({ title: "Enrollment failed", description: e.message, variant: "destructive" }),
   });
 
   const create = useMutation({
