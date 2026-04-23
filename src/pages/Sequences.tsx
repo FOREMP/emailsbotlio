@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, Fragment as FragmentWithKey } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -343,7 +343,7 @@ const Sequences = () => {
                         </TableCell>
                       </TableRow>
                     )}
-                    </>
+                    </FragmentWithKey>
                   );
                 })}
               </TableBody>
