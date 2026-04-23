@@ -412,13 +412,20 @@ Deno.serve(async (req) => {
           continue
         }
         sent++
-        console.log(`[enr ${enr.id}] email sent`)
+        console.log(`[enr ${enr.id}] email sent (sender=${preSenderId})`)
+
+        // Persist sticky sender so all follow-ups use the same From
+        const stickyUpdate: Record<string, unknown> = {}
+        if (enr.assigned_sender_id !== preSenderId) {
+          stickyUpdate.assigned_sender_id = preSenderId
+        }
 
         const next = (edges ?? []).find((e: any) => e.source_node_id === currentNode.id)
         if (!next) {
           await supabase.from('enrollments').update({
             status: 'completed', last_sent_at: nowIso, deferred_at: null,
             attempt_count: 0, last_error: null,
+            ...stickyUpdate,
           }).eq('id', enr.id)
           console.log(`[enr ${enr.id}] no next after send → completed`)
           continue
@@ -431,6 +438,7 @@ Deno.serve(async (req) => {
           status: 'active',
           attempt_count: 0,
           last_error: null,
+          ...stickyUpdate,
         }).eq('id', enr.id)
         advanced++
         continue
