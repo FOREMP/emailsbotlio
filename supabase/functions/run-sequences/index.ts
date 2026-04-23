@@ -240,47 +240,71 @@ Deno.serve(async (req) => {
           failed++; continue
         }
 
-        if (cfg.sender_strategy === 'specific' && cfg.sender_id) {
-          const specific = anyActive.find((s: any) => s.id === cfg.sender_id)
-          if (!specific) {
-            await supabase.from('enrollments').update({
-              status: 'failed',
-              last_error: 'configured specific sender no longer exists or is inactive',
-              error_at: nowIso,
-            }).eq('id', enr.id)
-            failed++; continue
+        // STICKY SENDER: if this enrollment already has an assigned sender from
+        // a prior send, reuse it so the recipient sees the same From across the
+        // first email and every follow-up (matches subject-based threading).
+        const isSenderEligible = async (sid: string): Promise<{ ok: boolean; reason?: string }> => {
+          const match = verifiedActive.find((s: any) => s.id === sid)
+          if (!match) return { ok: false, reason: 'sender no longer active or domain unverified' }
+          const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: sid })
+          if ((rem ?? 0) <= 0) return { ok: false, reason: 'assigned sender at daily cap' }
+          return { ok: true }
+        }
+
+        if (enr.assigned_sender_id) {
+          const check = await isSenderEligible(enr.assigned_sender_id)
+          if (check.ok) {
+            preSenderId = enr.assigned_sender_id
+            console.log(`[enr ${enr.id}] reusing sticky sender ${preSenderId}`)
+          } else {
+            console.warn(`[enr ${enr.id}] sticky sender ${enr.assigned_sender_id} ineligible: ${check.reason}`)
+            // Fall through to rotation logic below; we will overwrite assigned_sender_id on success.
           }
-          const dom = (specific.from_email as string).split('@')[1]
-          if (!verifiedDomains.has(dom)) {
-            await supabase.from('enrollments').update({
-              status: 'failed',
-              last_error: `sender domain "${dom}" not verified with Lovable Emails`,
-              error_at: nowIso,
-            }).eq('id', enr.id)
-            failed++; continue
-          }
-          preSenderId = cfg.sender_id
-        } else {
-          let candidates = verifiedActive
-          if (cfg.sender_strategy === 'brand' && cfg.brand) {
-            const filtered = candidates.filter((s: any) => {
-              const dom = (s.from_email as string).split('@')[1] ?? ''
-              return dom.startsWith(`${cfg.brand}.`) || dom === cfg.brand
-            })
-            if (filtered.length === 0) {
-              console.warn(`[enr ${enr.id}] no verified senders match brand "${cfg.brand}" → failed`)
+        }
+
+        if (!preSenderId) {
+          if (cfg.sender_strategy === 'specific' && cfg.sender_id) {
+            const specific = anyActive.find((s: any) => s.id === cfg.sender_id)
+            if (!specific) {
               await supabase.from('enrollments').update({
                 status: 'failed',
-                last_error: `no verified senders match brand "${cfg.brand}"`,
+                last_error: 'configured specific sender no longer exists or is inactive',
                 error_at: nowIso,
               }).eq('id', enr.id)
               failed++; continue
             }
-            candidates = filtered
-          }
-          for (const c of candidates.sort(() => Math.random() - 0.5)) {
-            const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: c.id })
-            if ((rem ?? 0) > 0) { preSenderId = c.id; break }
+            const dom = (specific.from_email as string).split('@')[1]
+            if (!verifiedDomains.has(dom)) {
+              await supabase.from('enrollments').update({
+                status: 'failed',
+                last_error: `sender domain "${dom}" not verified with Lovable Emails`,
+                error_at: nowIso,
+              }).eq('id', enr.id)
+              failed++; continue
+            }
+            preSenderId = cfg.sender_id
+          } else {
+            let candidates = verifiedActive
+            if (cfg.sender_strategy === 'brand' && cfg.brand) {
+              const filtered = candidates.filter((s: any) => {
+                const dom = (s.from_email as string).split('@')[1] ?? ''
+                return dom.startsWith(`${cfg.brand}.`) || dom === cfg.brand
+              })
+              if (filtered.length === 0) {
+                console.warn(`[enr ${enr.id}] no verified senders match brand "${cfg.brand}" → failed`)
+                await supabase.from('enrollments').update({
+                  status: 'failed',
+                  last_error: `no verified senders match brand "${cfg.brand}"`,
+                  error_at: nowIso,
+                }).eq('id', enr.id)
+                failed++; continue
+              }
+              candidates = filtered
+            }
+            for (const c of candidates.sort(() => Math.random() - 0.5)) {
+              const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: c.id })
+              if ((rem ?? 0) > 0) { preSenderId = c.id; break }
+            }
           }
         }
         if (!preSenderId) {
@@ -297,7 +321,7 @@ Deno.serve(async (req) => {
           console.log(`[enr ${enr.id}] all senders at daily cap → waiting_capacity until ${tomorrow.toISOString()}`)
           continue
         }
-        if (cfg.sender_strategy === 'specific') {
+        if (cfg.sender_strategy === 'specific' && !enr.assigned_sender_id) {
           const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: preSenderId })
           if ((rem ?? 0) <= 0) {
             const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
@@ -388,13 +412,20 @@ Deno.serve(async (req) => {
           continue
         }
         sent++
-        console.log(`[enr ${enr.id}] email sent`)
+        console.log(`[enr ${enr.id}] email sent (sender=${preSenderId})`)
+
+        // Persist sticky sender so all follow-ups use the same From
+        const stickyUpdate: Record<string, unknown> = {}
+        if (enr.assigned_sender_id !== preSenderId) {
+          stickyUpdate.assigned_sender_id = preSenderId
+        }
 
         const next = (edges ?? []).find((e: any) => e.source_node_id === currentNode.id)
         if (!next) {
           await supabase.from('enrollments').update({
             status: 'completed', last_sent_at: nowIso, deferred_at: null,
             attempt_count: 0, last_error: null,
+            ...stickyUpdate,
           }).eq('id', enr.id)
           console.log(`[enr ${enr.id}] no next after send → completed`)
           continue
@@ -407,6 +438,7 @@ Deno.serve(async (req) => {
           status: 'active',
           attempt_count: 0,
           last_error: null,
+          ...stickyUpdate,
         }).eq('id', enr.id)
         advanced++
         continue

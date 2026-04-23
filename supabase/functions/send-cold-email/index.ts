@@ -256,7 +256,12 @@ Deno.serve(async (req) => {
       purpose: 'transactional',
       label: 'cold-outreach',
       idempotency_key: messageId,
-      unsubscribe_token: unsubscribeToken!,
+      // NOTE: deliberately NOT passing `unsubscribe_token`. Doing so makes the
+      // Lovable Email API auto-append its own visible List-Unsubscribe footer,
+      // which would duplicate the unsubscribe link we already include in our
+      // own footer (under "Best regards / name / company"). We keep our footer
+      // as the single visible unsubscribe entry-point; the /unsubscribe page
+      // still resolves the token correctly.
     } as any, { apiKey, idempotencyKey: messageId })
     await supabase.from('sent_emails').update({ status: 'sent' }).eq('id', messageId)
   } catch (err) {

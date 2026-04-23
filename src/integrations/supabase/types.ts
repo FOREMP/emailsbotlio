@@ -174,6 +174,7 @@ export type Database = {
       }
       enrollments: {
         Row: {
+          assigned_sender_id: string | null
           attempt_count: number
           contact_id: string
           created_at: string
@@ -191,6 +192,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          assigned_sender_id?: string | null
           attempt_count?: number
           contact_id: string
           created_at?: string
@@ -208,6 +210,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          assigned_sender_id?: string | null
           attempt_count?: number
           contact_id?: string
           created_at?: string

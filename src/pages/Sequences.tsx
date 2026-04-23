@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, Fragment as FragmentWithKey } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -6,7 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus, Play, Pause, Trash2, Pencil, Zap, AlertCircle } from "lucide-react";
+import { Plus, Play, Pause, Trash2, Pencil, Zap, AlertCircle, UserPlus, Info } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -97,6 +97,27 @@ const Sequences = () => {
   const unverified = (domains as any[]).filter((d) => d.is_active && !d.is_verified);
   const verified = (domains as any[]).filter((d) => d.is_active && d.is_verified);
 
+  // Most recent enroll_skipped event per sequence so we can show a yellow banner
+  // explaining why a sequence has 0 active enrollments.
+  const { data: skipEvents = {} } = useQuery({
+    queryKey: ["sequence-skip-events", sequences.map((s) => s.id)],
+    enabled: sequences.length > 0,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("contact_activity")
+        .select("sequence_id, metadata, created_at")
+        .eq("activity_type", "enroll_skipped")
+        .order("created_at", { ascending: false })
+        .limit(200);
+      const out: Record<string, { metadata: any; created_at: string }> = {};
+      (data ?? []).forEach((r: any) => {
+        if (!r.sequence_id) return;
+        if (!out[r.sequence_id]) out[r.sequence_id] = { metadata: r.metadata, created_at: r.created_at };
+      });
+      return out;
+    },
+  });
+
   const runNow = useMutation({
     mutationFn: async () => {
       const { data, error } = await supabase.functions.invoke("run-sequences", { body: {} });
@@ -108,6 +129,26 @@ const Sequences = () => {
       qc.invalidateQueries({ queryKey: ["sequence-enroll-stats"] });
     },
     onError: (e: Error) => toast({ title: "Run failed", description: e.message, variant: "destructive" }),
+  });
+
+  const enrollNow = useMutation({
+    mutationFn: async ({ id, allowRecontact }: { id: string; allowRecontact: boolean }) => {
+      const { data, error } = await supabase.functions.invoke("enroll-contacts", {
+        body: { sequence_id: id, allow_recontact: allowRecontact },
+      });
+      if (error) throw error;
+      return data as { enrolled: number; already_contacted: number; suppressed: number; already_enrolled: number; total_contacts: number };
+    },
+    onSuccess: (data) => {
+      const parts: string[] = [`${data.enrolled} enrolled`];
+      if (data.already_contacted) parts.push(`${data.already_contacted} skipped (previously contacted)`);
+      if (data.already_enrolled) parts.push(`${data.already_enrolled} already in this sequence`);
+      if (data.suppressed) parts.push(`${data.suppressed} suppressed`);
+      toast({ title: "Enrollment complete", description: parts.join(" · ") });
+      qc.invalidateQueries({ queryKey: ["sequence-enroll-stats"] });
+      qc.invalidateQueries({ queryKey: ["sequence-skip-events"] });
+    },
+    onError: (e: Error) => toast({ title: "Enrollment failed", description: e.message, variant: "destructive" }),
   });
 
   const create = useMutation({
@@ -212,8 +253,16 @@ const Sequences = () => {
               <TableBody>
                 {sequences.map((s) => {
                   const list = lists.find((l) => l.id === s.contact_list_id);
+                  const st = (enrollStats as any)[s.id];
+                  const skip = (skipEvents as any)[s.id];
+                  const showSkipBanner =
+                    s.status === "active" &&
+                    (!st || st.active === 0) &&
+                    skip &&
+                    (skip.metadata?.already_contacted ?? 0) > 0;
                   return (
-                    <TableRow key={s.id}>
+                    <FragmentWithKey key={s.id}>
+                    <TableRow>
                       <TableCell className="font-medium">{s.name}</TableCell>
                       <TableCell>
                         <span className={`px-2 py-0.5 rounded text-xs font-medium ${statusBadge(s.status)}`}>
@@ -224,7 +273,6 @@ const Sequences = () => {
                       <TableCell className="text-sm text-muted-foreground">{list?.name ?? "—"}</TableCell>
                       <TableCell>
                         {(() => {
-                          const st = (enrollStats as any)[s.id];
                           if (!st || st.total === 0) return <span className="text-muted-foreground text-sm">0</span>;
                           return (
                             <div className="flex items-center gap-2 text-xs flex-wrap">
@@ -249,6 +297,21 @@ const Sequences = () => {
                         {new Date(s.created_at).toLocaleDateString()}
                       </TableCell>
                       <TableCell className="text-right space-x-1">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          title="Re-run enrollment for this sequence"
+                          onClick={() => {
+                            const allow = confirm(
+                              `Enroll contacts now for "${s.name}"?\n\nClick OK to also include people who were already contacted from other sequences (re-contact).\nClick Cancel to skip them.`
+                            );
+                            // OK = allow re-contact; Cancel from confirm() returns false → still enroll, just skip recontacts
+                            enrollNow.mutate({ id: s.id, allowRecontact: allow });
+                          }}
+                          disabled={enrollNow.isPending}
+                        >
+                          <UserPlus className="h-3.5 w-3.5" />
+                        </Button>
                         <Button size="sm" variant="ghost" onClick={() => navigate(`/sequences/${s.id}`)}>
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
@@ -264,6 +327,23 @@ const Sequences = () => {
                         </Button>
                       </TableCell>
                     </TableRow>
+                    {showSkipBanner && (
+                      <TableRow key={s.id + "-skip"} className="bg-yellow-500/5 hover:bg-yellow-500/5">
+                        <TableCell colSpan={7} className="py-2">
+                          <div className="flex items-start gap-2 text-xs text-yellow-700 dark:text-yellow-500">
+                            <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                            <span>
+                              0 active enrollments — last enrollment skipped{" "}
+                              <strong>{skip.metadata.already_contacted}</strong> contact
+                              {skip.metadata.already_contacted === 1 ? "" : "s"} because they were already
+                              contacted from another sequence. Use the <UserPlus className="inline h-3 w-3 mx-0.5" />
+                              button to re-enroll (you can choose to allow re-contact).
+                            </span>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    </FragmentWithKey>
                   );
                 })}
               </TableBody>

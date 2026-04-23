@@ -203,6 +203,25 @@ Deno.serve(async (req) => {
       enrolled = ins?.length ?? 0;
     }
 
+    // Visibility: if 0 were enrolled, log an activity row so the UI can show
+    // "0 enrolled — N skipped because previously contacted" instead of staying silent.
+    if (enrolled === 0) {
+      await supabase.from("contact_activity").insert({
+        user_id: user.id,
+        sequence_id: sequenceId,
+        contact_id: (contacts ?? [])[0]?.id ?? null,
+        activity_type: "enroll_skipped",
+        metadata: {
+          total_contacts: contacts?.length ?? 0,
+          already_contacted: alreadyContacted,
+          already_enrolled: alreadyEnrolled,
+          suppressed,
+          no_email: noEmail,
+          allow_recontact: allowRecontact,
+        },
+      });
+    }
+
     return new Response(
       JSON.stringify({
         enrolled,
