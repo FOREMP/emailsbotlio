@@ -253,7 +253,15 @@ const Sequences = () => {
               <TableBody>
                 {sequences.map((s) => {
                   const list = lists.find((l) => l.id === s.contact_list_id);
+                  const st = (enrollStats as any)[s.id];
+                  const skip = (skipEvents as any)[s.id];
+                  const showSkipBanner =
+                    s.status === "active" &&
+                    (!st || st.active === 0) &&
+                    skip &&
+                    (skip.metadata?.already_contacted ?? 0) > 0;
                   return (
+                    <>
                     <TableRow key={s.id}>
                       <TableCell className="font-medium">{s.name}</TableCell>
                       <TableCell>
@@ -265,7 +273,6 @@ const Sequences = () => {
                       <TableCell className="text-sm text-muted-foreground">{list?.name ?? "—"}</TableCell>
                       <TableCell>
                         {(() => {
-                          const st = (enrollStats as any)[s.id];
                           if (!st || st.total === 0) return <span className="text-muted-foreground text-sm">0</span>;
                           return (
                             <div className="flex items-center gap-2 text-xs flex-wrap">
@@ -290,6 +297,21 @@ const Sequences = () => {
                         {new Date(s.created_at).toLocaleDateString()}
                       </TableCell>
                       <TableCell className="text-right space-x-1">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          title="Re-run enrollment for this sequence"
+                          onClick={() => {
+                            const allow = confirm(
+                              `Enroll contacts now for "${s.name}"?\n\nClick OK to also include people who were already contacted from other sequences (re-contact).\nClick Cancel to skip them.`
+                            );
+                            // OK = allow re-contact; Cancel from confirm() returns false → still enroll, just skip recontacts
+                            enrollNow.mutate({ id: s.id, allowRecontact: allow });
+                          }}
+                          disabled={enrollNow.isPending}
+                        >
+                          <UserPlus className="h-3.5 w-3.5" />
+                        </Button>
                         <Button size="sm" variant="ghost" onClick={() => navigate(`/sequences/${s.id}`)}>
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
@@ -305,6 +327,23 @@ const Sequences = () => {
                         </Button>
                       </TableCell>
                     </TableRow>
+                    {showSkipBanner && (
+                      <TableRow key={s.id + "-skip"} className="bg-yellow-500/5 hover:bg-yellow-500/5">
+                        <TableCell colSpan={7} className="py-2">
+                          <div className="flex items-start gap-2 text-xs text-yellow-700 dark:text-yellow-500">
+                            <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                            <span>
+                              0 active enrollments — last enrollment skipped{" "}
+                              <strong>{skip.metadata.already_contacted}</strong> contact
+                              {skip.metadata.already_contacted === 1 ? "" : "s"} because they were already
+                              contacted from another sequence. Use the <UserPlus className="inline h-3 w-3 mx-0.5" />
+                              button to re-enroll (you can choose to allow re-contact).
+                            </span>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    </>
                   );
                 })}
               </TableBody>
