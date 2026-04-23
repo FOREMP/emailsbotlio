@@ -261,8 +261,8 @@ const Sequences = () => {
                     skip &&
                     (skip.metadata?.already_contacted ?? 0) > 0;
                   return (
-                    <>
-                    <TableRow key={s.id}>
+                    <FragmentWithKey key={s.id}>
+                    <TableRow>
                       <TableCell className="font-medium">{s.name}</TableCell>
                       <TableCell>
                         <span className={`px-2 py-0.5 rounded text-xs font-medium ${statusBadge(s.status)}`}>
