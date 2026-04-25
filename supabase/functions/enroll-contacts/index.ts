@@ -145,13 +145,15 @@ Deno.serve(async (req) => {
       ...((supp ?? []).map((d: any) => d.email?.toLowerCase()).filter(Boolean) as string[]),
     ]);
 
-    // Load existing enrollments (any status) for dedup within this sequence
+    // Load existing enrollments for dedup within this sequence. Active/waiting
+    // rows stay protected from duplicates, but failed/completed rows can be
+    // reactivated when the user explicitly allows re-contact.
     const { data: existing } = await supabase
       .from("enrollments")
-      .select("contact_id, status")
+      .select("id, contact_id, status")
       .eq("user_id", user.id)
       .eq("sequence_id", sequenceId);
-    const enrolledSet = new Set((existing ?? []).map((e) => e.contact_id));
+    const existingByContact = new Map((existing ?? []).map((e: any) => [e.contact_id, e]));
 
     // Cross-sequence dedup: any contact this user has already successfully emailed
     // (or queued an email to) from ANY sequence is skipped by default. The user can
@@ -175,12 +177,21 @@ Deno.serve(async (req) => {
     let noEmail = 0;
     const nowIso = new Date().toISOString();
     const toInsert: Array<Record<string, unknown>> = [];
+    const toReactivate: string[] = [];
 
     for (const c of contacts ?? []) {
       if (!c.email) { noEmail++; continue; }
       const emailLower = c.email.toLowerCase();
       if (dncSet.has(emailLower)) { suppressed++; continue; }
-      if (enrolledSet.has(c.id)) { alreadyEnrolled++; continue; }
+      const existingEnrollment = existingByContact.get(c.id) as any;
+      if (existingEnrollment) {
+        if (allowRecontact && existingEnrollment.status === "failed") {
+          toReactivate.push(existingEnrollment.id);
+        } else {
+          alreadyEnrolled++;
+        }
+        continue;
+      }
       if (!allowRecontact && previouslyContactedSet.has(emailLower)) { alreadyContacted++; continue; }
       toInsert.push({
         user_id: user.id,
@@ -201,6 +212,26 @@ Deno.serve(async (req) => {
         .select("id");
       if (insertErr) throw insertErr;
       enrolled = ins?.length ?? 0;
+    }
+
+    if (toReactivate.length > 0) {
+      const { error: reactivateErr } = await supabase
+        .from("enrollments")
+        .update({
+          current_step: 0,
+          current_node_id: trigger.id,
+          status: "active",
+          next_send_at: nowIso,
+          last_sent_at: null,
+          assigned_sender_id: null,
+          attempt_count: 0,
+          deferred_at: null,
+          last_error: null,
+          error_at: null,
+        })
+        .in("id", toReactivate);
+      if (reactivateErr) throw reactivateErr;
+      enrolled += toReactivate.length;
     }
 
     // Visibility: if 0 were enrolled, log an activity row so the UI can show

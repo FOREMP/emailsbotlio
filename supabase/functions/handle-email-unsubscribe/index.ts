@@ -14,7 +14,7 @@ function jsonResponse(data: Record<string, unknown>, status = 200): Response {
 }
 
 async function ensureGlobalSuppression(
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   email: string,
 ) {
   const normalizedEmail = email.toLowerCase()
@@ -44,7 +44,7 @@ async function ensureGlobalSuppression(
 }
 
 async function syncDoNotContactAndEnrollments(
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   email: string,
 ) {
   const normalizedEmail = email.toLowerCase()
@@ -129,7 +129,7 @@ async function syncDoNotContactAndEnrollments(
 }
 
 async function syncUnsubscribeState(
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   email: string,
 ) {
   const normalizedEmail = await ensureGlobalSuppression(supabase, email)

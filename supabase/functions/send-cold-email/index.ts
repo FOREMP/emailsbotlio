@@ -42,15 +42,14 @@ function appendFooter(
   bodyText: string,
   senderName: string,
   company: string,
-  unsubscribeUrl: string,
   postalAddress?: string | null,
 ): string {
   const cleaned = stripExistingSignOff(bodyText)
   const signoff = `Best regards,\n${senderName}\n${company}`
   const legal: string[] = []
   if (postalAddress && postalAddress.trim()) legal.push(postalAddress.trim())
-  legal.push(`Don't want to hear from us? Unsubscribe: ${unsubscribeUrl}`)
-  return `${cleaned}\n\n${signoff}\n\n---\n${legal.join('\n')}`
+  const legalBlock = legal.length > 0 ? `\n\n---\n${legal.join('\n')}` : ''
+  return `${cleaned}\n\n${signoff}${legalBlock}`
 }
 
 function normaliseFollowupSubject(orig: string): string {
@@ -208,17 +207,14 @@ Deno.serve(async (req) => {
     }
   }
 
-  // Build the visible unsubscribe URL using the published site
-  const baseUrl = (unsubscribe_base_url && String(unsubscribe_base_url).replace(/\/$/, '')) || 'https://emailsbotlio.lovable.app'
-  const unsubscribeUrl = `${baseUrl}/unsubscribe?token=${encodeURIComponent(unsubscribeToken!)}`
-
-  // Append GDPR-compliant footer: sign-off + (optional) postal address + unsubscribe link
+  // Append sender footer only. The Lovable Email API requires the token below
+  // and adds the single visible unsubscribe link itself, so we do not duplicate
+  // it in the Best regards footer.
   const company = deriveCompany(domain, (domainRow as any).brand)
   finalBody = appendFooter(
     finalBody,
     chosenSender.from_name,
     company,
-    unsubscribeUrl,
     (domainRow as any).postal_address ?? null,
   )
 
@@ -256,12 +252,7 @@ Deno.serve(async (req) => {
       purpose: 'transactional',
       label: 'cold-outreach',
       idempotency_key: messageId,
-      // NOTE: deliberately NOT passing `unsubscribe_token`. Doing so makes the
-      // Lovable Email API auto-append its own visible List-Unsubscribe footer,
-      // which would duplicate the unsubscribe link we already include in our
-      // own footer (under "Best regards / name / company"). We keep our footer
-      // as the single visible unsubscribe entry-point; the /unsubscribe page
-      // still resolves the token correctly.
+      unsubscribe_token: unsubscribeToken,
     } as any, { apiKey, idempotencyKey: messageId })
     await supabase.from('sent_emails').update({ status: 'sent' }).eq('id', messageId)
   } catch (err) {

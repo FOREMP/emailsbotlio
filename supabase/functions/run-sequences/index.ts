@@ -345,14 +345,16 @@ Deno.serve(async (req) => {
           pendingThrottleId = enr.last_error.slice('__pending_throttle:'.length) || null
         }
 
-        // Detect follow-up: if this enrollment already sent a previous email,
+        // Detect follow-up: only after the enrollment itself has recorded a
+        // successful last_sent_at. This keeps retries of a failed first email
+        // from being treated as follow-ups because of old failed/test send logs.
         // reuse the original subject prefixed with "Re: " so most mail clients
         // visually thread the follow-up with the first message. (The Lovable
         // email SDK doesn't expose In-Reply-To headers, so subject-based
         // threading is the best-effort fallback.)
         let subjectOverride: string | null = null
         let isFollowup = false
-        {
+        if (enr.last_sent_at) {
           const { data: prior } = await supabase
             .from('sent_emails')
             .select('subject')
