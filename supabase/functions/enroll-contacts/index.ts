@@ -185,7 +185,7 @@ Deno.serve(async (req) => {
       if (dncSet.has(emailLower)) { suppressed++; continue; }
       const existingEnrollment = existingByContact.get(c.id) as any;
       if (existingEnrollment) {
-        if (allowRecontact && !["active", "waiting_capacity"].includes(existingEnrollment.status)) {
+        if (allowRecontact && existingEnrollment.status === "failed") {
           toReactivate.push(existingEnrollment.id);
         } else {
           alreadyEnrolled++;
