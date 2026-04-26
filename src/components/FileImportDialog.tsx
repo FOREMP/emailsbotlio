@@ -10,12 +10,42 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Upload, FileSpreadsheet, AlertCircle, ShieldAlert } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 
 const STANDARD_FIELDS = ["email", "phone", "first_name", "last_name"] as const;
+
+/** Convert any header to a safe template variable key: lowercase snake_case, alnum + underscore only. */
+export function sanitizeVarKey(raw: string): string {
+  const cleaned = raw
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return cleaned || "field";
+}
+
+/** Flatten one JSON record (one level) so nested objects become dot.path keys and arrays become JSON strings. */
+function flattenRecord(obj: Record<string, unknown>, prefix = ""): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    const key = prefix ? `${prefix}.${k}` : k;
+    if (v === null || v === undefined) {
+      out[key] = "";
+    } else if (Array.isArray(v)) {
+      out[key] = v.map((x) => (typeof x === "object" ? JSON.stringify(x) : String(x))).join(", ");
+    } else if (typeof v === "object") {
+      Object.assign(out, flattenRecord(v as Record<string, unknown>, key));
+    } else {
+      out[key] = String(v);
+    }
+  }
+  return out;
+}
 
 const EMAIL_PATTERNS = ["email", "e-mail", "email_address", "emailaddress", "mail"];
 const PHONE_PATTERNS = ["phone", "phone_number", "phonenumber", "tel", "telephone", "mobile", "cell"];
@@ -83,8 +113,38 @@ function autoDetectMapping(headers: string[], existingColumns: string[] = []): C
 function parseFile(file: File): Promise<ParsedData> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
+    const isJson = /\.json$/i.test(file.name) || file.type === "application/json";
+
     reader.onload = (e) => {
       try {
+        if (isJson) {
+          const text = typeof e.target!.result === "string"
+            ? (e.target!.result as string)
+            : new TextDecoder().decode(e.target!.result as ArrayBuffer);
+          const parsed = JSON.parse(text);
+          // Accept: array of objects, {data: [...]}, {contacts: [...]}, {results: [...]}
+          let arr: any[] | null = null;
+          if (Array.isArray(parsed)) arr = parsed;
+          else if (parsed && typeof parsed === "object") {
+            for (const k of ["data", "contacts", "results", "items", "records", "rows"]) {
+              if (Array.isArray(parsed[k])) { arr = parsed[k]; break; }
+            }
+          }
+          if (!arr || arr.length === 0) {
+            reject(new Error("JSON must be an array of objects (or an object with a 'data'/'contacts' array)."));
+            return;
+          }
+          const rows = arr.map((row) => (row && typeof row === "object" ? flattenRecord(row) : { value: String(row) }));
+          // Union of keys across all rows so we don't miss columns present only in later rows
+          const headerSet = new Set<string>();
+          rows.forEach((r) => Object.keys(r).forEach((k) => headerSet.add(k)));
+          const headers = Array.from(headerSet);
+          // Make sure every row has every header
+          rows.forEach((r) => headers.forEach((h) => { if (!(h in r)) r[h] = ""; }));
+          resolve({ headers, rows });
+          return;
+        }
+
         const data = new Uint8Array(e.target!.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: "array" });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -103,12 +163,15 @@ function parseFile(file: File): Promise<ParsedData> {
         });
 
         resolve({ headers, rows });
-      } catch {
-        reject(new Error("Failed to parse file. Make sure it's a valid CSV or Excel file."));
+      } catch (err: any) {
+        reject(new Error(isJson
+          ? `Failed to parse JSON: ${err?.message ?? "invalid JSON"}`
+          : "Failed to parse file. Make sure it's a valid CSV or Excel file."));
       }
     };
     reader.onerror = () => reject(new Error("Failed to read file."));
-    reader.readAsArrayBuffer(file);
+    if (isJson) reader.readAsText(file);
+    else reader.readAsArrayBuffer(file);
   });
 }
 
@@ -116,6 +179,8 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
   const { user } = useAuth();
   const [parsed, setParsed] = useState<ParsedData | null>(null);
   const [mapping, setMapping] = useState<ColumnMapping>({});
+  /** For headers mapped to "custom": the user-controlled variable name (sanitized snake_case). */
+  const [customNames, setCustomNames] = useState<Record<string, string>>({});
   const [fileName, setFileName] = useState("");
   const [fileMeta, setFileMeta] = useState<{ size: number; type: string }>({ size: 0, type: "" });
   const [autopilot, setAutopilot] = useState<boolean>(() => {
@@ -139,7 +204,12 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
     try {
       const data = await parseFile(file);
       setParsed(data);
-      setMapping(autoDetectMapping(data.headers, existingColumns));
+      const auto = autoDetectMapping(data.headers, existingColumns);
+      setMapping(auto);
+      // Pre-fill custom variable names with sanitized header
+      const names: Record<string, string> = {};
+      data.headers.forEach((h) => { if (auto[h] === "custom") names[h] = sanitizeVarKey(h); });
+      setCustomNames(names);
       setFileName(file.name);
       setFileMeta({ size: file.size, type: file.type || file.name.split(".").pop() || "" });
     } catch (err: any) {
@@ -151,7 +221,6 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
   const updateMapping = (header: string, value: string) => {
     setMapping((prev) => {
       const next = { ...prev };
-      // If assigning a unique standard field, unassign it from any other column
       const uniqueRoles = ["email", "phone", "first_name", "last_name"];
       if (uniqueRoles.includes(value)) {
         for (const key of Object.keys(next)) {
@@ -161,24 +230,42 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
       next[header] = value;
       return next;
     });
+    // Auto-fill name slot when switching to custom
+    if (value === "custom") {
+      setCustomNames((prev) => prev[header] ? prev : { ...prev, [header]: sanitizeVarKey(header) });
+    }
+  };
+
+  const updateCustomName = (header: string, raw: string) => {
+    setCustomNames((prev) => ({ ...prev, [header]: sanitizeVarKey(raw) }));
   };
 
   const hasEmail = Object.values(mapping).includes("email");
-  // Custom columns = both new "custom" headers and any "reuse:" mappings (under reused key)
+
+  /** Resolved variable key for a given header (only meaningful for custom/reuse). */
+  const resolveKey = (header: string): string | null => {
+    const m = mapping[header];
+    if (m === "custom") return customNames[header] || sanitizeVarKey(header);
+    if (typeof m === "string" && m.startsWith("reuse:")) return m.slice("reuse:".length);
+    return null;
+  };
+
   const customColumns = parsed
-    ? parsed.headers
-        .map((h) => {
-          const m = mapping[h];
-          if (m === "custom") return h;
-          if (typeof m === "string" && m.startsWith("reuse:")) return m.slice("reuse:".length);
-          return null;
-        })
-        .filter((v): v is string => !!v)
+    ? Array.from(new Set(parsed.headers.map(resolveKey).filter((v): v is string => !!v)))
     : [];
+
+  // Detect duplicate variable names across columns (collision warning)
+  const keyCounts: Record<string, number> = {};
+  parsed?.headers.forEach((h) => {
+    const k = resolveKey(h);
+    if (k) keyCounts[k] = (keyCounts[k] ?? 0) + 1;
+  });
+  const hasCollisions = Object.values(keyCounts).some((n) => n > 1);
 
   const resetState = () => {
     setParsed(null);
     setMapping({});
+    setCustomNames({});
     setFileName("");
     setFileMeta({ size: 0, type: "" });
   };
@@ -191,7 +278,8 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
         const role = mapping[header];
         if (role === "skip") continue;
         if (role === "custom") {
-          if (row[header]) contact.custom_fields[header] = row[header];
+          const key = customNames[header] || sanitizeVarKey(header);
+          if (row[header]) contact.custom_fields[key] = row[header];
         } else if (typeof role === "string" && role.startsWith("reuse:")) {
           const key = role.slice("reuse:".length);
           if (row[header]) contact.custom_fields[key] = row[header];
@@ -294,8 +382,8 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
           <label className="flex flex-col items-center justify-center border-2 border-dashed border-border rounded-xl p-12 cursor-pointer hover:border-primary/50 transition-colors">
             <Upload className="h-10 w-10 text-muted-foreground mb-3" />
             <p className="text-sm font-medium mb-1">Drop a file or click to browse</p>
-            <p className="text-xs text-muted-foreground">Supports CSV and Excel (.xlsx, .xls)</p>
-            <input type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleFileSelect} />
+            <p className="text-xs text-muted-foreground">Supports CSV, Excel (.xlsx, .xls) and JSON (.json)</p>
+            <input type="file" accept=".csv,.xlsx,.xls,.json,application/json" className="hidden" onChange={handleFileSelect} />
           </label>
         ) : (
           <div className="space-y-5">
@@ -304,28 +392,32 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
               <FileSpreadsheet className="h-4 w-4 text-muted-foreground" />
               <span className="font-medium">{fileName}</span>
               <span className="text-muted-foreground">— {parsed.rows.length} rows, {parsed.headers.length} columns</span>
-              <Button variant="ghost" size="sm" className="ml-auto" onClick={() => { setParsed(null); setMapping({}); setFileName(""); }}>
+              <Button variant="ghost" size="sm" className="ml-auto" onClick={resetState}>
                 Change file
               </Button>
             </div>
 
             {/* Column mapping */}
             <div>
-              <h3 className="text-sm font-semibold mb-2">Map columns</h3>
+              <h3 className="text-sm font-semibold mb-2">Map columns to variables</h3>
               <p className="text-xs text-muted-foreground mb-3">
-                Assign which column is email, phone, etc. Unmapped columns become custom variables (e.g. {"{{column_name}}"}).
-                {existingColumns.length > 0 && " Pick a 'Reuse' option to merge into a variable that already exists on this list."}
+                Standard fields (email, phone, name) are stored on the contact. Anything else becomes a
+                <strong> custom variable</strong> you can use in templates as <code>{"{{name}}"}</code>.
+                Variable names are auto-cleaned to lowercase snake_case so they always work in templates.
+                {existingColumns.length > 0 && " Pick \"Reuse\" to merge into a variable that already exists on this list."}
               </p>
               <div className="grid gap-2">
                 {parsed.headers.map((header) => {
                   const m = mapping[header] || "custom";
                   const isReuse = typeof m === "string" && m.startsWith("reuse:");
                   const reusedKey = isReuse ? m.slice("reuse:".length) : null;
+                  const customKey = customNames[header] || sanitizeVarKey(header);
+                  const isDup = m === "custom" && (keyCounts[customKey] ?? 0) > 1;
                   return (
-                    <div key={header} className="flex items-center gap-3">
+                    <div key={header} className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-mono w-40 truncate shrink-0" title={header}>{header}</span>
                       <Select value={m} onValueChange={(val) => updateMapping(header, val)}>
-                        <SelectTrigger className="w-56 h-8 text-xs">
+                        <SelectTrigger className="w-52 h-8 text-xs">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -341,15 +433,31 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
                         </SelectContent>
                       </Select>
                       {m === "custom" && (
-                        <Badge variant="secondary" className="text-xs">{"{{" + header + "}}"}</Badge>
+                        <>
+                          <Input
+                            value={customNames[header] ?? sanitizeVarKey(header)}
+                            onChange={(e) => updateCustomName(header, e.target.value)}
+                            className="h-8 w-44 text-xs font-mono"
+                            placeholder="variable_name"
+                          />
+                          <Badge variant={isDup ? "destructive" : "secondary"} className="text-xs font-mono">
+                            {`{{${customKey}}}`}
+                          </Badge>
+                        </>
                       )}
                       {isReuse && (
-                        <Badge variant="outline" className="text-xs">→ {"{{" + reusedKey + "}}"}</Badge>
+                        <Badge variant="outline" className="text-xs font-mono">→ {`{{${reusedKey}}}`}</Badge>
                       )}
                     </div>
                   );
                 })}
               </div>
+              {hasCollisions && (
+                <div className="mt-3 flex items-start gap-2 text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">
+                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>Two or more columns resolve to the same variable name. Rename one of them — the later column will overwrite the earlier one for each contact.</span>
+                </div>
+              )}
             </div>
 
             {!hasEmail && (

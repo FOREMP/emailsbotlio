@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,38 @@ interface Props {
 export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId }: Props) => {
   const [previewing, setPreviewing] = useState(false);
   const [preview, setPreview] = useState<{ subject: string; body: string } | null>(null);
+  /** Tracks which field (subject_hint / prompt / subject / body) is focused so chip clicks insert there. */
+  const lastFocusedRef = useRef<{ key: string; el: HTMLInputElement | HTMLTextAreaElement } | null>(null);
+
+  const registerFocus = (key: string) => (e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    lastFocusedRef.current = { key, el: e.target };
+  };
+
+  const insertVariable = (varName: string) => {
+    const token = `{{${varName}}}`;
+    const target = lastFocusedRef.current;
+    if (!target) {
+      // No focused field — append to whichever field exists for the current mode
+      const cfg = node?.config ?? {};
+      const fallbackKey = (cfg.mode ?? "ai") === "ai" ? "prompt" : "body";
+      onChange({ ...cfg, [fallbackKey]: (cfg[fallbackKey] ?? "") + token });
+      return;
+    }
+    const { key, el } = target;
+    const value = el.value ?? "";
+    const start = el.selectionStart ?? value.length;
+    const end = el.selectionEnd ?? value.length;
+    const next = value.slice(0, start) + token + value.slice(end);
+    const cfg = node?.config ?? {};
+    onChange({ ...cfg, [key]: next });
+    // Restore caret after React re-renders
+    requestAnimationFrame(() => {
+      el.focus();
+      const pos = start + token.length;
+      el.setSelectionRange(pos, pos);
+    });
+  };
+
 
   const { data: lists = [] } = useQuery({
     queryKey: ["inspector-lists"],
@@ -231,6 +263,7 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
                   <Input
                     value={cfg.subject_hint ?? ""}
                     onChange={(e) => set("subject_hint", e.target.value)}
+                    onFocus={registerFocus("subject_hint")}
                     placeholder='e.g. "Quick question about {{company}}"'
                   />
                   <p className="text-[11px] text-muted-foreground mt-1">
@@ -243,6 +276,7 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
                     rows={6}
                     value={cfg.prompt ?? ""}
                     onChange={(e) => set("prompt", e.target.value)}
+                    onFocus={registerFocus("prompt")}
                     placeholder="Write a 3-sentence cold email to {{first_name}} at {{company}}, mention their recent {{trigger_event}}, and ask for a 15-min call."
                   />
                 </div>
@@ -261,11 +295,20 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
               <>
                 <div>
                   <Label>Subject</Label>
-                  <Input value={cfg.subject ?? ""} onChange={(e) => set("subject", e.target.value)} />
+                  <Input
+                    value={cfg.subject ?? ""}
+                    onChange={(e) => set("subject", e.target.value)}
+                    onFocus={registerFocus("subject")}
+                  />
                 </div>
                 <div>
                   <Label>Body</Label>
-                  <Textarea rows={8} value={cfg.body ?? ""} onChange={(e) => set("body", e.target.value)} />
+                  <Textarea
+                    rows={8}
+                    value={cfg.body ?? ""}
+                    onChange={(e) => set("body", e.target.value)}
+                    onFocus={registerFocus("body")}
+                  />
                 </div>
               </>
             )}
@@ -273,11 +316,17 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
             {variables.length > 0 && (
               <div>
                 <Label className="text-xs">Available variables</Label>
-                <div className="flex flex-wrap gap-1 mt-1">
+                <p className="text-[10px] text-muted-foreground mt-0.5 mb-1">Click to insert at cursor.</p>
+                <div className="flex flex-wrap gap-1">
                   {variables.map((v) => (
-                    <span key={v} className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-mono">
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => insertVariable(v)}
+                      className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-mono hover:bg-primary/20 transition-colors cursor-pointer"
+                    >
                       {`{{${v}}}`}
-                    </span>
+                    </button>
                   ))}
                 </div>
               </div>

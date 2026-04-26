@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, Users, Upload, ArrowLeft, Trash2, ShieldX, ShieldOff } from "lucide-react";
+import { Plus, Users, Upload, ArrowLeft, Trash2, ShieldX, ShieldOff, Settings2 } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,6 +23,7 @@ import {
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import FileImportDialog from "@/components/FileImportDialog";
+import ListVariablesDialog from "@/components/ListVariablesDialog";
 
 const Contacts = () => {
   const { user } = useAuth();
@@ -35,6 +36,7 @@ const Contacts = () => {
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [contactForm, setContactForm] = useState({ first_name: "", last_name: "", email: "", phone: "" });
   const [overviewTab, setOverviewTab] = useState<"lists" | "suppressed" | "erasures">("lists");
+  const [varsDialogOpen, setVarsDialogOpen] = useState(false);
 
   const { data: lists = [], isLoading: listsLoading } = useQuery({
     queryKey: ["contact_lists"],
@@ -485,6 +487,11 @@ const Contacts = () => {
               )}
             </div>
             <div className="flex gap-2">
+              {listCustomColumns.length > 0 && (
+                <Button variant="outline" size="sm" onClick={() => setVarsDialogOpen(true)}>
+                  <Settings2 className="h-4 w-4 mr-1.5" /> Manage variables
+                </Button>
+              )}
               <Button variant="outline" size="sm" onClick={() => setImportDialogOpen(true)}>
                 <Upload className="h-4 w-4 mr-1.5" /> Import File
               </Button>
@@ -532,6 +539,17 @@ const Contacts = () => {
             onImport={handleFileImport}
             importing={importing}
             existingColumns={listCustomColumns}
+          />
+
+          <ListVariablesDialog
+            open={varsDialogOpen}
+            onOpenChange={setVarsDialogOpen}
+            listId={selectedList}
+            variables={listCustomColumns}
+            onSaved={() => {
+              queryClient.invalidateQueries({ queryKey: ["contact_lists"] });
+              queryClient.invalidateQueries({ queryKey: ["contacts", selectedList] });
+            }}
           />
 
           {contactsLoading ? (
