@@ -1,74 +1,110 @@
+# Analytics Page Plan
 
+A new **/analytics** page that turns raw `sent_emails`, `enrollments`, and `contact_activity` data into a clear, sequence-by-sequence performance view — built to feel like a polished email dashboard (think Lemlist / Instantly).
 
-# Audit Result + Three Targeted Fixes
+---
 
-I re-traced your scenario end to end. Here is what's currently true, what needs adjusting, and what is unfortunately not possible.
+## 1. Page Structure
 
-## Audit (post-fix verification)
+```text
+/analytics
+├── Header: title + global filters (date range, sequence selector, sender selector)
+├── Top KPI row (deduped per email)
+│    Sent · Delivered · Opened · Replied · Bounced · Unsubscribed
+├── Trend chart
+│    Daily sends + opens + replies (stacked line/area, last 30d default)
+├── Sequence performance table
+│    One row per sequence: Sent / Open% / Reply% / Bounce% / Active enrollments
+├── Sender performance table
+│    One row per sender: Sent today vs warmup quota, Open%, Reply%, Bounce%
+└── Recent activity feed
+     Latest opens, replies, bounces, unsubscribes
+```
 
-| Area | Status |
-|---|---|
-| Schedule node fires at the configured Stockholm time | ✅ Works |
-| Throttle is now per-node (so 30-min follow-ups aren't blocked by initial batch) | ✅ Fixed last round |
-| Wait 30 min between emails | ✅ Works |
-| Unsubscribe during wait → enrollment cancelled before next send | ✅ Works (re-checked every tick against `do_not_contact` + `suppressed_emails`) |
-| End node closes sequence | ✅ Works |
-| New sequence skips contacts already emailed | ✅ Fixed last round (with optional "Publish & re-contact" override) |
-| Footer format | ⚠️ Already 3 lines, but want a polish — see Fix 1 |
-| Follow-ups thread to the original email | ❌ Not fully possible — see Fix 2 |
-| GDPR posture | ⚠️ Mostly there, missing 3 small items — see Fix 3 |
+---
 
-## Fix 1 — Footer: "Best regards, / name / company" exactly
+## 2. Metrics & Formulas
 
-The footer is already three lines, but the third line uses an UPPERCASED brand derived from the domain (e.g. `FOREMP`). You want the human-readable company name. Change to:
-- Line 1: `Best regards,`
-- Line 2: sender's display name (e.g. `Eric Wahlbom`)
-- Line 3: company name in normal case — pulled from `sending_domains.brand` if set, otherwise the capitalised root domain (e.g. `Foremp`, not `FOREMP`)
+All metrics derived from existing tables — **no schema changes needed**.
 
-Implementation: update `deriveBrand` and `appendFooter` in `supabase/functions/send-cold-email/index.ts`. The existing sign-off stripper already removes any duplicate "Best regards" added by the AI, so this stays clean even when AI mode generates its own sign-off.
+| Metric | Source | Formula |
+|---|---|---|
+| Sent | `sent_emails.status in ('sent','delivered','opened','replied')` | count |
+| Delivered | `status != 'bounced','failed'` | count |
+| Open rate | `opened_at IS NOT NULL` | opened / delivered |
+| Reply rate | `replied_at IS NOT NULL` | replied / delivered |
+| Bounce rate | `status = 'bounced'` | bounced / sent |
+| Unsubscribed | `do_not_contact` rows in range | count |
+| Active enrollments | `enrollments.status = 'active'` | count per sequence |
+| Failure rate | `enrollments.last_error IS NOT NULL` recent | count |
 
-## Fix 2 — Threading Follow-Ups (honest answer)
+Sender warmup status uses existing `sender_warmup_quota()` + `sender_daily_remaining()` RPCs.
 
-The Lovable email SDK (`@lovable.dev/email-js@0.0.4`) does **not** expose `In-Reply-To`, `References`, or arbitrary header fields. So a true RFC-compliant thread (where Gmail/Outlook collapses the follow-up into the same conversation) is **not possible today** with our infrastructure.
+---
 
-What we *can* do, which is what most ESPs fall back to and what gets ~90% of the visual benefit:
-- When the runner sends a follow-up email to a contact who already received an earlier email in the same enrollment, **reuse the original subject prefixed with `Re: `** (only one `Re:`, never `Re: Re: Re:`).
-- Most mail clients group messages with the same normalized subject + same participants into one visual conversation, so the recipient sees "two replies in one thread" exactly as you described.
+## 3. Filters (top of page)
 
-Implementation:
-- In `run-sequences/index.ts`, before invoking `send-cold-email` for a `send_email` node, look up the **first** `sent_emails` row for this enrollment. If one exists, pass `subject_override: "Re: <original subject>"` and `is_followup: true` to `send-cold-email`.
-- In `send-cold-email`, if `subject_override` is provided, use it verbatim (skip AI subject generation; AI still writes the body so the follow-up reads naturally as a nudge).
-- The body for follow-ups stays freshly generated/templated — we don't quote the original because the SDK can't attach proper threading headers anyway, and quoted text without proper headers looks worse than a clean short follow-up.
+- **Date range**: presets (24h / 7d / 30d / 90d / all) + custom picker. Default 30d.
+- **Sequence**: dropdown (All + each sequence).
+- **Sender**: dropdown (All + each sender).
+- All filters reactive — queries re-run on change via React Query.
 
-Trade-off you should know about: without true `In-Reply-To` headers, threading is best-effort. Gmail almost always groups them; Outlook usually does; some clients won't. This is the same compromise other lightweight outreach tools make.
+---
 
-## Fix 3 — GDPR Compliance Polish
+## 4. Charts (using existing Recharts in `components/ui/chart.tsx`)
 
-Already in place: one-click unsubscribe, suppression list enforced on every send, DNC checked at enrollment and at every runner tick, no third-party tracking pixels, RLS isolates each user's data.
+1. **Daily volume** — stacked area: Sent / Opened / Replied per day.
+2. **Sequence comparison** — horizontal bar chart of open% per sequence.
+3. **Funnel card** — Sent → Delivered → Opened → Replied (with % conversions).
 
-Three gaps to close:
+---
 
-1. **Unsubscribe footer in the email itself.** Right now the unsubscribe link comes from the Lovable email infrastructure (List-Unsubscribe header + auto-appended footer). Confirm in the audit it is actually being appended for these cold-outreach sends; if not, add a visible plain-text line at the very bottom of every send: `Unsubscribe: https://emailsbotlio.lovable.app/unsubscribe?token=...`. Required by GDPR Art. 21 + ePrivacy + CAN-SPAM. Token already exists per recipient.
-2. **Sender identity in every email.** GDPR + CAN-SPAM require a physical/postal identifier of the sender. Add an optional `postal_address` column to `sending_domains` and append it on a 4th footer line when set. Without an address set, the email still sends but you'll see a one-time warning in the Domains UI.
-3. **"Forget this contact" action.** Add a button on the Contacts page → "Erase contact (GDPR right to be forgotten)" that:
-   - Deletes the contact row
-   - Adds the email to `do_not_contact` and `suppressed_emails` so they can never be re-imported
-   - Marks any active enrollments as `unsubscribed`
-   - Records what was erased (timestamp + email hash, not plaintext) in a small `gdpr_erasures` audit table
+## 5. Tables
 
-Out of scope unless you ask: a public-facing privacy policy page, a data-export endpoint (right to portability for *contacts* — usually only needed if your contacts can log in, which they can't here).
+**Sequence performance** (sortable):
+Sequence name · Status · Sent · Open% · Reply% · Bounce% · Active · Last activity → links to `/sequences/:id`
 
-## Files Touched
+**Sender performance** (sortable):
+From email · Sent today · Daily quota · Total sent · Open% · Reply% · Bounce% · Warmup status
 
-- `supabase/functions/send-cold-email/index.ts` — new footer (3 lines, normal-case company), accept `subject_override` for follow-ups, append visible unsubscribe line + optional postal address.
-- `supabase/functions/run-sequences/index.ts` — detect follow-up sends, look up original subject, pass `subject_override: "Re: <original>"`.
-- `src/pages/Contacts.tsx` — "Erase contact" button + confirmation dialog.
-- `src/pages/Domains.tsx` — postal-address field per domain (with GDPR helper text).
-- New migration: add `sending_domains.postal_address text`, create `gdpr_erasures` table with RLS.
-- Redeploy: `send-cold-email`, `run-sequences`.
+**Recent activity** (last 20):
+Joined `contact_activity` + `sent_emails` → timestamp · type icon (open/reply/bounce/unsub) · contact email · sequence name.
 
-## Caveats Worth Repeating
+---
 
-- True email threading with `In-Reply-To` is **not** available; we use subject-based threading as the best fallback.
-- GDPR is a process, not just code — a privacy policy page, a DPA with sub-processors (Supabase, Lovable Email/Mailgun, Lovable AI), and a lawful basis for cold outreach (legitimate interest assessment) are still your responsibility outside the app.
+## 6. Files to Create / Modify
 
+**New:**
+- `src/pages/Analytics.tsx` — page shell, filters, layout
+- `src/components/analytics/KpiCards.tsx`
+- `src/components/analytics/VolumeTrendChart.tsx`
+- `src/components/analytics/SequenceTable.tsx`
+- `src/components/analytics/SenderTable.tsx`
+- `src/components/analytics/ActivityFeed.tsx`
+- `src/components/analytics/FunnelCard.tsx`
+- `src/hooks/useAnalytics.ts` — central React Query hooks for all metrics
+
+**Modified:**
+- `src/App.tsx` — add `/analytics` protected route
+- `src/components/AppLayout.tsx` (or wherever nav links live) — add "Analytics" nav item with `BarChart3` icon
+
+---
+
+## 7. Technical Notes
+
+- All queries use existing Supabase client + RLS (already scoped per `user_id`) — no new policies needed.
+- Aggregations done **client-side** on filtered query results (volume small enough; can move to RPC later if needed).
+- Use `useQuery` with the filter state in the query key for automatic refetching.
+- Reuse existing styling tokens (`border-border`, `bg-card`, `shadow-card`) for visual consistency with Dashboard.
+- Status color map already exists in Dashboard — extract into a small util.
+
+---
+
+## 8. Out of Scope (future)
+
+- CSV export of analytics
+- Email-by-email drill-down modal
+- Cohort retention / time-to-reply distributions
+- A/B test comparison between sequence variants
+
+These can be added once the base page is in place.
