@@ -382,8 +382,8 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
           <label className="flex flex-col items-center justify-center border-2 border-dashed border-border rounded-xl p-12 cursor-pointer hover:border-primary/50 transition-colors">
             <Upload className="h-10 w-10 text-muted-foreground mb-3" />
             <p className="text-sm font-medium mb-1">Drop a file or click to browse</p>
-            <p className="text-xs text-muted-foreground">Supports CSV and Excel (.xlsx, .xls)</p>
-            <input type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleFileSelect} />
+            <p className="text-xs text-muted-foreground">Supports CSV, Excel (.xlsx, .xls) and JSON (.json)</p>
+            <input type="file" accept=".csv,.xlsx,.xls,.json,application/json" className="hidden" onChange={handleFileSelect} />
           </label>
         ) : (
           <div className="space-y-5">
@@ -392,28 +392,32 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
               <FileSpreadsheet className="h-4 w-4 text-muted-foreground" />
               <span className="font-medium">{fileName}</span>
               <span className="text-muted-foreground">— {parsed.rows.length} rows, {parsed.headers.length} columns</span>
-              <Button variant="ghost" size="sm" className="ml-auto" onClick={() => { setParsed(null); setMapping({}); setFileName(""); }}>
+              <Button variant="ghost" size="sm" className="ml-auto" onClick={resetState}>
                 Change file
               </Button>
             </div>
 
             {/* Column mapping */}
             <div>
-              <h3 className="text-sm font-semibold mb-2">Map columns</h3>
+              <h3 className="text-sm font-semibold mb-2">Map columns to variables</h3>
               <p className="text-xs text-muted-foreground mb-3">
-                Assign which column is email, phone, etc. Unmapped columns become custom variables (e.g. {"{{column_name}}"}).
-                {existingColumns.length > 0 && " Pick a 'Reuse' option to merge into a variable that already exists on this list."}
+                Standard fields (email, phone, name) are stored on the contact. Anything else becomes a
+                <strong> custom variable</strong> you can use in templates as <code>{"{{name}}"}</code>.
+                Variable names are auto-cleaned to lowercase snake_case so they always work in templates.
+                {existingColumns.length > 0 && " Pick \"Reuse\" to merge into a variable that already exists on this list."}
               </p>
               <div className="grid gap-2">
                 {parsed.headers.map((header) => {
                   const m = mapping[header] || "custom";
                   const isReuse = typeof m === "string" && m.startsWith("reuse:");
                   const reusedKey = isReuse ? m.slice("reuse:".length) : null;
+                  const customKey = customNames[header] || sanitizeVarKey(header);
+                  const isDup = m === "custom" && (keyCounts[customKey] ?? 0) > 1;
                   return (
-                    <div key={header} className="flex items-center gap-3">
+                    <div key={header} className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-mono w-40 truncate shrink-0" title={header}>{header}</span>
                       <Select value={m} onValueChange={(val) => updateMapping(header, val)}>
-                        <SelectTrigger className="w-56 h-8 text-xs">
+                        <SelectTrigger className="w-52 h-8 text-xs">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -429,15 +433,32 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
                         </SelectContent>
                       </Select>
                       {m === "custom" && (
-                        <Badge variant="secondary" className="text-xs">{"{{" + header + "}}"}</Badge>
+                        <>
+                          <Input
+                            value={customNames[header] ?? sanitizeVarKey(header)}
+                            onChange={(e) => updateCustomName(header, e.target.value)}
+                            className="h-8 w-44 text-xs font-mono"
+                            placeholder="variable_name"
+                          />
+                          <Badge variant={isDup ? "destructive" : "secondary"} className="text-xs font-mono">
+                            {`{{${customKey}}}`}
+                          </Badge>
+                        </>
                       )}
                       {isReuse && (
-                        <Badge variant="outline" className="text-xs">→ {"{{" + reusedKey + "}}"}</Badge>
+                        <Badge variant="outline" className="text-xs font-mono">→ {`{{${reusedKey}}}`}</Badge>
                       )}
                     </div>
                   );
                 })}
               </div>
+              {hasCollisions && (
+                <div className="mt-3 flex items-start gap-2 text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">
+                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>Two or more columns resolve to the same variable name. Rename one of them — the later column will overwrite the earlier one for each contact.</span>
+                </div>
+              )}
+            </div>
             </div>
 
             {!hasEmail && (
