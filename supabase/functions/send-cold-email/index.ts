@@ -18,7 +18,11 @@ function escapeHtml(s: string): string {
 }
 
 function plainToHtml(s: string): string {
-  return `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.55;white-space:pre-wrap">${escapeHtml(s)}</div>`
+  // Convert newlines to <br> explicitly — many email clients (Gmail, Outlook)
+  // strip CSS like `white-space: pre-wrap`, which collapses \n into spaces and
+  // makes the signature appear on one line ("Best regards, Name, Company").
+  const escaped = escapeHtml(s).replace(/\r\n/g, '\n').replace(/\n/g, '<br>')
+  return `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.55">${escaped}</div>`
 }
 
 function deriveCompany(domain: string, brandFromDb?: string | null): string {
