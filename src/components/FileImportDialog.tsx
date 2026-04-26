@@ -9,7 +9,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Upload, FileSpreadsheet, AlertCircle, ShieldAlert } from "lucide-react";
+import { Upload, FileSpreadsheet, AlertCircle, ShieldAlert, X, Plus } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
