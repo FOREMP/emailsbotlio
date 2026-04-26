@@ -263,6 +263,7 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
                   <Input
                     value={cfg.subject_hint ?? ""}
                     onChange={(e) => set("subject_hint", e.target.value)}
+                    onFocus={registerFocus("subject_hint")}
                     placeholder='e.g. "Quick question about {{company}}"'
                   />
                   <p className="text-[11px] text-muted-foreground mt-1">
@@ -275,6 +276,7 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
                     rows={6}
                     value={cfg.prompt ?? ""}
                     onChange={(e) => set("prompt", e.target.value)}
+                    onFocus={registerFocus("prompt")}
                     placeholder="Write a 3-sentence cold email to {{first_name}} at {{company}}, mention their recent {{trigger_event}}, and ask for a 15-min call."
                   />
                 </div>
@@ -293,11 +295,20 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
               <>
                 <div>
                   <Label>Subject</Label>
-                  <Input value={cfg.subject ?? ""} onChange={(e) => set("subject", e.target.value)} />
+                  <Input
+                    value={cfg.subject ?? ""}
+                    onChange={(e) => set("subject", e.target.value)}
+                    onFocus={registerFocus("subject")}
+                  />
                 </div>
                 <div>
                   <Label>Body</Label>
-                  <Textarea rows={8} value={cfg.body ?? ""} onChange={(e) => set("body", e.target.value)} />
+                  <Textarea
+                    rows={8}
+                    value={cfg.body ?? ""}
+                    onChange={(e) => set("body", e.target.value)}
+                    onFocus={registerFocus("body")}
+                  />
                 </div>
               </>
             )}
@@ -305,11 +316,17 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
             {variables.length > 0 && (
               <div>
                 <Label className="text-xs">Available variables</Label>
-                <div className="flex flex-wrap gap-1 mt-1">
+                <p className="text-[10px] text-muted-foreground mt-0.5 mb-1">Click to insert at cursor.</p>
+                <div className="flex flex-wrap gap-1">
                   {variables.map((v) => (
-                    <span key={v} className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-mono">
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => insertVariable(v)}
+                      className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-mono hover:bg-primary/20 transition-colors cursor-pointer"
+                    >
                       {`{{${v}}}`}
-                    </span>
+                    </button>
                   ))}
                 </div>
               </div>
