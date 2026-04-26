@@ -113,8 +113,38 @@ function autoDetectMapping(headers: string[], existingColumns: string[] = []): C
 function parseFile(file: File): Promise<ParsedData> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
+    const isJson = /\.json$/i.test(file.name) || file.type === "application/json";
+
     reader.onload = (e) => {
       try {
+        if (isJson) {
+          const text = typeof e.target!.result === "string"
+            ? (e.target!.result as string)
+            : new TextDecoder().decode(e.target!.result as ArrayBuffer);
+          const parsed = JSON.parse(text);
+          // Accept: array of objects, {data: [...]}, {contacts: [...]}, {results: [...]}
+          let arr: any[] | null = null;
+          if (Array.isArray(parsed)) arr = parsed;
+          else if (parsed && typeof parsed === "object") {
+            for (const k of ["data", "contacts", "results", "items", "records", "rows"]) {
+              if (Array.isArray(parsed[k])) { arr = parsed[k]; break; }
+            }
+          }
+          if (!arr || arr.length === 0) {
+            reject(new Error("JSON must be an array of objects (or an object with a 'data'/'contacts' array)."));
+            return;
+          }
+          const rows = arr.map((row) => (row && typeof row === "object" ? flattenRecord(row) : { value: String(row) }));
+          // Union of keys across all rows so we don't miss columns present only in later rows
+          const headerSet = new Set<string>();
+          rows.forEach((r) => Object.keys(r).forEach((k) => headerSet.add(k)));
+          const headers = Array.from(headerSet);
+          // Make sure every row has every header
+          rows.forEach((r) => headers.forEach((h) => { if (!(h in r)) r[h] = ""; }));
+          resolve({ headers, rows });
+          return;
+        }
+
         const data = new Uint8Array(e.target!.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: "array" });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -133,12 +163,15 @@ function parseFile(file: File): Promise<ParsedData> {
         });
 
         resolve({ headers, rows });
-      } catch {
-        reject(new Error("Failed to parse file. Make sure it's a valid CSV or Excel file."));
+      } catch (err: any) {
+        reject(new Error(isJson
+          ? `Failed to parse JSON: ${err?.message ?? "invalid JSON"}`
+          : "Failed to parse file. Make sure it's a valid CSV or Excel file."));
       }
     };
     reader.onerror = () => reject(new Error("Failed to read file."));
-    reader.readAsArrayBuffer(file);
+    if (isJson) reader.readAsText(file);
+    else reader.readAsArrayBuffer(file);
   });
 }
 
