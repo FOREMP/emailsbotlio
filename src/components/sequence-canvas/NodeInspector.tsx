@@ -26,6 +26,38 @@ interface Props {
 export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId }: Props) => {
   const [previewing, setPreviewing] = useState(false);
   const [preview, setPreview] = useState<{ subject: string; body: string } | null>(null);
+  /** Tracks which field (subject_hint / prompt / subject / body) is focused so chip clicks insert there. */
+  const lastFocusedRef = useRef<{ key: string; el: HTMLInputElement | HTMLTextAreaElement } | null>(null);
+
+  const registerFocus = (key: string) => (e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    lastFocusedRef.current = { key, el: e.target };
+  };
+
+  const insertVariable = (varName: string) => {
+    const token = `{{${varName}}}`;
+    const target = lastFocusedRef.current;
+    if (!target) {
+      // No focused field — append to whichever field exists for the current mode
+      const cfg = node?.config ?? {};
+      const fallbackKey = (cfg.mode ?? "ai") === "ai" ? "prompt" : "body";
+      onChange({ ...cfg, [fallbackKey]: (cfg[fallbackKey] ?? "") + token });
+      return;
+    }
+    const { key, el } = target;
+    const value = el.value ?? "";
+    const start = el.selectionStart ?? value.length;
+    const end = el.selectionEnd ?? value.length;
+    const next = value.slice(0, start) + token + value.slice(end);
+    const cfg = node?.config ?? {};
+    onChange({ ...cfg, [key]: next });
+    // Restore caret after React re-renders
+    requestAnimationFrame(() => {
+      el.focus();
+      const pos = start + token.length;
+      el.setSelectionRange(pos, pos);
+    });
+  };
+
 
   const { data: lists = [] } = useQuery({
     queryKey: ["inspector-lists"],
