@@ -23,6 +23,7 @@ import {
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import FileImportDialog from "@/components/FileImportDialog";
+import ListVariablesDialog from "@/components/ListVariablesDialog";
 
 const Contacts = () => {
   const { user } = useAuth();
