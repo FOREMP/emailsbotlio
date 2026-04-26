@@ -541,6 +541,17 @@ const Contacts = () => {
             existingColumns={listCustomColumns}
           />
 
+          <ListVariablesDialog
+            open={varsDialogOpen}
+            onOpenChange={setVarsDialogOpen}
+            listId={selectedList}
+            variables={listCustomColumns}
+            onSaved={() => {
+              queryClient.invalidateQueries({ queryKey: ["contact_lists"] });
+              queryClient.invalidateQueries({ queryKey: ["contacts", selectedList] });
+            }}
+          />
+
           {contactsLoading ? (
             <p className="text-muted-foreground text-sm">Loading…</p>
           ) : contacts.length === 0 ? (
