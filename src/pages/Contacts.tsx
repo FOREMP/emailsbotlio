@@ -487,6 +487,11 @@ const Contacts = () => {
               )}
             </div>
             <div className="flex gap-2">
+              {listCustomColumns.length > 0 && (
+                <Button variant="outline" size="sm" onClick={() => setVarsDialogOpen(true)}>
+                  <Settings2 className="h-4 w-4 mr-1.5" /> Manage variables
+                </Button>
+              )}
               <Button variant="outline" size="sm" onClick={() => setImportDialogOpen(true)}>
                 <Upload className="h-4 w-4 mr-1.5" /> Import File
               </Button>
