@@ -36,6 +36,7 @@ const Contacts = () => {
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [contactForm, setContactForm] = useState({ first_name: "", last_name: "", email: "", phone: "" });
   const [overviewTab, setOverviewTab] = useState<"lists" | "suppressed" | "erasures">("lists");
+  const [varsDialogOpen, setVarsDialogOpen] = useState(false);
 
   const { data: lists = [], isLoading: listsLoading } = useQuery({
     queryKey: ["contact_lists"],
