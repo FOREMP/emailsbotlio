@@ -179,6 +179,8 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
   const { user } = useAuth();
   const [parsed, setParsed] = useState<ParsedData | null>(null);
   const [mapping, setMapping] = useState<ColumnMapping>({});
+  /** For headers mapped to "custom": the user-controlled variable name (sanitized snake_case). */
+  const [customNames, setCustomNames] = useState<Record<string, string>>({});
   const [fileName, setFileName] = useState("");
   const [fileMeta, setFileMeta] = useState<{ size: number; type: string }>({ size: 0, type: "" });
   const [autopilot, setAutopilot] = useState<boolean>(() => {
@@ -202,7 +204,12 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
     try {
       const data = await parseFile(file);
       setParsed(data);
-      setMapping(autoDetectMapping(data.headers, existingColumns));
+      const auto = autoDetectMapping(data.headers, existingColumns);
+      setMapping(auto);
+      // Pre-fill custom variable names with sanitized header
+      const names: Record<string, string> = {};
+      data.headers.forEach((h) => { if (auto[h] === "custom") names[h] = sanitizeVarKey(h); });
+      setCustomNames(names);
       setFileName(file.name);
       setFileMeta({ size: file.size, type: file.type || file.name.split(".").pop() || "" });
     } catch (err: any) {
@@ -214,7 +221,6 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
   const updateMapping = (header: string, value: string) => {
     setMapping((prev) => {
       const next = { ...prev };
-      // If assigning a unique standard field, unassign it from any other column
       const uniqueRoles = ["email", "phone", "first_name", "last_name"];
       if (uniqueRoles.includes(value)) {
         for (const key of Object.keys(next)) {
@@ -224,24 +230,42 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
       next[header] = value;
       return next;
     });
+    // Auto-fill name slot when switching to custom
+    if (value === "custom") {
+      setCustomNames((prev) => prev[header] ? prev : { ...prev, [header]: sanitizeVarKey(header) });
+    }
+  };
+
+  const updateCustomName = (header: string, raw: string) => {
+    setCustomNames((prev) => ({ ...prev, [header]: sanitizeVarKey(raw) }));
   };
 
   const hasEmail = Object.values(mapping).includes("email");
-  // Custom columns = both new "custom" headers and any "reuse:" mappings (under reused key)
+
+  /** Resolved variable key for a given header (only meaningful for custom/reuse). */
+  const resolveKey = (header: string): string | null => {
+    const m = mapping[header];
+    if (m === "custom") return customNames[header] || sanitizeVarKey(header);
+    if (typeof m === "string" && m.startsWith("reuse:")) return m.slice("reuse:".length);
+    return null;
+  };
+
   const customColumns = parsed
-    ? parsed.headers
-        .map((h) => {
-          const m = mapping[h];
-          if (m === "custom") return h;
-          if (typeof m === "string" && m.startsWith("reuse:")) return m.slice("reuse:".length);
-          return null;
-        })
-        .filter((v): v is string => !!v)
+    ? Array.from(new Set(parsed.headers.map(resolveKey).filter((v): v is string => !!v)))
     : [];
+
+  // Detect duplicate variable names across columns (collision warning)
+  const keyCounts: Record<string, number> = {};
+  parsed?.headers.forEach((h) => {
+    const k = resolveKey(h);
+    if (k) keyCounts[k] = (keyCounts[k] ?? 0) + 1;
+  });
+  const hasCollisions = Object.values(keyCounts).some((n) => n > 1);
 
   const resetState = () => {
     setParsed(null);
     setMapping({});
+    setCustomNames({});
     setFileName("");
     setFileMeta({ size: 0, type: "" });
   };
@@ -254,7 +278,8 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
         const role = mapping[header];
         if (role === "skip") continue;
         if (role === "custom") {
-          if (row[header]) contact.custom_fields[header] = row[header];
+          const key = customNames[header] || sanitizeVarKey(header);
+          if (row[header]) contact.custom_fields[key] = row[header];
         } else if (typeof role === "string" && role.startsWith("reuse:")) {
           const key = role.slice("reuse:".length);
           if (row[header]) contact.custom_fields[key] = row[header];
