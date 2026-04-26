@@ -399,11 +399,44 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
 
             {/* Column mapping */}
             <div>
-              <h3 className="text-sm font-semibold mb-2">Map columns to variables</h3>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-semibold">Map columns to variables</h3>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => {
+                      setMapping((prev) => {
+                        const next = { ...prev };
+                        for (const h of parsed.headers) {
+                          const role = next[h];
+                          if (role !== "email" && role !== "phone" && role !== "first_name" && role !== "last_name") {
+                            next[h] = "skip";
+                          }
+                        }
+                        return next;
+                      });
+                    }}
+                  >
+                    Skip all custom
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => setMapping(autoDetectMapping(parsed.headers, existingColumns))}
+                  >
+                    Reset
+                  </Button>
+                </div>
+              </div>
               <p className="text-xs text-muted-foreground mb-3">
                 Standard fields (email, phone, name) are stored on the contact. Anything else becomes a
                 <strong> custom variable</strong> you can use in templates as <code>{"{{name}}"}</code>.
-                Variable names are auto-cleaned to lowercase snake_case so they always work in templates.
+                Click the <X className="h-3 w-3 inline align-text-bottom" /> on any row to skip that column from the import.
                 {existingColumns.length > 0 && " Pick \"Reuse\" to merge into a variable that already exists on this list."}
               </p>
               <div className="grid gap-2">
@@ -413,6 +446,26 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
                   const reusedKey = isReuse ? m.slice("reuse:".length) : null;
                   const customKey = customNames[header] || sanitizeVarKey(header);
                   const isDup = m === "custom" && (keyCounts[customKey] ?? 0) > 1;
+                  const isSkipped = m === "skip";
+
+                  if (isSkipped) {
+                    return (
+                      <div key={header} className="flex flex-wrap items-center gap-2 opacity-60">
+                        <span className="text-sm font-mono w-40 truncate shrink-0 line-through" title={header}>{header}</span>
+                        <Badge variant="outline" className="text-xs">Skipped</Badge>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="ml-auto h-7 text-xs gap-1"
+                          onClick={() => updateMapping(header, "custom")}
+                        >
+                          <Plus className="h-3 w-3" /> Include
+                        </Button>
+                      </div>
+                    );
+                  }
+
                   return (
                     <div key={header} className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-mono w-40 truncate shrink-0" title={header}>{header}</span>
@@ -448,6 +501,16 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
                       {isReuse && (
                         <Badge variant="outline" className="text-xs font-mono">→ {`{{${reusedKey}}}`}</Badge>
                       )}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="ml-auto h-7 w-7 text-muted-foreground hover:text-destructive"
+                        title="Skip this column"
+                        onClick={() => updateMapping(header, "skip")}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
                     </div>
                   );
                 })}
