@@ -10,12 +10,42 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Upload, FileSpreadsheet, AlertCircle, ShieldAlert } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 
 const STANDARD_FIELDS = ["email", "phone", "first_name", "last_name"] as const;
+
+/** Convert any header to a safe template variable key: lowercase snake_case, alnum + underscore only. */
+export function sanitizeVarKey(raw: string): string {
+  const cleaned = raw
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return cleaned || "field";
+}
+
+/** Flatten one JSON record (one level) so nested objects become dot.path keys and arrays become JSON strings. */
+function flattenRecord(obj: Record<string, unknown>, prefix = ""): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    const key = prefix ? `${prefix}.${k}` : k;
+    if (v === null || v === undefined) {
+      out[key] = "";
+    } else if (Array.isArray(v)) {
+      out[key] = v.map((x) => (typeof x === "object" ? JSON.stringify(x) : String(x))).join(", ");
+    } else if (typeof v === "object") {
+      Object.assign(out, flattenRecord(v as Record<string, unknown>, key));
+    } else {
+      out[key] = String(v);
+    }
+  }
+  return out;
+}
 
 const EMAIL_PATTERNS = ["email", "e-mail", "email_address", "emailaddress", "mail"];
 const PHONE_PATTERNS = ["phone", "phone_number", "phonenumber", "tel", "telephone", "mobile", "cell"];
