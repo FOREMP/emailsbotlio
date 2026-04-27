@@ -168,7 +168,14 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: 'prompt required for ai mode' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
     const r = await supabase.functions.invoke('generate-email', {
-      body: { contact, prompt, subject_hint, is_followup: !!is_followup },
+      body: {
+        contact,
+        prompt,
+        subject_prompt: subject_prompt ?? subject_hint ?? '',
+        subject_hint, // legacy fallback for older deployments
+        is_followup: !!is_followup,
+        model,
+      },
     })
     if (r.error) {
       return new Response(JSON.stringify({ error: 'generate-email failed', detail: r.error.message }), { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
