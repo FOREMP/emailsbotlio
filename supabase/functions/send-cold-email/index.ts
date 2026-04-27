@@ -89,7 +89,9 @@ Deno.serve(async (req) => {
     subject,
     body: bodyText,
     prompt,
-    subject_hint,
+    subject_prompt,        // dedicated subject prompt (per node)
+    subject_hint,          // legacy fallback
+    model,                 // optional per-node model override
     subject_override,      // forces subject verbatim (used for follow-ups: "Re: <original>")
     is_followup,           // hint to AI it's a follow-up nudge
     unsubscribe_base_url,  // optional override
