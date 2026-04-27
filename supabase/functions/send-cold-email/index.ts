@@ -89,7 +89,9 @@ Deno.serve(async (req) => {
     subject,
     body: bodyText,
     prompt,
-    subject_hint,
+    subject_prompt,        // dedicated subject prompt (per node)
+    subject_hint,          // legacy fallback
+    model,                 // optional per-node model override
     subject_override,      // forces subject verbatim (used for follow-ups: "Re: <original>")
     is_followup,           // hint to AI it's a follow-up nudge
     unsubscribe_base_url,  // optional override
@@ -166,7 +168,14 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: 'prompt required for ai mode' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
     const r = await supabase.functions.invoke('generate-email', {
-      body: { contact, prompt, subject_hint, is_followup: !!is_followup },
+      body: {
+        contact,
+        prompt,
+        subject_prompt: subject_prompt ?? subject_hint ?? '',
+        subject_hint, // legacy fallback for older deployments
+        is_followup: !!is_followup,
+        model,
+      },
     })
     if (r.error) {
       return new Response(JSON.stringify({ error: 'generate-email failed', detail: r.error.message }), { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
