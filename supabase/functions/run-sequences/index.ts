@@ -383,7 +383,9 @@ Deno.serve(async (req) => {
             subject: cfg.subject,
             body: cfg.body,
             prompt: cfg.prompt,
-            subject_hint: cfg.subject_hint,
+            subject_prompt: cfg.subject_prompt ?? cfg.subject_hint,
+            subject_hint: cfg.subject_hint, // legacy
+            model: cfg.model,
             subject_override: subjectOverride,
             is_followup: isFollowup,
           },
