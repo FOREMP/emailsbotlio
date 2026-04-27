@@ -106,7 +106,7 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
 
   const handlePreview = async () => {
     if (!cfg.prompt) {
-      toast({ title: "Add a prompt first", variant: "destructive" });
+      toast({ title: "Add a body prompt first", variant: "destructive" });
       return;
     }
     setPreviewing(true);
@@ -118,7 +118,13 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
         .limit(1)
         .maybeSingle();
       const { data, error } = await supabase.functions.invoke("generate-email", {
-        body: { contact: contact ?? { first_name: "Sample" }, prompt: cfg.prompt, subject_hint: cfg.subject_hint },
+        body: {
+          contact: contact ?? { first_name: "Sample" },
+          prompt: cfg.prompt,
+          subject_prompt: cfg.subject_prompt ?? cfg.subject_hint ?? "",
+          subject_hint: cfg.subject_hint, // legacy
+          model: cfg.model,
+        },
       });
       if (error) throw error;
       setPreview(data as any);
