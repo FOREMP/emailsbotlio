@@ -153,6 +153,11 @@ const Inner = () => {
 
   const performSave = useCallback(async (nodesToSave: Node[], edgesToSave: Edge[]) => {
     if (!id || !user) return;
+    // If a save is already running, signal that another save is needed when this one finishes.
+    if (pendingSave.current) {
+      saveAgain.current = true;
+      return;
+    }
     pendingSave.current = true;
     setSaveState("saving");
 
@@ -205,17 +210,27 @@ const Inner = () => {
         if (error) throw error;
       }
 
+      // Refresh the cached DB snapshot so future refetches don't clobber local state with stale data.
+      qc.setQueryData(["seq-nodes", id], nodePayload);
+      qc.setQueryData(["seq-edges", id], edgePayload.map((e, i) => ({ ...e, id: edgesToSave[i]?.id })));
+
       setSaveState("saved");
       dirty.current = false;
-      window.setTimeout(() => setSaveState("idle"), 1200);
+      window.setTimeout(() => setSaveState((s) => (s === "saved" ? "idle" : s)), 1200);
     } catch (e: any) {
       setSaveState("idle");
       dirty.current = false;
       toast({ title: "Save failed", description: e.message, variant: "destructive" });
     } finally {
       pendingSave.current = false;
+      // If new edits arrived while we were saving, run another save with the latest in-memory state.
+      if (saveAgain.current) {
+        saveAgain.current = false;
+        // Use latest refs — they reflect any keystrokes that happened during the in-flight save.
+        performSave(nodesRef.current, edgesRef.current);
+      }
     }
-  }, [id, user]);
+  }, [id, user, qc]);
 
   const flushSave = useCallback(async () => {
     if (saveTimer.current) {
