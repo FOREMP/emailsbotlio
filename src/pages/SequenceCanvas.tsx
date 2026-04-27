@@ -75,6 +75,7 @@ const Inner = () => {
   const saveTimer = useRef<number | null>(null);
   const dirty = useRef(false);
   const pendingSave = useRef(false);
+  const saveAgain = useRef(false);
   const hasFitView = useRef(false);
   const nodesRef = useRef<Node[]>([]);
   const edgesRef = useRef<Edge[]>([]);
