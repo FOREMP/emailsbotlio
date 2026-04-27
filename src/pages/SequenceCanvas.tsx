@@ -384,6 +384,8 @@ const Inner = () => {
 
   const toggleStatus = async () => {
     const next = status === "active" ? "draft" : "active";
+    // Flush pending edits before flipping to active so a cron tick can't pick up stale config.
+    if (next === "active") await flushRef.current();
     setStatus(next);
     setEdges((current) => {
       const updated = current.map((e) => ({ ...e, animated: next === "active" }));
