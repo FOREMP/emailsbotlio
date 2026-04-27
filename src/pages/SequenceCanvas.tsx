@@ -395,6 +395,9 @@ const Inner = () => {
 
   const publish = useMutation({
     mutationFn: async (opts: { allow_recontact?: boolean } = {}) => {
+      // Make sure any pending node-config edits are persisted BEFORE we enroll contacts,
+      // otherwise the next sequence run could pick up the previous prompt/config.
+      await flushRef.current();
       if (status !== "active") {
         await supabase.from("sequences").update({ status: "active" }).eq("id", id!);
         setStatus("active");
