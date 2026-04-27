@@ -3,9 +3,9 @@ import { NodeProps } from "@xyflow/react";
 import { NodeShell } from "./shared";
 
 export const SendEmailNode = ({ data, selected }: NodeProps) => {
-  const cfg = (data?.config ?? {}) as { mode?: string; subject?: string; subject_hint?: string; prompt?: string };
+  const cfg = (data?.config ?? {}) as { mode?: string; subject?: string; subject_prompt?: string; subject_hint?: string; prompt?: string };
   const sub = cfg.mode === "ai"
-    ? (cfg.subject_hint || cfg.prompt?.slice(0, 60) || "AI-generated email")
+    ? ((cfg.subject_prompt ?? cfg.subject_hint)?.slice(0, 60) || cfg.prompt?.slice(0, 60) || "AI-generated email")
     : (cfg.subject || "Static template");
   return (
     <NodeShell
