@@ -489,6 +489,13 @@ Deno.serve(async (req) => {
           continue
         }
         sent++
+        // Bump per-domain in-memory counter so subsequent enrollments in this same
+        // tick respect PER_DOMAIN_DAILY_CAP without re-querying the DB.
+        {
+          const senderRow = (anyActive ?? []).find((s: any) => s.id === preSenderId)
+          const dom = senderRow ? (senderRow.from_email as string).split('@')[1] : null
+          if (dom) bumpDomain(dom)
+        }
         console.log(`[enr ${enr.id}] email sent (sender=${preSenderId})`)
 
         // Persist sticky sender so all follow-ups use the same From
