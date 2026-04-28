@@ -5,7 +5,8 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const MAX_PER_RUN = 50
+const MAX_PER_RUN = 200
+const PER_DOMAIN_DAILY_CAP = 80
 
 function msFromUnit(n: number, unit: string): number {
   switch (unit) {
