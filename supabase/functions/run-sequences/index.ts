@@ -247,6 +247,30 @@ Deno.serve(async (req) => {
       }
 
       if (currentNode.node_type === 'send_email') {
+        // SAME-DAY GUARD: never send to the same contact twice on the same UTC day.
+        // Defers this enrollment to next UTC midnight if a send already exists today.
+        {
+          const startOfDay = new Date(); startOfDay.setUTCHours(0, 0, 0, 0)
+          const { data: alreadyToday } = await supabase
+            .from('sent_emails')
+            .select('id')
+            .eq('contact_id', enr.contact_id)
+            .eq('user_id', enr.user_id)
+            .in('status', ['sent', 'queued'])
+            .gte('sent_at', startOfDay.toISOString())
+            .limit(1)
+          if (alreadyToday && alreadyToday.length > 0) {
+            const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
+            await supabase.from('enrollments').update({
+              next_send_at: tomorrow.toISOString(),
+              deferred_at: nowIso,
+              last_error: 'same-day double-send guard — already sent to this contact today',
+              error_at: nowIso,
+            }).eq('id', enr.id)
+            console.log(`[enr ${enr.id}] same-day guard tripped → deferred to ${tomorrow.toISOString()}`)
+            continue
+          }
+        }
         let preSenderId: string | null = null
 
         // Fail fast if user has zero active senders (instead of silent indefinite defer)
