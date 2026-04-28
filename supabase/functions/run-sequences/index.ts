@@ -5,7 +5,8 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const MAX_PER_RUN = 50
+const MAX_PER_RUN = 200
+const PER_DOMAIN_DAILY_CAP = 80
 
 function msFromUnit(n: number, unit: string): number {
   switch (unit) {
@@ -83,6 +84,40 @@ Deno.serve(async (req) => {
   let sent = 0
   let failed = 0
   const errors: any[] = []
+
+  // Per-tick cache of domain usage (Stockholm-day approximated as UTC-day for query efficiency).
+  // We count today's sends grouped by sender domain to enforce PER_DOMAIN_DAILY_CAP.
+  const domainSentToday = new Map<string, number>()
+  const domainCounted = new Set<string>() // domains we've already initialised from DB
+
+  async function getDomainRemaining(domain: string): Promise<number> {
+    if (!domainCounted.has(domain)) {
+      // Fetch all sender ids for this domain (any user) — domain reputation is shared regardless of user
+      const { data: dSenders } = await supabase
+        .from('senders')
+        .select('id, from_email')
+        .ilike('from_email', `%@${domain}`)
+      const ids = (dSenders ?? []).map((s: any) => s.id)
+      let used = 0
+      if (ids.length > 0) {
+        const startOfDay = new Date(); startOfDay.setUTCHours(0, 0, 0, 0)
+        const { count } = await supabase
+          .from('sent_emails')
+          .select('id', { count: 'exact', head: true })
+          .in('sender_id', ids)
+          .in('status', ['sent', 'queued'])
+          .gte('sent_at', startOfDay.toISOString())
+        used = count ?? 0
+      }
+      domainSentToday.set(domain, used)
+      domainCounted.add(domain)
+    }
+    return Math.max(0, PER_DOMAIN_DAILY_CAP - (domainSentToday.get(domain) ?? 0))
+  }
+
+  function bumpDomain(domain: string) {
+    domainSentToday.set(domain, (domainSentToday.get(domain) ?? 0) + 1)
+  }
 
   for (const enr of due ?? []) {
     processed++
@@ -210,6 +245,30 @@ Deno.serve(async (req) => {
       }
 
       if (currentNode.node_type === 'send_email') {
+        // SAME-DAY GUARD: never send to the same contact twice on the same UTC day.
+        // Defers this enrollment to next UTC midnight if a send already exists today.
+        {
+          const startOfDay = new Date(); startOfDay.setUTCHours(0, 0, 0, 0)
+          const { data: alreadyToday } = await supabase
+            .from('sent_emails')
+            .select('id')
+            .eq('contact_id', enr.contact_id)
+            .eq('user_id', enr.user_id)
+            .in('status', ['sent', 'queued'])
+            .gte('sent_at', startOfDay.toISOString())
+            .limit(1)
+          if (alreadyToday && alreadyToday.length > 0) {
+            const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
+            await supabase.from('enrollments').update({
+              next_send_at: tomorrow.toISOString(),
+              deferred_at: nowIso,
+              last_error: 'same-day double-send guard — already sent to this contact today',
+              error_at: nowIso,
+            }).eq('id', enr.id)
+            console.log(`[enr ${enr.id}] same-day guard tripped → deferred to ${tomorrow.toISOString()}`)
+            continue
+          }
+        }
         let preSenderId: string | null = null
 
         // Fail fast if user has zero active senders (instead of silent indefinite defer)
@@ -248,6 +307,9 @@ Deno.serve(async (req) => {
           if (!match) return { ok: false, reason: 'sender no longer active or domain unverified' }
           const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: sid })
           if ((rem ?? 0) <= 0) return { ok: false, reason: 'assigned sender at daily cap' }
+          const dom = (match.from_email as string).split('@')[1]
+          const domRem = await getDomainRemaining(dom)
+          if (domRem <= 0) return { ok: false, reason: `domain ${dom} at daily cap (${PER_DOMAIN_DAILY_CAP})` }
           return { ok: true }
         }
 
@@ -303,7 +365,11 @@ Deno.serve(async (req) => {
             }
             for (const c of candidates.sort(() => Math.random() - 0.5)) {
               const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: c.id })
-              if ((rem ?? 0) > 0) { preSenderId = c.id; break }
+              if ((rem ?? 0) <= 0) continue
+              const dom = (c.from_email as string).split('@')[1]
+              const domRem = await getDomainRemaining(dom)
+              if (domRem <= 0) continue
+              preSenderId = c.id; break
             }
           }
         }
@@ -421,6 +487,13 @@ Deno.serve(async (req) => {
           continue
         }
         sent++
+        // Bump per-domain in-memory counter so subsequent enrollments in this same
+        // tick respect PER_DOMAIN_DAILY_CAP without re-querying the DB.
+        {
+          const senderRow = (anyActive ?? []).find((s: any) => s.id === preSenderId)
+          const dom = senderRow ? (senderRow.from_email as string).split('@')[1] : null
+          if (dom) bumpDomain(dom)
+        }
         console.log(`[enr ${enr.id}] email sent (sender=${preSenderId})`)
 
         // Persist sticky sender so all follow-ups use the same From
