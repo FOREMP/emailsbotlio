@@ -89,8 +89,6 @@ Deno.serve(async (req) => {
   // We count today's sends grouped by sender domain to enforce PER_DOMAIN_DAILY_CAP.
   const domainSentToday = new Map<string, number>()
   const domainCounted = new Set<string>() // domains we've already initialised from DB
-  const senderDomainCache = new Map<string, string>()
-  const senderEmailById = new Map<string, string>()
 
   async function getDomainRemaining(domain: string): Promise<number> {
     if (!domainCounted.has(domain)) {
