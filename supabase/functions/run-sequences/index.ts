@@ -355,16 +355,21 @@ Deno.serve(async (req) => {
         let subjectOverride: string | null = null
         let isFollowup = false
         if (enr.last_sent_at) {
-          const { data: prior } = await supabase
+          // Pick the most recent ORIGINAL (non-"Re:") subject for this
+          // enrollment, ignoring stale subjects from prior test runs by only
+          // considering sends at/after the enrollment was (re)activated.
+          const sinceIso = enr.updated_at ?? enr.created_at ?? new Date(0).toISOString()
+          const { data: priors } = await supabase
             .from('sent_emails')
-            .select('subject')
+            .select('subject, sent_at')
             .eq('enrollment_id', enr.id)
             .eq('status', 'sent')
-            .order('sent_at', { ascending: true })
-            .limit(1)
-            .maybeSingle()
-          if (prior?.subject) {
-            subjectOverride = prior.subject
+            .gte('sent_at', sinceIso)
+            .order('sent_at', { ascending: false })
+            .limit(20)
+          const original = (priors ?? []).find((p: any) => p.subject && !/^re:\s*/i.test(p.subject))
+          if (original?.subject) {
+            subjectOverride = original.subject
             isFollowup = true
           }
         }
@@ -517,14 +522,20 @@ Deno.serve(async (req) => {
           failed++; continue
         }
 
+        // Only fire within a 30-minute grace window AFTER the configured slot.
+        // Outside the window, defer to the next valid slot (today or future day).
+        // This prevents a "Mon–Fri 18:00" schedule from firing at e.g. 22:00
+        // just because an enrollment was reset late in the day.
+        const SCHEDULE_GRACE_MINS = 30
         const dayAllowedToday = allowedDays.length === 0 || allowedDays.includes(todayName)
-        if (dayAllowedToday && nowStockholmMins >= slotMins) {
+        const inGraceWindow = nowStockholmMins >= slotMins && nowStockholmMins < slotMins + SCHEDULE_GRACE_MINS
+        if (dayAllowedToday && inGraceWindow) {
           await supabase.from('enrollments').update({
             current_node_id: next.target_node_id,
             next_send_at: nowIso,
           }).eq('id', enr.id)
           advanced++
-          console.log(`[enr ${enr.id}] schedule passed (today ${tod} Stockholm) → advance`)
+          console.log(`[enr ${enr.id}] schedule passed (today ${tod} Stockholm, in grace window) → advance`)
           continue
         }
         await supabase.from('enrollments').update({
