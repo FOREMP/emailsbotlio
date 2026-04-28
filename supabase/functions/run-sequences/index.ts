@@ -112,7 +112,7 @@ Deno.serve(async (req) => {
         used = count ?? 0
       }
       domainSentToday.set(domain, used)
-      domainCounted.set ? domainCounted.add(domain) : domainCounted.add(domain)
+      domainCounted.add(domain)
     }
     return Math.max(0, PER_DOMAIN_DAILY_CAP - (domainSentToday.get(domain) ?? 0))
   }
