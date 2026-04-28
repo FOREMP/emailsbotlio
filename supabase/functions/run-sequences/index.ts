@@ -85,6 +85,42 @@ Deno.serve(async (req) => {
   let failed = 0
   const errors: any[] = []
 
+  // Per-tick cache of domain usage (Stockholm-day approximated as UTC-day for query efficiency).
+  // We count today's sends grouped by sender domain to enforce PER_DOMAIN_DAILY_CAP.
+  const domainSentToday = new Map<string, number>()
+  const domainCounted = new Set<string>() // domains we've already initialised from DB
+  const senderDomainCache = new Map<string, string>()
+  const senderEmailById = new Map<string, string>()
+
+  async function getDomainRemaining(domain: string): Promise<number> {
+    if (!domainCounted.has(domain)) {
+      // Fetch all sender ids for this domain (any user) — domain reputation is shared regardless of user
+      const { data: dSenders } = await supabase
+        .from('senders')
+        .select('id, from_email')
+        .ilike('from_email', `%@${domain}`)
+      const ids = (dSenders ?? []).map((s: any) => s.id)
+      let used = 0
+      if (ids.length > 0) {
+        const startOfDay = new Date(); startOfDay.setUTCHours(0, 0, 0, 0)
+        const { count } = await supabase
+          .from('sent_emails')
+          .select('id', { count: 'exact', head: true })
+          .in('sender_id', ids)
+          .in('status', ['sent', 'queued'])
+          .gte('sent_at', startOfDay.toISOString())
+        used = count ?? 0
+      }
+      domainSentToday.set(domain, used)
+      domainCounted.set ? domainCounted.add(domain) : domainCounted.add(domain)
+    }
+    return Math.max(0, PER_DOMAIN_DAILY_CAP - (domainSentToday.get(domain) ?? 0))
+  }
+
+  function bumpDomain(domain: string) {
+    domainSentToday.set(domain, (domainSentToday.get(domain) ?? 0) + 1)
+  }
+
   for (const enr of due ?? []) {
     processed++
     try {
