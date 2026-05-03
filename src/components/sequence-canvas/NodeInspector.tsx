@@ -9,6 +9,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { X, Trash2, Sparkles, Loader2 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 
+const baseVariables = ["first_name", "last_name", "email"];
+
+const normalizeVariableName = (value: unknown) =>
+  String(value ?? "")
+    .replace(/^\{\{\s*/, "")
+    .replace(/\s*\}\}$/, "")
+    .trim()
+    .replace(/\s+/g, "_");
+
 export interface FlowNode {
   id: string;
   node_type: string;
@@ -101,8 +110,8 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
         .eq("id", contactListId!)
         .maybeSingle();
       const listCols = ((listRow?.columns as any[]) ?? [])
-        .map((c) => (typeof c === "string" ? c : c?.name))
-        .filter(Boolean) as string[];
+        .map((c) => normalizeVariableName(typeof c === "string" ? c : c?.name ?? c?.key))
+        .filter(Boolean);
 
       // 2) Fallback / extra: scan custom_fields actually present on the contacts
       //    (covers imports done before the list.columns sync, or manual inserts).
@@ -116,12 +125,20 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
       for (const row of (sample ?? [])) {
         const cf = (row as any).custom_fields;
         if (cf && typeof cf === "object") {
-          for (const k of Object.keys(cf)) scanned.add(k);
+          for (const k of Object.keys(cf)) {
+            const key = normalizeVariableName(k);
+            if (key) scanned.add(key);
+          }
         }
       }
 
-      const all = new Set<string>(["first_name", "last_name", "email", ...listCols, ...scanned]);
-      return Array.from(all);
+      const all = new Set<string>([...baseVariables, ...listCols, ...scanned]);
+      return Array.from(all).sort((a, b) => {
+        const ai = baseVariables.indexOf(a);
+        const bi = baseVariables.indexOf(b);
+        if (ai !== -1 || bi !== -1) return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+        return a.localeCompare(b);
+      });
     },
   });
 
