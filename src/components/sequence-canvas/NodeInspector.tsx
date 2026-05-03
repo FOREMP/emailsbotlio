@@ -89,14 +89,36 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
   const { data: variables = [] } = useQuery({
     queryKey: ["inspector-vars", contactListId],
     enabled: node?.node_type === "send_email" && !!contactListId,
+    staleTime: 0,
     queryFn: async () => {
-      const { data } = await supabase
+      // 1) Variables registered on the contact list (set during CSV import)
+      const { data: listRow } = await supabase
         .from("contact_lists")
         .select("columns")
         .eq("id", contactListId!)
         .maybeSingle();
-      const cols = (data?.columns as any[]) ?? [];
-      return ["first_name", "last_name", "email", ...cols.map((c) => (typeof c === "string" ? c : c?.name)).filter(Boolean)];
+      const listCols = ((listRow?.columns as any[]) ?? [])
+        .map((c) => (typeof c === "string" ? c : c?.name))
+        .filter(Boolean) as string[];
+
+      // 2) Fallback / extra: scan custom_fields actually present on the contacts
+      //    (covers imports done before the list.columns sync, or manual inserts).
+      const { data: sample } = await supabase
+        .from("contacts")
+        .select("custom_fields")
+        .eq("list_id", contactListId!)
+        .not("custom_fields", "is", null)
+        .limit(50);
+      const scanned = new Set<string>();
+      for (const row of (sample ?? [])) {
+        const cf = (row as any).custom_fields;
+        if (cf && typeof cf === "object") {
+          for (const k of Object.keys(cf)) scanned.add(k);
+        }
+      }
+
+      const all = new Set<string>(["first_name", "last_name", "email", ...listCols, ...scanned]);
+      return Array.from(all);
     },
   });
 
