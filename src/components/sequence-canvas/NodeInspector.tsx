@@ -86,10 +86,13 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
     enabled: node?.node_type === "send_email",
   });
 
-  const { data: variables = [] } = useQuery({
+  const { data: variables = [], refetch: refetchVariables, isFetching: fetchingVars } = useQuery({
     queryKey: ["inspector-vars", contactListId],
     enabled: node?.node_type === "send_email" && !!contactListId,
     staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
     queryFn: async () => {
       // 1) Variables registered on the contact list (set during CSV import)
       const { data: listRow } = await supabase
