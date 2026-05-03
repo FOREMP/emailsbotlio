@@ -353,10 +353,24 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
               </>
             )}
 
-            {variables.length > 0 && (
-              <div>
-                <Label className="text-xs">Available variables</Label>
-                <p className="text-[10px] text-muted-foreground mt-0.5 mb-1">Click to insert at cursor.</p>
+            <div>
+              <div className="flex items-center justify-between">
+                <Label className="text-xs">Available variables {contactListId ? `(${variables.length})` : ""}</Label>
+                <button
+                  type="button"
+                  onClick={() => refetchVariables()}
+                  className="text-[10px] text-muted-foreground hover:text-foreground underline"
+                  disabled={fetchingVars}
+                >
+                  {fetchingVars ? "Refreshing…" : "Refresh"}
+                </button>
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-0.5 mb-1">
+                {contactListId
+                  ? "Click a chip to insert at the cursor. Use these in your subject prompt, body prompt, or template — they're replaced with the contact's real values before sending."
+                  : "Pick a contact list on the Trigger node first to see this list's custom variables."}
+              </p>
+              {variables.length > 0 ? (
                 <div className="flex flex-wrap gap-1">
                   {variables.map((v) => (
                     <button
@@ -369,8 +383,10 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
                     </button>
                   ))}
                 </div>
-              </div>
-            )}
+              ) : contactListId ? (
+                <p className="text-[10px] text-muted-foreground italic">No variables found on this list yet — click Refresh after importing.</p>
+              ) : null}
+            </div>
           </>
         )}
 
