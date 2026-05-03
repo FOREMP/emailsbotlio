@@ -423,7 +423,8 @@ const Inner = () => {
   });
 
   const triggerNode = nodes.find((n) => n.type === "trigger");
-  const contactListId = (triggerNode?.data as any)?.config?.contact_list_id ?? sequence?.contact_list_id ?? null;
+  const triggerContactListId = (triggerNode?.data as any)?.config?.contact_list_id;
+  const contactListId = triggerContactListId || sequence?.contact_list_id || null;
 
   const selectedNode: FlowNode | null = useMemo(() => {
     const n = nodes.find((x) => x.id === selectedId);
