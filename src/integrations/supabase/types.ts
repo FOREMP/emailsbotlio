@@ -87,6 +87,7 @@ export type Database = {
           last_name: string | null
           list_id: string
           phone: string | null
+          tags: string[]
           updated_at: string
           user_id: string
         }
@@ -99,6 +100,7 @@ export type Database = {
           last_name?: string | null
           list_id: string
           phone?: string | null
+          tags?: string[]
           updated_at?: string
           user_id: string
         }
@@ -111,6 +113,7 @@ export type Database = {
           last_name?: string | null
           list_id?: string
           phone?: string | null
+          tags?: string[]
           updated_at?: string
           user_id?: string
         }
