@@ -227,6 +227,70 @@ const Contacts = () => {
     onError: (e: any) => toast.error(e.message ?? "Erase failed"),
   });
 
+  const bulkDelete = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const { error } = await supabase.from("contacts").delete().in("id", ids);
+      if (error) throw error;
+    },
+    onSuccess: (_d, ids) => {
+      queryClient.invalidateQueries({ queryKey: ["contacts", selectedList] });
+      setSelectedIds(new Set());
+      toast.success(`Removed ${ids.length} contacts`);
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const bulkMove = useMutation({
+    mutationFn: async ({ ids, targetListId, mode }: { ids: string[]; targetListId: string; mode: "move" | "copy" }) => {
+      if (mode === "move") {
+        const { error } = await supabase.from("contacts").update({ list_id: targetListId }).in("id", ids);
+        if (error) throw error;
+      } else {
+        const { data: rows, error: e1 } = await supabase.from("contacts").select("*").in("id", ids);
+        if (e1) throw e1;
+        const dupes = (rows ?? []).map((r: any) => ({
+          user_id: user!.id,
+          list_id: targetListId,
+          first_name: r.first_name,
+          last_name: r.last_name,
+          email: r.email,
+          phone: r.phone,
+          custom_fields: r.custom_fields,
+          tags: r.tags,
+        }));
+        const { error: e2 } = await supabase.from("contacts").insert(dupes);
+        if (e2) throw e2;
+      }
+    },
+    onSuccess: (_d, v) => {
+      queryClient.invalidateQueries({ queryKey: ["contacts", selectedList] });
+      queryClient.invalidateQueries({ queryKey: ["contacts", v.targetListId] });
+      setSelectedIds(new Set());
+      setBulkMoveTarget("");
+      toast.success(`${v.mode === "move" ? "Moved" : "Copied"} ${v.ids.length} contacts`);
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const bulkAddTag = useMutation({
+    mutationFn: async ({ ids, tag }: { ids: string[]; tag: string }) => {
+      const { data: rows, error: e1 } = await supabase.from("contacts").select("id, tags").in("id", ids);
+      if (e1) throw e1;
+      for (const r of rows ?? []) {
+        const tags: string[] = Array.isArray((r as any).tags) ? (r as any).tags : [];
+        if (!tags.includes(tag)) {
+          await supabase.from("contacts").update({ tags: [...tags, tag] }).eq("id", (r as any).id);
+        }
+      }
+    },
+    onSuccess: (_d, v) => {
+      queryClient.invalidateQueries({ queryKey: ["contacts", selectedList] });
+      setBulkTagInput("");
+      toast.success(`Tagged ${v.ids.length} contacts as "${v.tag}"`);
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
   const [importing, setImporting] = useState(false);
   const handleFileImport = async (
     importedContacts: { first_name: string; last_name: string; email: string; phone: string; custom_fields: Record<string, string> }[],
