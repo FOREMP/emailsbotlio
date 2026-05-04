@@ -122,6 +122,20 @@ Deno.serve(async (req) => {
   for (const enr of due ?? []) {
     processed++
     try {
+      // ATOMIC CLAIM: prevent concurrent invocations (cron + manual trigger) from
+      // processing the same enrollment twice. We bump updated_at and require it to
+      // still match what we read; if another worker already claimed/advanced this
+      // enrollment, the update affects 0 rows and we skip.
+      const claim = await supabase
+        .from('enrollments')
+        .update({ updated_at: nowIso })
+        .eq('id', enr.id)
+        .eq('updated_at', enr.updated_at)
+        .select('id')
+      if (!claim.data || claim.data.length === 0) {
+        console.log(`[enr ${enr.id}] skipped — already claimed by another worker`)
+        continue
+      }
       const [{ data: nodes }, { data: edges }, { data: contact }] = await Promise.all([
         supabase.from('sequence_nodes').select('*').eq('sequence_id', enr.sequence_id),
         supabase.from('sequence_edges').select('*').eq('sequence_id', enr.sequence_id),
