@@ -8,7 +8,9 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, Users, Upload, ArrowLeft, Trash2, ShieldX, ShieldOff, Settings2 } from "lucide-react";
+import { Plus, Users, Upload, ArrowLeft, Trash2, ShieldX, ShieldOff, Settings2, Tag, Search, Move, Copy } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
