@@ -657,14 +657,90 @@ const Contacts = () => {
               <p className="text-muted-foreground text-sm">No contacts in this list yet. Add one manually or import a file.</p>
             </div>
           ) : (
+            <div className="space-y-3">
+              {/* Filters + bulk toolbar */}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative flex-1 min-w-[220px]">
+                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input value={searchQ} onChange={(e) => setSearchQ(e.target.value)} placeholder="Search name, email, phone…" className="pl-8 h-9" />
+                </div>
+                <Select value={tagFilter} onValueChange={setTagFilter}>
+                  <SelectTrigger className="h-9 w-[180px]"><SelectValue placeholder="Filter by tag" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">All tags</SelectItem>
+                    <SelectItem value="__untagged__">Untagged</SelectItem>
+                    {allTags.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <span className="text-xs text-muted-foreground ml-auto">
+                  {filteredContacts.length} of {contacts.length} {selectedIds.size > 0 ? `· ${selectedIds.size} selected` : ""}
+                </span>
+              </div>
+
+              {selectedIds.size > 0 && (
+                <div className="rounded-lg border border-border bg-muted/30 p-3 flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium mr-2">{selectedIds.size} selected</span>
+                  <div className="flex items-center gap-1">
+                    <Input
+                      value={bulkTagInput}
+                      onChange={(e) => setBulkTagInput(e.target.value)}
+                      placeholder="Add tag…"
+                      className="h-8 w-32"
+                    />
+                    <Button size="sm" variant="outline" disabled={!bulkTagInput.trim() || bulkAddTag.isPending}
+                      onClick={() => bulkAddTag.mutate({ ids: Array.from(selectedIds), tag: bulkTagInput.trim() })}>
+                      <Tag className="h-3.5 w-3.5 mr-1" /> Tag
+                    </Button>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Select value={bulkMoveTarget} onValueChange={setBulkMoveTarget}>
+                      <SelectTrigger className="h-8 w-[180px]"><SelectValue placeholder="Choose list…" /></SelectTrigger>
+                      <SelectContent>
+                        {lists.filter((l) => l.id !== selectedList).map((l) => (
+                          <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button size="sm" variant="outline" disabled={!bulkMoveTarget || bulkMove.isPending}
+                      onClick={() => { setBulkMoveMode("move"); bulkMove.mutate({ ids: Array.from(selectedIds), targetListId: bulkMoveTarget, mode: "move" }); }}>
+                      <Move className="h-3.5 w-3.5 mr-1" /> Move
+                    </Button>
+                    <Button size="sm" variant="outline" disabled={!bulkMoveTarget || bulkMove.isPending}
+                      onClick={() => { setBulkMoveMode("copy"); bulkMove.mutate({ ids: Array.from(selectedIds), targetListId: bulkMoveTarget, mode: "copy" }); }}>
+                      <Copy className="h-3.5 w-3.5 mr-1" /> Copy
+                    </Button>
+                  </div>
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button size="sm" variant="outline" className="text-destructive">
+                        <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Remove {selectedIds.size} contacts?</AlertDialogTitle>
+                        <AlertDialogDescription>They will be removed from this list. This does not block future contact (use GDPR erase for that).</AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => bulkDelete.mutate(Array.from(selectedIds))}>Remove</AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                  <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>Clear</Button>
+                </div>
+              )}
+
             <div className="rounded-xl border border-border bg-card shadow-card overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border bg-muted/50">
+                      <th className="px-3 py-3 w-8"><Checkbox checked={allFilteredSelected} onCheckedChange={toggleAll} /></th>
                       <th className="text-left px-4 py-3 font-medium text-muted-foreground">Name</th>
                       <th className="text-left px-4 py-3 font-medium text-muted-foreground">Email</th>
                       <th className="text-left px-4 py-3 font-medium text-muted-foreground">Phone</th>
+                      <th className="text-left px-4 py-3 font-medium text-muted-foreground">Tags</th>
                       {listCustomColumns.map((col) => (
                         <th key={col} className="text-left px-4 py-3 font-medium text-muted-foreground whitespace-nowrap">{col}</th>
                       ))}
@@ -674,15 +750,24 @@ const Contacts = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {contacts.map((c) => {
+                    {filteredContacts.map((c: any) => {
                       const cf = (c.custom_fields as Record<string, string> | null) ?? {};
                       const lc = (lastContacted as Record<string, string>)[c.id];
                       const isSuppressed = !!c.email && suppressedSet.has(c.email.toLowerCase());
+                      const tags: string[] = Array.isArray(c.tags) ? c.tags : [];
                       return (
                         <tr key={c.id} className="border-b border-border last:border-0 hover:bg-muted/30">
+                          <td className="px-3 py-3"><Checkbox checked={selectedIds.has(c.id)} onCheckedChange={() => toggleOne(c.id)} /></td>
                           <td className="px-4 py-3">{[c.first_name, c.last_name].filter(Boolean).join(" ") || "—"}</td>
                           <td className="px-4 py-3 text-muted-foreground">{c.email || "—"}</td>
                           <td className="px-4 py-3 text-muted-foreground">{c.phone || "—"}</td>
+                          <td className="px-4 py-3">
+                            {tags.length === 0 ? <span className="text-muted-foreground/50">—</span> : (
+                              <div className="flex flex-wrap gap-1">
+                                {tags.map((t) => <Badge key={t} variant="outline" className="text-xs">{t}</Badge>)}
+                              </div>
+                            )}
+                          </td>
                           {listCustomColumns.map((col) => (
                             <td key={col} className="px-4 py-3 text-muted-foreground">{cf[col] || "—"}</td>
                           ))}
