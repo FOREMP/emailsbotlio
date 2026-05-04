@@ -352,6 +352,31 @@ const Contacts = () => {
   const listCustomColumns: string[] = Array.isArray((selectedListData as any)?.columns) ? (selectedListData as any).columns : [];
   const suppressedSet = new Set(suppressedEmails.map((item) => item.email.toLowerCase()));
 
+  const allTags = Array.from(new Set(contacts.flatMap((c: any) => (Array.isArray(c.tags) ? c.tags : [])))) as string[];
+  const filteredContacts = contacts.filter((c: any) => {
+    if (tagFilter !== "__all__") {
+      const tags: string[] = Array.isArray(c.tags) ? c.tags : [];
+      if (tagFilter === "__untagged__" ? tags.length > 0 : !tags.includes(tagFilter)) return false;
+    }
+    if (searchQ.trim()) {
+      const q = searchQ.toLowerCase();
+      const hay = [c.first_name, c.last_name, c.email, c.phone].filter(Boolean).join(" ").toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  const allFilteredSelected = filteredContacts.length > 0 && filteredContacts.every((c: any) => selectedIds.has(c.id));
+  const toggleAll = () => {
+    if (allFilteredSelected) setSelectedIds(new Set());
+    else setSelectedIds(new Set(filteredContacts.map((c: any) => c.id)));
+  };
+  const toggleOne = (id: string) => {
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedIds(next);
+  };
+
   return (
     <>
       <div className="flex items-center gap-2 mb-6">
