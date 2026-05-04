@@ -39,6 +39,12 @@ const Contacts = () => {
   const [contactForm, setContactForm] = useState({ first_name: "", last_name: "", email: "", phone: "" });
   const [overviewTab, setOverviewTab] = useState<"lists" | "suppressed" | "erasures">("lists");
   const [varsDialogOpen, setVarsDialogOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [searchQ, setSearchQ] = useState("");
+  const [tagFilter, setTagFilter] = useState<string>("__all__");
+  const [bulkMoveTarget, setBulkMoveTarget] = useState<string>("");
+  const [bulkMoveMode, setBulkMoveMode] = useState<"move" | "copy">("move");
+  const [bulkTagInput, setBulkTagInput] = useState("");
 
   const { data: lists = [], isLoading: listsLoading } = useQuery({
     queryKey: ["contact_lists"],
