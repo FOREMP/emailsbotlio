@@ -278,8 +278,8 @@ const Sequences = () => {
                             <div className="flex items-center gap-2 text-xs flex-wrap">
                               <span title="active" className="text-accent font-medium">{st.active} active</span>
                               {st.waiting > 0 && (
-                                <span title={st.waitingReason ?? "waiting for sender capacity — resumes tomorrow"} className="text-yellow-600 font-medium">
-                                  {st.waiting} paused
+                                <span title={st.waitingReason ?? "Waiting for sender daily capacity — automatically resumes on the next cron run (typically the next morning). Sequence is NOT stopped."} className="text-yellow-600 font-medium">
+                                  {st.waiting} queued
                                 </span>
                               )}
                               {st.completed > 0 && <span title="completed" className="text-muted-foreground">{st.completed} done</span>}

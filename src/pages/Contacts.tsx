@@ -8,7 +8,9 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, Users, Upload, ArrowLeft, Trash2, ShieldX, ShieldOff, Settings2 } from "lucide-react";
+import { Plus, Users, Upload, ArrowLeft, Trash2, ShieldX, ShieldOff, Settings2, Tag, Search, Move, Copy } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -37,6 +39,12 @@ const Contacts = () => {
   const [contactForm, setContactForm] = useState({ first_name: "", last_name: "", email: "", phone: "" });
   const [overviewTab, setOverviewTab] = useState<"lists" | "suppressed" | "erasures">("lists");
   const [varsDialogOpen, setVarsDialogOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [searchQ, setSearchQ] = useState("");
+  const [tagFilter, setTagFilter] = useState<string>("__all__");
+  const [bulkMoveTarget, setBulkMoveTarget] = useState<string>("");
+  const [bulkMoveMode, setBulkMoveMode] = useState<"move" | "copy">("move");
+  const [bulkTagInput, setBulkTagInput] = useState("");
 
   const { data: lists = [], isLoading: listsLoading } = useQuery({
     queryKey: ["contact_lists"],
@@ -219,6 +227,70 @@ const Contacts = () => {
     onError: (e: any) => toast.error(e.message ?? "Erase failed"),
   });
 
+  const bulkDelete = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const { error } = await supabase.from("contacts").delete().in("id", ids);
+      if (error) throw error;
+    },
+    onSuccess: (_d, ids) => {
+      queryClient.invalidateQueries({ queryKey: ["contacts", selectedList] });
+      setSelectedIds(new Set());
+      toast.success(`Removed ${ids.length} contacts`);
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const bulkMove = useMutation({
+    mutationFn: async ({ ids, targetListId, mode }: { ids: string[]; targetListId: string; mode: "move" | "copy" }) => {
+      if (mode === "move") {
+        const { error } = await supabase.from("contacts").update({ list_id: targetListId }).in("id", ids);
+        if (error) throw error;
+      } else {
+        const { data: rows, error: e1 } = await supabase.from("contacts").select("*").in("id", ids);
+        if (e1) throw e1;
+        const dupes = (rows ?? []).map((r: any) => ({
+          user_id: user!.id,
+          list_id: targetListId,
+          first_name: r.first_name,
+          last_name: r.last_name,
+          email: r.email,
+          phone: r.phone,
+          custom_fields: r.custom_fields,
+          tags: r.tags,
+        }));
+        const { error: e2 } = await supabase.from("contacts").insert(dupes);
+        if (e2) throw e2;
+      }
+    },
+    onSuccess: (_d, v) => {
+      queryClient.invalidateQueries({ queryKey: ["contacts", selectedList] });
+      queryClient.invalidateQueries({ queryKey: ["contacts", v.targetListId] });
+      setSelectedIds(new Set());
+      setBulkMoveTarget("");
+      toast.success(`${v.mode === "move" ? "Moved" : "Copied"} ${v.ids.length} contacts`);
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const bulkAddTag = useMutation({
+    mutationFn: async ({ ids, tag }: { ids: string[]; tag: string }) => {
+      const { data: rows, error: e1 } = await supabase.from("contacts").select("id, tags").in("id", ids);
+      if (e1) throw e1;
+      for (const r of rows ?? []) {
+        const tags: string[] = Array.isArray((r as any).tags) ? (r as any).tags : [];
+        if (!tags.includes(tag)) {
+          await supabase.from("contacts").update({ tags: [...tags, tag] }).eq("id", (r as any).id);
+        }
+      }
+    },
+    onSuccess: (_d, v) => {
+      queryClient.invalidateQueries({ queryKey: ["contacts", selectedList] });
+      setBulkTagInput("");
+      toast.success(`Tagged ${v.ids.length} contacts as "${v.tag}"`);
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
   const [importing, setImporting] = useState(false);
   const handleFileImport = async (
     importedContacts: { first_name: string; last_name: string; email: string; phone: string; custom_fields: Record<string, string> }[],
@@ -279,6 +351,31 @@ const Contacts = () => {
   const selectedListData = lists.find((l) => l.id === selectedList);
   const listCustomColumns: string[] = Array.isArray((selectedListData as any)?.columns) ? (selectedListData as any).columns : [];
   const suppressedSet = new Set(suppressedEmails.map((item) => item.email.toLowerCase()));
+
+  const allTags = Array.from(new Set(contacts.flatMap((c: any) => (Array.isArray(c.tags) ? c.tags : [])))) as string[];
+  const filteredContacts = contacts.filter((c: any) => {
+    if (tagFilter !== "__all__") {
+      const tags: string[] = Array.isArray(c.tags) ? c.tags : [];
+      if (tagFilter === "__untagged__" ? tags.length > 0 : !tags.includes(tagFilter)) return false;
+    }
+    if (searchQ.trim()) {
+      const q = searchQ.toLowerCase();
+      const hay = [c.first_name, c.last_name, c.email, c.phone].filter(Boolean).join(" ").toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  const allFilteredSelected = filteredContacts.length > 0 && filteredContacts.every((c: any) => selectedIds.has(c.id));
+  const toggleAll = () => {
+    if (allFilteredSelected) setSelectedIds(new Set());
+    else setSelectedIds(new Set(filteredContacts.map((c: any) => c.id)));
+  };
+  const toggleOne = (id: string) => {
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedIds(next);
+  };
 
   return (
     <>
@@ -560,14 +657,90 @@ const Contacts = () => {
               <p className="text-muted-foreground text-sm">No contacts in this list yet. Add one manually or import a file.</p>
             </div>
           ) : (
+            <div className="space-y-3">
+              {/* Filters + bulk toolbar */}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative flex-1 min-w-[220px]">
+                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input value={searchQ} onChange={(e) => setSearchQ(e.target.value)} placeholder="Search name, email, phone…" className="pl-8 h-9" />
+                </div>
+                <Select value={tagFilter} onValueChange={setTagFilter}>
+                  <SelectTrigger className="h-9 w-[180px]"><SelectValue placeholder="Filter by tag" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">All tags</SelectItem>
+                    <SelectItem value="__untagged__">Untagged</SelectItem>
+                    {allTags.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <span className="text-xs text-muted-foreground ml-auto">
+                  {filteredContacts.length} of {contacts.length} {selectedIds.size > 0 ? `· ${selectedIds.size} selected` : ""}
+                </span>
+              </div>
+
+              {selectedIds.size > 0 && (
+                <div className="rounded-lg border border-border bg-muted/30 p-3 flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium mr-2">{selectedIds.size} selected</span>
+                  <div className="flex items-center gap-1">
+                    <Input
+                      value={bulkTagInput}
+                      onChange={(e) => setBulkTagInput(e.target.value)}
+                      placeholder="Add tag…"
+                      className="h-8 w-32"
+                    />
+                    <Button size="sm" variant="outline" disabled={!bulkTagInput.trim() || bulkAddTag.isPending}
+                      onClick={() => bulkAddTag.mutate({ ids: Array.from(selectedIds), tag: bulkTagInput.trim() })}>
+                      <Tag className="h-3.5 w-3.5 mr-1" /> Tag
+                    </Button>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Select value={bulkMoveTarget} onValueChange={setBulkMoveTarget}>
+                      <SelectTrigger className="h-8 w-[180px]"><SelectValue placeholder="Choose list…" /></SelectTrigger>
+                      <SelectContent>
+                        {lists.filter((l) => l.id !== selectedList).map((l) => (
+                          <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button size="sm" variant="outline" disabled={!bulkMoveTarget || bulkMove.isPending}
+                      onClick={() => { setBulkMoveMode("move"); bulkMove.mutate({ ids: Array.from(selectedIds), targetListId: bulkMoveTarget, mode: "move" }); }}>
+                      <Move className="h-3.5 w-3.5 mr-1" /> Move
+                    </Button>
+                    <Button size="sm" variant="outline" disabled={!bulkMoveTarget || bulkMove.isPending}
+                      onClick={() => { setBulkMoveMode("copy"); bulkMove.mutate({ ids: Array.from(selectedIds), targetListId: bulkMoveTarget, mode: "copy" }); }}>
+                      <Copy className="h-3.5 w-3.5 mr-1" /> Copy
+                    </Button>
+                  </div>
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button size="sm" variant="outline" className="text-destructive">
+                        <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Remove {selectedIds.size} contacts?</AlertDialogTitle>
+                        <AlertDialogDescription>They will be removed from this list. This does not block future contact (use GDPR erase for that).</AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => bulkDelete.mutate(Array.from(selectedIds))}>Remove</AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                  <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>Clear</Button>
+                </div>
+              )}
+
             <div className="rounded-xl border border-border bg-card shadow-card overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border bg-muted/50">
+                      <th className="px-3 py-3 w-8"><Checkbox checked={allFilteredSelected} onCheckedChange={toggleAll} /></th>
                       <th className="text-left px-4 py-3 font-medium text-muted-foreground">Name</th>
                       <th className="text-left px-4 py-3 font-medium text-muted-foreground">Email</th>
                       <th className="text-left px-4 py-3 font-medium text-muted-foreground">Phone</th>
+                      <th className="text-left px-4 py-3 font-medium text-muted-foreground">Tags</th>
                       {listCustomColumns.map((col) => (
                         <th key={col} className="text-left px-4 py-3 font-medium text-muted-foreground whitespace-nowrap">{col}</th>
                       ))}
@@ -577,15 +750,24 @@ const Contacts = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {contacts.map((c) => {
+                    {filteredContacts.map((c: any) => {
                       const cf = (c.custom_fields as Record<string, string> | null) ?? {};
                       const lc = (lastContacted as Record<string, string>)[c.id];
                       const isSuppressed = !!c.email && suppressedSet.has(c.email.toLowerCase());
+                      const tags: string[] = Array.isArray(c.tags) ? c.tags : [];
                       return (
                         <tr key={c.id} className="border-b border-border last:border-0 hover:bg-muted/30">
+                          <td className="px-3 py-3"><Checkbox checked={selectedIds.has(c.id)} onCheckedChange={() => toggleOne(c.id)} /></td>
                           <td className="px-4 py-3">{[c.first_name, c.last_name].filter(Boolean).join(" ") || "—"}</td>
                           <td className="px-4 py-3 text-muted-foreground">{c.email || "—"}</td>
                           <td className="px-4 py-3 text-muted-foreground">{c.phone || "—"}</td>
+                          <td className="px-4 py-3">
+                            {tags.length === 0 ? <span className="text-muted-foreground/50">—</span> : (
+                              <div className="flex flex-wrap gap-1">
+                                {tags.map((t) => <Badge key={t} variant="outline" className="text-xs">{t}</Badge>)}
+                              </div>
+                            )}
+                          </td>
                           {listCustomColumns.map((col) => (
                             <td key={col} className="px-4 py-3 text-muted-foreground">{cf[col] || "—"}</td>
                           ))}
@@ -634,6 +816,7 @@ const Contacts = () => {
                   </tbody>
                 </table>
               </div>
+            </div>
             </div>
           )}
         </>
