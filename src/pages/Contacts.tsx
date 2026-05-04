@@ -817,6 +817,7 @@ const Contacts = () => {
                 </table>
               </div>
             </div>
+            </div>
           )}
         </>
       )}
