@@ -432,14 +432,16 @@ Deno.serve(async (req) => {
           const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: preSenderId })
           if ((rem ?? 0) <= 0) {
             const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
+            const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
             await supabase.from('enrollments').update({
+              current_node_id: upstreamSched ?? enr.current_node_id,
               next_send_at: tomorrow.toISOString(),
               deferred_at: nowIso,
               status: 'waiting_capacity',
-              last_error: 'specific sender at daily cap — resumes tomorrow',
+              last_error: 'specific sender at daily cap — resumes at next scheduled slot',
               error_at: nowIso,
             }).eq('id', enr.id)
-            console.log(`[enr ${enr.id}] specific sender at daily cap → waiting_capacity`)
+            console.log(`[enr ${enr.id}] specific sender at daily cap → waiting_capacity (rewound to schedule=${upstreamSched ?? 'none'})`)
             continue
           }
         }
