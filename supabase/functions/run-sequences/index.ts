@@ -24,6 +24,31 @@ function findNodePreferWired(nodes: any[], edges: any[], id: string) {
   return matches.find((n) => edges.some((e) => e.source_node_id === n.id)) ?? matches[0]
 }
 
+// Walk edges backwards from a node to find the nearest upstream schedule node.
+// Used when we need to defer a send: instead of pinning to UTC midnight (which
+// ignores the configured local time-of-day), rewind to the schedule so its
+// next-slot logic computes the correct local fire time on the next tick.
+function findUpstreamScheduleId(nodes: any[], edges: any[], fromNodeId: string): string | null {
+  const seen = new Set<string>()
+  let frontier: string[] = [fromNodeId]
+  while (frontier.length) {
+    const next: string[] = []
+    for (const id of frontier) {
+      if (seen.has(id)) continue
+      seen.add(id)
+      const incoming = edges.filter((e: any) => e.target_node_id === id)
+      for (const e of incoming) {
+        const src = nodes.find((n: any) => n.id === e.source_node_id)
+        if (!src) continue
+        if (src.node_type === 'schedule') return src.id
+        next.push(src.id)
+      }
+    }
+    frontier = next
+  }
+  return null
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders })
 
@@ -273,13 +298,15 @@ Deno.serve(async (req) => {
             .limit(1)
           if (alreadyToday && alreadyToday.length > 0) {
             const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
+            const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
             await supabase.from('enrollments').update({
+              current_node_id: upstreamSched ?? enr.current_node_id,
               next_send_at: tomorrow.toISOString(),
               deferred_at: nowIso,
               last_error: 'same-day double-send guard — already sent to this contact today',
               error_at: nowIso,
             }).eq('id', enr.id)
-            console.log(`[enr ${enr.id}] same-day guard tripped → deferred to ${tomorrow.toISOString()}`)
+            console.log(`[enr ${enr.id}] same-day guard tripped → deferred (rewound to schedule=${upstreamSched ?? 'none'})`)
             continue
           }
         }
@@ -391,28 +418,32 @@ Deno.serve(async (req) => {
           // All eligible senders at daily cap — defer to next UTC midnight and surface
           // it as a visible "waiting_capacity" status so the UI can show it.
           const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
+          const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
           await supabase.from('enrollments').update({
+            current_node_id: upstreamSched ?? enr.current_node_id,
             next_send_at: tomorrow.toISOString(),
             deferred_at: nowIso,
             status: 'waiting_capacity',
-            last_error: 'all eligible senders at daily cap — resumes tomorrow',
+            last_error: 'all eligible senders at daily cap — resumes at next scheduled slot',
             error_at: nowIso,
           }).eq('id', enr.id)
-          console.log(`[enr ${enr.id}] all senders at daily cap → waiting_capacity until ${tomorrow.toISOString()}`)
+          console.log(`[enr ${enr.id}] all senders at daily cap → waiting_capacity (rewound to schedule=${upstreamSched ?? 'none'})`)
           continue
         }
         if (cfg.sender_strategy === 'specific' && !enr.assigned_sender_id) {
           const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: preSenderId })
           if ((rem ?? 0) <= 0) {
             const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
+            const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
             await supabase.from('enrollments').update({
+              current_node_id: upstreamSched ?? enr.current_node_id,
               next_send_at: tomorrow.toISOString(),
               deferred_at: nowIso,
               status: 'waiting_capacity',
-              last_error: 'specific sender at daily cap — resumes tomorrow',
+              last_error: 'specific sender at daily cap — resumes at next scheduled slot',
               error_at: nowIso,
             }).eq('id', enr.id)
-            console.log(`[enr ${enr.id}] specific sender at daily cap → waiting_capacity`)
+            console.log(`[enr ${enr.id}] specific sender at daily cap → waiting_capacity (rewound to schedule=${upstreamSched ?? 'none'})`)
             continue
           }
         }
