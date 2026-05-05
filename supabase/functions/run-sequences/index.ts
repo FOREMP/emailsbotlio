@@ -298,13 +298,15 @@ Deno.serve(async (req) => {
             .limit(1)
           if (alreadyToday && alreadyToday.length > 0) {
             const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
+            const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
             await supabase.from('enrollments').update({
+              current_node_id: upstreamSched ?? enr.current_node_id,
               next_send_at: tomorrow.toISOString(),
               deferred_at: nowIso,
               last_error: 'same-day double-send guard — already sent to this contact today',
               error_at: nowIso,
             }).eq('id', enr.id)
-            console.log(`[enr ${enr.id}] same-day guard tripped → deferred to ${tomorrow.toISOString()}`)
+            console.log(`[enr ${enr.id}] same-day guard tripped → deferred (rewound to schedule=${upstreamSched ?? 'none'})`)
             continue
           }
         }
