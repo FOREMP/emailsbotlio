@@ -24,6 +24,31 @@ function findNodePreferWired(nodes: any[], edges: any[], id: string) {
   return matches.find((n) => edges.some((e) => e.source_node_id === n.id)) ?? matches[0]
 }
 
+// Walk edges backwards from a node to find the nearest upstream schedule node.
+// Used when we need to defer a send: instead of pinning to UTC midnight (which
+// ignores the configured local time-of-day), rewind to the schedule so its
+// next-slot logic computes the correct local fire time on the next tick.
+function findUpstreamScheduleId(nodes: any[], edges: any[], fromNodeId: string): string | null {
+  const seen = new Set<string>()
+  let frontier: string[] = [fromNodeId]
+  while (frontier.length) {
+    const next: string[] = []
+    for (const id of frontier) {
+      if (seen.has(id)) continue
+      seen.add(id)
+      const incoming = edges.filter((e: any) => e.target_node_id === id)
+      for (const e of incoming) {
+        const src = nodes.find((n: any) => n.id === e.source_node_id)
+        if (!src) continue
+        if (src.node_type === 'schedule') return src.id
+        next.push(src.id)
+      }
+    }
+    frontier = next
+  }
+  return null
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders })
 
