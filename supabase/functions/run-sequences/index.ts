@@ -416,14 +416,16 @@ Deno.serve(async (req) => {
           // All eligible senders at daily cap — defer to next UTC midnight and surface
           // it as a visible "waiting_capacity" status so the UI can show it.
           const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
+          const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
           await supabase.from('enrollments').update({
+            current_node_id: upstreamSched ?? enr.current_node_id,
             next_send_at: tomorrow.toISOString(),
             deferred_at: nowIso,
             status: 'waiting_capacity',
-            last_error: 'all eligible senders at daily cap — resumes tomorrow',
+            last_error: 'all eligible senders at daily cap — resumes at next scheduled slot',
             error_at: nowIso,
           }).eq('id', enr.id)
-          console.log(`[enr ${enr.id}] all senders at daily cap → waiting_capacity until ${tomorrow.toISOString()}`)
+          console.log(`[enr ${enr.id}] all senders at daily cap → waiting_capacity (rewound to schedule=${upstreamSched ?? 'none'})`)
           continue
         }
         if (cfg.sender_strategy === 'specific' && !enr.assigned_sender_id) {
