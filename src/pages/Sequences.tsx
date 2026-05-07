@@ -201,6 +201,34 @@ const Sequences = () => {
     },
   });
 
+  const changeList = useMutation({
+    mutationFn: async ({ sequenceId, listId }: { sequenceId: string; listId: string }) => {
+      // 1. Update sequences row
+      const { error: e1 } = await supabase
+        .from("sequences")
+        .update({ contact_list_id: listId })
+        .eq("id", sequenceId);
+      if (e1) throw e1;
+      // 2. Update the trigger node config so the canvas stays in sync
+      const { data: nodes } = await supabase
+        .from("sequence_nodes")
+        .select("id, config, node_type")
+        .eq("sequence_id", sequenceId)
+        .eq("node_type", "trigger");
+      for (const n of nodes ?? []) {
+        const cfg = { ...((n as any).config ?? {}), contact_list_id: listId };
+        await supabase.from("sequence_nodes").update({ config: cfg }).eq("id", (n as any).id);
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["sequences"] });
+      setChangeListFor(null);
+      setNewListId("");
+      toast({ title: "Contact list updated", description: "New contacts will be enrolled on the next run. Existing enrollments are unchanged." });
+    },
+    onError: (e: Error) => toast({ title: "Failed", description: e.message, variant: "destructive" }),
+  });
+
   return (
     <>
       <div>
