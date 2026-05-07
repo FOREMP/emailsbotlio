@@ -421,6 +421,37 @@ const Sequences = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={!!changeListFor} onOpenChange={(o) => !o && setChangeListFor(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Change contact list</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Swap the list for <strong>{changeListFor?.name}</strong>. Existing enrollments stay as they are — only new contacts from the new list will be enrolled on the next run.
+            </p>
+            <div>
+              <Label>New contact list</Label>
+              <Select value={newListId} onValueChange={setNewListId}>
+                <SelectTrigger><SelectValue placeholder="Pick a list" /></SelectTrigger>
+                <SelectContent>
+                  {lists.map((l) => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setChangeListFor(null)}>Cancel</Button>
+            <Button
+              onClick={() => changeListFor && newListId && changeList.mutate({ sequenceId: changeListFor.id, listId: newListId })}
+              disabled={changeList.isPending || !newListId || newListId === changeListFor?.current}
+            >
+              {changeList.isPending ? "Saving…" : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 };
