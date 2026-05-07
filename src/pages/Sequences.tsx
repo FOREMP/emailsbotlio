@@ -28,6 +28,8 @@ const Sequences = () => {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [listId, setListId] = useState<string>("");
+  const [changeListFor, setChangeListFor] = useState<{ id: string; name: string; current: string | null } | null>(null);
+  const [newListId, setNewListId] = useState<string>("");
 
   const { data: sequences = [], isLoading } = useQuery({
     queryKey: ["sequences"],
