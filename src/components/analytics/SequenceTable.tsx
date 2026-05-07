@@ -19,7 +19,7 @@ export const SequenceTable = ({ sequences, enrollments, rows }: Props) => {
   const stats = sequences.map((seq) => {
     const seqRows = rows.filter((r) => r.enrollment_id && enrollMap.get(r.enrollment_id) === seq.id);
     const sent = seqRows.length;
-    const bounced = seqRows.filter((r) => r.status === "bounced" || r.status === "failed").length;
+    const bounced = seqRows.filter((r) => r.status === "bounced").length;
     const delivered = sent - bounced;
     const opened = seqRows.filter((r) => r.opened_at).length;
     const replied = seqRows.filter((r) => r.replied_at).length;

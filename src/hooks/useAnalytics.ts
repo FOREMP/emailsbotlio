@@ -122,20 +122,28 @@ export const useRecentActivity = (filters: AnalyticsFilters) =>
 
 // Aggregations
 export const computeKpis = (rows: SentEmailRow[]) => {
-  const sent = rows.length;
-  const bounced = rows.filter((r) => r.status === "bounced" || r.status === "failed").length;
-  const delivered = sent - bounced;
+  const failed = rows.filter((r) => r.status === "failed").length;
+  const bounced = rows.filter((r) => r.status === "bounced").length;
+  const complained = rows.filter((r) => r.status === "complained").length;
+  // "Sent" = actually left our infra (sent + later marked bounced/complained/unsubscribed by webhook)
+  const sent = rows.filter((r) =>
+    r.status === "sent" || r.status === "bounced" || r.status === "complained" || r.status === "unsubscribed"
+  ).length;
+  const delivered = Math.max(0, sent - bounced);
   const opened = rows.filter((r) => r.opened_at).length;
   const replied = rows.filter((r) => r.replied_at).length;
   return {
     sent,
     delivered,
+    failed,
     opened,
     replied,
     bounced,
+    complained,
     openRate: delivered ? opened / delivered : 0,
     replyRate: delivered ? replied / delivered : 0,
     bounceRate: sent ? bounced / sent : 0,
+    failRate: (sent + failed) ? failed / (sent + failed) : 0,
   };
 };
 

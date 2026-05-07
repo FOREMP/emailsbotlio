@@ -615,6 +615,9 @@ export type Database = {
       sent_emails: {
         Row: {
           body: string | null
+          bounce_type: string | null
+          bounced_at: string | null
+          complained_at: string | null
           contact_id: string | null
           enrollment_id: string | null
           error_message: string | null
@@ -632,6 +635,9 @@ export type Database = {
         }
         Insert: {
           body?: string | null
+          bounce_type?: string | null
+          bounced_at?: string | null
+          complained_at?: string | null
           contact_id?: string | null
           enrollment_id?: string | null
           error_message?: string | null
@@ -649,6 +655,9 @@ export type Database = {
         }
         Update: {
           body?: string | null
+          bounce_type?: string | null
+          bounced_at?: string | null
+          complained_at?: string | null
           contact_id?: string | null
           enrollment_id?: string | null
           error_message?: string | null

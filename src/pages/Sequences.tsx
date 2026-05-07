@@ -6,7 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus, Play, Pause, Trash2, Pencil, Zap, AlertCircle, UserPlus, Info } from "lucide-react";
+import { Plus, Play, Pause, Trash2, Pencil, Zap, AlertCircle, UserPlus, Info, ListTree } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -28,6 +28,8 @@ const Sequences = () => {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [listId, setListId] = useState<string>("");
+  const [changeListFor, setChangeListFor] = useState<{ id: string; name: string; current: string | null } | null>(null);
+  const [newListId, setNewListId] = useState<string>("");
 
   const { data: sequences = [], isLoading } = useQuery({
     queryKey: ["sequences"],
@@ -199,6 +201,34 @@ const Sequences = () => {
     },
   });
 
+  const changeList = useMutation({
+    mutationFn: async ({ sequenceId, listId }: { sequenceId: string; listId: string }) => {
+      // 1. Update sequences row
+      const { error: e1 } = await supabase
+        .from("sequences")
+        .update({ contact_list_id: listId })
+        .eq("id", sequenceId);
+      if (e1) throw e1;
+      // 2. Update the trigger node config so the canvas stays in sync
+      const { data: nodes } = await supabase
+        .from("sequence_nodes")
+        .select("id, config, node_type")
+        .eq("sequence_id", sequenceId)
+        .eq("node_type", "trigger");
+      for (const n of nodes ?? []) {
+        const cfg = { ...((n as any).config ?? {}), contact_list_id: listId };
+        await supabase.from("sequence_nodes").update({ config: cfg }).eq("id", (n as any).id);
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["sequences"] });
+      setChangeListFor(null);
+      setNewListId("");
+      toast({ title: "Contact list updated", description: "New contacts will be enrolled on the next run. Existing enrollments are unchanged." });
+    },
+    onError: (e: Error) => toast({ title: "Failed", description: e.message, variant: "destructive" }),
+  });
+
   return (
     <>
       <div>
@@ -312,6 +342,17 @@ const Sequences = () => {
                         >
                           <UserPlus className="h-3.5 w-3.5" />
                         </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          title="Change contact list"
+                          onClick={() => {
+                            setChangeListFor({ id: s.id, name: s.name, current: s.contact_list_id });
+                            setNewListId(s.contact_list_id ?? "");
+                          }}
+                        >
+                          <ListTree className="h-3.5 w-3.5" />
+                        </Button>
                         <Button size="sm" variant="ghost" onClick={() => navigate(`/sequences/${s.id}`)}>
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
@@ -376,6 +417,37 @@ const Sequences = () => {
             <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
             <Button onClick={() => create.mutate()} disabled={create.isPending}>
               {create.isPending ? "Creating…" : "Create & edit"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!changeListFor} onOpenChange={(o) => !o && setChangeListFor(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Change contact list</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Swap the list for <strong>{changeListFor?.name}</strong>. Existing enrollments stay as they are — only new contacts from the new list will be enrolled on the next run.
+            </p>
+            <div>
+              <Label>New contact list</Label>
+              <Select value={newListId} onValueChange={setNewListId}>
+                <SelectTrigger><SelectValue placeholder="Pick a list" /></SelectTrigger>
+                <SelectContent>
+                  {lists.map((l) => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setChangeListFor(null)}>Cancel</Button>
+            <Button
+              onClick={() => changeListFor && newListId && changeList.mutate({ sequenceId: changeListFor.id, listId: newListId })}
+              disabled={changeList.isPending || !newListId || newListId === changeListFor?.current}
+            >
+              {changeList.isPending ? "Saving…" : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>

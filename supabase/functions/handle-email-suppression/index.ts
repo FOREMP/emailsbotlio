@@ -1,8 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { WebhookError, verifyWebhookRequest } from 'npm:@lovable.dev/webhooks-js'
 
-// Suppression event payload sent by the Go API when Mailgun reports
-// a bounce, complaint, or unsubscribe.
 interface SuppressionPayload {
   email: string
   reason: 'bounce' | 'complaint' | 'unsubscribe'
@@ -14,13 +12,9 @@ interface SuppressionPayload {
 
 function parseSuppressionPayload(body: string): SuppressionPayload {
   const parsed = JSON.parse(body)
-  if (!parsed.data) {
-    throw new Error('Missing data field in payload')
-  }
+  if (!parsed.data) throw new Error('Missing data field in payload')
   const data = parsed.data as SuppressionPayload
-  if (!data.email || !data.reason) {
-    throw new Error('Missing required fields: email, reason')
-  }
+  if (!data.email || !data.reason) throw new Error('Missing required fields: email, reason')
   return data
 }
 
@@ -32,9 +26,7 @@ function jsonResponse(data: Record<string, unknown>, status = 200): Response {
 }
 
 Deno.serve(async (req) => {
-  if (req.method !== 'POST') {
-    return jsonResponse({ error: 'Method not allowed' }, 405)
-  }
+  if (req.method !== 'POST') return jsonResponse({ error: 'Method not allowed' }, 405)
 
   const apiKey = Deno.env.get('LOVABLE_API_KEY')
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
@@ -45,35 +37,15 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: 'Server configuration error' }, 500)
   }
 
-  // Verify HMAC signature using the Lovable API Key (same as auth-email-hook)
   let payload: SuppressionPayload
   try {
-    const verified = await verifyWebhookRequest({
-      req,
-      secret: apiKey,
-      parser: parseSuppressionPayload,
-    })
+    const verified = await verifyWebhookRequest({ req, secret: apiKey, parser: parseSuppressionPayload })
     payload = verified.payload
   } catch (error) {
     if (error instanceof WebhookError) {
-      switch (error.code) {
-        case 'invalid_signature':
-          console.error('Invalid webhook signature')
-          return jsonResponse({ error: 'Invalid signature' }, 401)
-        case 'stale_timestamp':
-          console.error('Stale webhook timestamp')
-          return jsonResponse({ error: 'Stale timestamp' }, 401)
-        case 'invalid_payload':
-        case 'invalid_json':
-          console.error('Invalid payload', { code: error.code })
-          return jsonResponse({ error: 'Invalid payload' }, 400)
-        default:
-          console.error('Webhook verification failed', {
-            code: error.code,
-            message: error.message,
-          })
-          return jsonResponse({ error: 'Verification failed' }, 401)
-      }
+      const status = error.code === 'invalid_signature' || error.code === 'stale_timestamp' ? 401 : 400
+      console.error('Webhook verification failed', { code: error.code })
+      return jsonResponse({ error: error.code }, status)
     }
     console.error('Unexpected error during verification', { error })
     return jsonResponse({ error: 'Internal error' }, 500)
@@ -82,81 +54,82 @@ Deno.serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseServiceKey)
   const normalizedEmail = payload.email.toLowerCase()
 
-  // 1. Upsert to suppressed_emails (idempotent — safe for retries)
+  // 1. Upsert suppressed_emails
   const { error: suppressError } = await supabase
     .from('suppressed_emails')
-    .upsert(
-      {
-        email: normalizedEmail,
-        reason: payload.reason,
-        metadata: payload.metadata ?? null,
-      },
-      { onConflict: 'email' },
-    )
-
+    .upsert({ email: normalizedEmail, reason: payload.reason }, { onConflict: 'email' })
   if (suppressError) {
-    console.error('Failed to upsert suppressed email', {
-      error: suppressError,
-      email_redacted: normalizedEmail[0] + '***@' + normalizedEmail.split('@')[1],
-    })
+    console.error('Failed to upsert suppressed_emails', { error: suppressError })
     return jsonResponse({ error: 'Failed to write suppression' }, 500)
   }
 
-  // 2. Append a new log entry for the suppression event (never update existing rows)
-  const sendLogStatus = mapReasonToStatus(payload.reason)
-  const sendLogMessage = mapReasonToMessage(payload.reason)
+  // 2. Update sent_emails — mark the matching send as bounced/complained
+  const newStatus =
+    payload.reason === 'bounce' ? 'bounced'
+    : payload.reason === 'complaint' ? 'complained'
+    : 'unsubscribed'
+  const errorMessage =
+    payload.reason === 'bounce' ? 'Permanent bounce — receiving server rejected the email'
+    : payload.reason === 'complaint' ? 'Spam complaint — recipient marked as spam'
+    : 'Recipient unsubscribed'
 
-  const { error: insertError } = await supabase
-    .from('email_send_log')
-    .insert({
-      message_id: payload.message_id ?? null,
-      template_name: 'system',
-      recipient_email: normalizedEmail,
-      status: sendLogStatus,
-      error_message: sendLogMessage,
-      metadata: payload.metadata ?? null,
-    })
+  const updatePatch: Record<string, unknown> = { status: newStatus, error_message: errorMessage }
+  if (payload.reason === 'bounce') {
+    updatePatch.bounced_at = new Date().toISOString()
+    updatePatch.bounce_type = (payload.metadata as any)?.bounce_type ?? 'hard'
+  } else if (payload.reason === 'complaint') {
+    updatePatch.complained_at = new Date().toISOString()
+  }
 
-  if (insertError) {
-    // Non-fatal — log and continue. The suppression was already recorded.
-    console.warn('Failed to insert email_send_log', {
-      error: insertError,
-    })
+  let affectedUserIds: string[] = []
+  if (payload.message_id) {
+    const { data: rows } = await supabase
+      .from('sent_emails')
+      .update(updatePatch)
+      .eq('message_id', payload.message_id)
+      .select('user_id')
+    affectedUserIds = (rows ?? []).map((r: any) => r.user_id).filter(Boolean)
+  }
+  if (affectedUserIds.length === 0) {
+    // Fallback: latest send to that recipient
+    const { data: latest } = await supabase
+      .from('sent_emails')
+      .select('id, user_id')
+      .eq('recipient_email', normalizedEmail)
+      .order('sent_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (latest?.id) {
+      await supabase.from('sent_emails').update(updatePatch).eq('id', latest.id)
+      if (latest.user_id) affectedUserIds = [latest.user_id]
+    }
+  }
+
+  // 3. For unsubscribes, mirror into do_not_contact for every user that has emailed this address
+  if (payload.reason === 'unsubscribe' || payload.reason === 'complaint') {
+    const { data: allUsers } = await supabase
+      .from('sent_emails')
+      .select('user_id')
+      .eq('recipient_email', normalizedEmail)
+    const uniqueUserIds = Array.from(new Set([...(allUsers ?? []).map((r: any) => r.user_id), ...affectedUserIds].filter(Boolean)))
+    for (const uid of uniqueUserIds) {
+      const { data: existing } = await supabase
+        .from('do_not_contact')
+        .select('id')
+        .eq('user_id', uid)
+        .eq('email', normalizedEmail)
+        .maybeSingle()
+      if (!existing) {
+        await supabase.from('do_not_contact').insert({ user_id: uid, email: normalizedEmail, reason: payload.reason })
+      }
+    }
   }
 
   console.log('Suppression processed', {
-    email_redacted: normalizedEmail[0] + '***@' + normalizedEmail.split('@')[1],
     reason: payload.reason,
-    is_retry: payload.is_retry,
-    retry_count: payload.retry_count,
+    matched_users: affectedUserIds.length,
     has_message_id: !!payload.message_id,
   })
 
   return jsonResponse({ success: true })
 })
-
-function mapReasonToStatus(
-  reason: string,
-): 'bounced' | 'complained' | 'suppressed' {
-  switch (reason) {
-    case 'bounce':
-      return 'bounced'
-    case 'complaint':
-      return 'complained'
-    default:
-      return 'suppressed'
-  }
-}
-
-function mapReasonToMessage(reason: string): string {
-  switch (reason) {
-    case 'bounce':
-      return 'Permanent bounce — email address is invalid or rejected'
-    case 'complaint':
-      return 'Spam complaint — recipient marked email as spam'
-    case 'unsubscribe':
-      return 'Recipient unsubscribed'
-    default:
-      return 'Email suppressed'
-  }
-}
