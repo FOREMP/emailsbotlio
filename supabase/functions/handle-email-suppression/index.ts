@@ -113,10 +113,15 @@ Deno.serve(async (req) => {
       .eq('recipient_email', normalizedEmail)
     const uniqueUserIds = Array.from(new Set([...(allUsers ?? []).map((r: any) => r.user_id), ...affectedUserIds].filter(Boolean)))
     for (const uid of uniqueUserIds) {
-      await supabase
+      const { data: existing } = await supabase
         .from('do_not_contact')
-        .upsert({ user_id: uid, email: normalizedEmail, reason: payload.reason }, { onConflict: 'user_id,email' })
-        .then(() => {}, () => {})
+        .select('id')
+        .eq('user_id', uid)
+        .eq('email', normalizedEmail)
+        .maybeSingle()
+      if (!existing) {
+        await supabase.from('do_not_contact').insert({ user_id: uid, email: normalizedEmail, reason: payload.reason })
+      }
     }
   }
 
