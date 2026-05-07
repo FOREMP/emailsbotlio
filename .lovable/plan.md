@@ -1,103 +1,104 @@
-## What I found
+## Goal
 
-I checked the database, the cron job, the `run-sequences` edge function, and the actual sent emails for the "Sista text" sequence. Here's what really happened:
+1. Surface a **real** bounce rate in Analytics (separate from "we never sent it").
+2. Let you swap the contact list on an existing sequence without recreating it.
+3. Audit + confirm replies and unsubscribes are routed correctly to the right mailboxes outside the system.
 
-### The emails DID send last night — just at the wrong time
-
-All 3 contacts received both emails:
-
-| Contact | First email | Follow-up | Subject |
-|---|---|---|---|
-| kontakt@foremp.se | 22:18 Stockholm | 23:20 Stockholm | "Are you missing potential buyers visiting your website?" → follow-up: "Re: Lovable send test after unsubscribe fix" |
-| darkness34518@outlook.com | 22:18 Stockholm | 23:20 Stockholm | "Are you missing potential buyers..." → follow-up: "Re: Test av första mail" |
-| maxandersson782@gmail.com | 22:18 Stockholm | 23:20 Stockholm | "Are you missing potential car buyers..." → follow-up: "Re: Test av första mail" |
-
-So nothing was missing this morning at 05:00 — the sequence had already completed last night, and all enrollments are now `status: completed`.
-
-### Three real bugs
-
-**Bug 1 — Schedule node fires immediately if "now" is past the slot**
-
-The schedule node logic in `run-sequences/index.ts` (line 520) says:
-> "If today is allowed AND current Stockholm time ≥ configured slot → advance NOW."
-
-When we reset enrollments yesterday with `next_send_at = now()`, the cron picked them up at 22:18, the schedule saw "Mon allowed, 22:18 ≥ 05:00 → go" and fired immediately. That's why the first email went out at 22:18 instead of waiting for 05:00 the next morning.
-
-A schedule like "Mon–Fri 05:00" should mean **send at 05:00**, not "send any time after 05:00".
-
-**Bug 2 — Follow-up subject pulls the OLDEST sent email's subject (often a stale test)**
-
-The follow-up subject lookup (line 358–365) does:
-```
-.order('sent_at', { ascending: true }).limit(1)
-```
-That returns the **first ever** sent email for the enrollment — which for these enrollments is from old test runs back on April 22 ("Test av första mail"). That's why the follow-up subject was wrong, even though the AI generated a good new subject ("Are you missing potential buyers…") for the actual first email of this run.
-
-**Bug 3 — `current_node_id` after completion points at the wait/follow-up node**
-
-When the sequence completes, `current_node_id` is left on the last processed node. If we naively re-activate the enrollment, the next tick resumes mid-sequence and re-sends only the follow-up. We must explicitly point it back to the schedule node.
+Open tracking is explicitly out of scope for now (your call — correct one during warm-up).
 
 ---
 
-## Plan
+## 1. Real bounce tracking
 
-### 1. Fix the schedule node — only fire within a 30-minute window of the slot
+### What's there today
+- `send-cold-email` writes `sent_emails.status` = `queued` → `sent` or `failed` (where `failed` = Lovable's API rejected it before it left, e.g. `invalid_email`, `domain_not_verified`).
+- `handle-email-suppression` already exists as a webhook receiver from Lovable Emails for `bounce` / `complaint` / `unsubscribe`. **But** it only writes to `email_send_log` (a table that doesn't exist in this project) and `suppressed_emails`. It never marks the matching `sent_emails` row as `bounced` / `complained`.
+- That's why `bounced = 0` everywhere. The data isn't being captured into the table Analytics reads from.
 
-In `supabase/functions/run-sequences/index.ts` (around line 520), change the condition:
+### Changes
+- **DB migration**: add columns to `sent_emails`:
+  - `bounced_at timestamptz`, `bounce_type text` (`hard` / `soft` / `complaint`)
+  - `complained_at timestamptz`
+  - allow new statuses: `bounced`, `complained` (plus existing `queued`, `sent`, `failed`).
+  - Add an index on `message_id` (used by webhook lookup).
+- **Rewrite `handle-email-suppression`** so when it receives a Lovable Emails event, it:
+  1. Upserts into `suppressed_emails` (already does).
+  2. Updates the matching `sent_emails` row by `message_id`: sets `status = 'bounced' | 'complained'`, stamps the timestamp, fills `error_message` with the provider reason.
+  3. Falls back to matching by `recipient_email` (latest row) when `message_id` isn't present.
+- **Confirm webhook is wired**: I'll check `email_domain--check_email_domain_status` and the Lovable Emails dashboard config so the webhook URL actually points at this function. If not, surface that as the blocker before deploying.
+- **Analytics fix** (`useAnalytics.ts` + `KpiCards.tsx`):
+  - Split the KPIs into:
+    - **Sent** = `status in ('sent','bounced','complained')` (i.e. actually left the building)
+    - **Failed (not sent)** = `status = 'failed'` — new card, replaces today's misleading "bounced = failed" lump
+    - **Bounced** = `status = 'bounced'` only — true bounce rate over Sent
+    - **Complaints** = `status = 'complained'` (small card / under bounce)
+  - `bounceRate = bounced / sent` (not `/sent+failed`)
+  - Same change in `VolumeTrendChart` + `SenderTable` so the per-sender breakdown matches.
 
-- **From:** `if (dayAllowedToday && nowStockholmMins >= slotMins)` → advance now
-- **To:** `if (dayAllowedToday && nowStockholmMins >= slotMins && nowStockholmMins < slotMins + 30)` → advance now; otherwise fall through to "wait until next valid slot"
-
-Effect: a "Mon–Fri 18:00" schedule will only ever fire between 18:00 and 18:30 Stockholm time. If reset at any other time, it correctly defers to the next 18:00.
-
-### 2. Fix follow-up subject lookup
-
-Change the prior-subject query (line 358–365) to:
-- Filter out subjects starting with `Re:` (so we don't pick a previous follow-up)
-- Order by `sent_at DESC` and take the most recent
-- Only consider sends with `sent_at >= enrollment.created_at` (or `updated_at` after the last reset) so old test runs are ignored
-
-This guarantees the follow-up uses the subject of the actual first email it just sent.
-
-### 3. Reset the 3 enrollments for tonight 18:00 Stockholm
-
-Migration:
-- Set the schedule node `time_of_day` to `18:00` (keep Mon–Fri).
-- Re-activate the 3 enrollments, point `current_node_id` back to the **schedule node**, clear `last_sent_at`, `attempt_count`, errors, and set `next_send_at = now()`.
-
-With fix #1 in place, the schedule node will see "now is past 18:00 today? if not, wait for today 18:00; if yes, wait for tomorrow 18:00." Since today is Tuesday and we'll reset before 18:00, they'll fire tonight at 18:00 with the follow-up exactly 1 hour later at 19:00.
-
-```sql
-UPDATE public.sequence_nodes
-SET config = jsonb_set(config, '{time_of_day}', '"18:00"')
-WHERE id = 'ba6d8a4d-ed42-42ed-aa7a-7d2a0696b998';
-
-UPDATE public.enrollments
-SET status = 'active',
-    current_node_id = 'ba6d8a4d-ed42-42ed-aa7a-7d2a0696b998', -- schedule node
-    next_send_at = now(),
-    last_sent_at = NULL,
-    attempt_count = 0,
-    last_error = NULL,
-    error_at = NULL,
-    deferred_at = NULL
-WHERE sequence_id = '16296d69-40a7-49b6-bfea-eebc9b18e18c'
-  AND id IN (
-    '8361e7ca-6085-490f-8388-c35e1de342d9',
-    'b6e18ede-4baa-4e01-a545-38292ea51df9',
-    'a4c61bec-2e99-48ac-ab66-19f67d6c901f'
-  );
-```
-
-### 4. Deploy and verify
-
-Redeploy `run-sequences`. Within 1 minute the schedule node will defer the 3 enrollments to **tonight 18:00 Stockholm**. First emails fire at 18:00, follow-ups at 19:00, each with a correct AI-generated subject and matching `Re: <same subject>` follow-up.
+### What you'll see after
+- A **Failed** card showing the 17/13/etc. addresses Lovable refused (today's "bounced").
+- A **Bounced** card that's accurate (currently 0, will populate as real bounces come in from receiving MTAs).
+- A **Complaints** card for spam-marks.
 
 ---
 
-## Files changed
+## 2. Change the contact list on an existing sequence
 
-- `supabase/functions/run-sequences/index.ts` — schedule grace window + follow-up subject lookup
-- New SQL migration — schedule slot to 18:00 + reset the 3 enrollments to the schedule node
+### What's there today
+- `Sequences.tsx`: list is only set on creation; there's a Pencil button that just renames.
+- `SequenceCanvas.tsx`: the Trigger node has a `contact_list_id` config — editing it there already updates the sequence, but it's not obvious and there's no re-enrollment.
 
-After approval, I'll apply both changes and redeploy.
+### Changes
+- In `Sequences.tsx` row actions, add **"Change list"** action → dialog with the same list dropdown used at creation.
+- On save:
+  - Update `sequences.contact_list_id` AND the Trigger node's `config.contact_list_id` so both stay in sync.
+  - Show a confirm step: "This will not unenroll contacts already in the sequence. New contacts from the new list will be enrolled on the next tick. Continue?"
+  - Do NOT auto-delete existing enrollments (safer default). Offer a separate "Pause and clear pending enrollments" toggle inside the dialog for when you want a clean swap.
+- Re-uses the existing `enroll-contacts` edge function for the new list — no backend change needed.
+
+---
+
+## 3. Audit replies + unsubscribe routing
+
+This is verification work, not a code change unless I find a problem. I'll:
+
+1. **Confirm reply addresses** are what you expect:
+   - foremp.eu, foremp.one, foremp.email → `eric@foremp.se`
+   - botlio.email, botlio.eu, botlio.io → `eric@botlio.io`
+   - Send-cold-email uses `domainRow.reply_to_email` and passes it as `reply_to` to Lovable Emails — verified in code. So replies will go to those mailboxes.
+2. **Open question for you**: do `eric@foremp.se` and `eric@botlio.io` actually exist as real receiving mailboxes you check? I can't test that from here. I'll send a probe email to each and ask you to confirm receipt + reply, and we'll trace the round trip.
+3. **Unsubscribe routing**:
+   - Lovable Emails injects the visible unsubscribe link (we pass `unsubscribe_token`).
+   - When clicked, Lovable POSTs to `handle-email-suppression` with `reason: 'unsubscribe'` → adds to `suppressed_emails`. We'll confirm the 2 foremp unsubscribes are present in that table (they should be).
+   - Gap: we don't currently mirror them into `do_not_contact` for the user, so the per-user "unsubscribed" count in Analytics may be off. Fix: in `handle-email-suppression`, also insert into `do_not_contact` for every `user_id` who's ever emailed that address (looked up from `sent_emails`). Small additional change.
+4. **Reply tracking**: `sent_emails.replied_at` is currently never written. Replies go straight to your real mailbox — that's fine — but the dashboard will always show 0 replies. Two options:
+   - **(a)** Leave it (you read replies in Gmail/whatever, dashboard is just for sends). Recommended for now.
+   - **(b)** Wire a Lovable Emails inbound webhook to stamp `replied_at`. Bigger change, can do later.
+   I'll default to **(a)** and add a small footnote on the Replied KPI: "tracked via reply webhook — not enabled" so it's not mistaken for "no replies".
+
+---
+
+## Technical changes summary
+
+**DB migration**
+- `sent_emails`: add `bounced_at`, `complained_at`, `bounce_type`; allow new status values.
+- Index `sent_emails(message_id)`.
+
+**Edge functions**
+- `handle-email-suppression`: rewrite to update `sent_emails` by `message_id`/email, drop the broken `email_send_log` insert, also insert into `do_not_contact` per affected user.
+
+**Frontend**
+- `useAnalytics.ts`: split bounced vs failed; add complained.
+- `KpiCards.tsx`: 7 cards (Sent, Delivered, Failed, Bounced, Complaints, Replied, Unsubscribed) — Replied marked as "tracking off".
+- `Sequences.tsx`: "Change list" action + dialog.
+
+**Verification (no code, just findings reported back to you)**
+- Confirm Lovable Emails webhook URL points at `handle-email-suppression`.
+- Confirm `eric@foremp.se` and `eric@botlio.io` receive a probe email + that replies show up there.
+- Confirm 2 existing foremp unsubscribes are in `suppressed_emails`.
+
+---
+
+## What I need from you to start
+- Approve the plan.
+- Confirm: do you want me to send the two test/probe emails (one to each reply mailbox) as part of the audit? (Y/N — default Y.)
