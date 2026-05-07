@@ -342,6 +342,17 @@ const Sequences = () => {
                         >
                           <UserPlus className="h-3.5 w-3.5" />
                         </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          title="Change contact list"
+                          onClick={() => {
+                            setChangeListFor({ id: s.id, name: s.name, current: s.contact_list_id });
+                            setNewListId(s.contact_list_id ?? "");
+                          }}
+                        >
+                          <ListTree className="h-3.5 w-3.5" />
+                        </Button>
                         <Button size="sm" variant="ghost" onClick={() => navigate(`/sequences/${s.id}`)}>
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
