@@ -21,7 +21,7 @@ export const SenderTable = ({ senders, rows }: Props) => {
   const stats = senders.map((s) => {
     const senderRows = rows.filter((r) => r.sender_id === s.id);
     const sent = senderRows.length;
-    const bounced = senderRows.filter((r) => r.status === "bounced" || r.status === "failed").length;
+    const bounced = senderRows.filter((r) => r.status === "bounced").length;
     const delivered = sent - bounced;
     const opened = senderRows.filter((r) => r.opened_at).length;
     const replied = senderRows.filter((r) => r.replied_at).length;
