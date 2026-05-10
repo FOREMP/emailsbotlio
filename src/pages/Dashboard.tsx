@@ -8,14 +8,16 @@ const Dashboard = () => {
 
   const counts = useQuery({
     queryKey: ["dashboard-counts"],
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
     queryFn: async () => {
       const [contacts, lists, senders, sequences, sent, files] = await Promise.all([
-        supabase.from("contacts").select("*", { count: "exact", head: true }),
-        supabase.from("contact_lists").select("*", { count: "exact", head: true }),
-        supabase.from("senders").select("*", { count: "exact", head: true }),
-        supabase.from("sequences").select("*", { count: "exact", head: true }),
-        supabase.from("sent_emails").select("*", { count: "exact", head: true }),
-        supabase.from("imported_files").select("*", { count: "exact", head: true }),
+        supabase.from("contacts").select("*", { count: "estimated", head: true }),
+        supabase.from("contact_lists").select("*", { count: "estimated", head: true }),
+        supabase.from("senders").select("*", { count: "estimated", head: true }),
+        supabase.from("sequences").select("*", { count: "estimated", head: true }),
+        supabase.from("sent_emails").select("*", { count: "estimated", head: true }),
+        supabase.from("imported_files").select("*", { count: "estimated", head: true }),
       ]);
       return {
         contacts: contacts.count ?? 0,
@@ -30,6 +32,8 @@ const Dashboard = () => {
 
   const { data: recentFiles = [] } = useQuery({
     queryKey: ["dashboard-recent-files"],
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
     queryFn: async () => {
       const { data } = await supabase
         .from("imported_files")
@@ -42,6 +46,8 @@ const Dashboard = () => {
 
   const { data: recentSends = [] } = useQuery({
     queryKey: ["dashboard-recent-sends"],
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
     queryFn: async () => {
       const { data } = await supabase
         .from("sent_emails")
