@@ -37,11 +37,26 @@ const Auth = () => {
     setInfo(null);
   };
 
-  const friendlyError = (msg: string) => {
+  const friendlyError = (err: any): string => {
+    let msg = "";
+    if (typeof err === "string") msg = err;
+    else if (err?.message && typeof err.message === "string") msg = err.message;
+    else if (err?.error_description) msg = String(err.error_description);
+    else if (err?.name) msg = String(err.name);
+
+    msg = (msg || "").trim();
     const m = msg.toLowerCase();
-    if (m.includes("invalid login")) return "Wrong email or password. Try again or reset your password.";
+
+    if (!msg || msg === "{}" || m.includes("failed to fetch") || m.includes("networkerror") || m.includes("load failed")) {
+      return "Couldn't reach the server. Check your connection and try again. (If this is the Lovable preview, try the published site.)";
+    }
+    if (m.includes("504") || m.includes("timeout") || m.includes("timed out") || m.includes("gateway")) {
+      return "The server took too long to respond. Please try again in a moment.";
+    }
+    if (m.includes("invalid login") || m.includes("invalid_credentials")) return "Wrong email or password. Try again or reset your password.";
     if (m.includes("email not confirmed")) return "Please confirm your email before signing in. Check your inbox.";
-    if (m.includes("rate")) return "Too many attempts. Please wait a moment and try again.";
+    if (m.includes("rate") || m.includes("too many")) return "Too many attempts. Please wait a moment and try again.";
+    if (m.includes("user not found") || m.includes("not found")) return "No account found for that email.";
     return msg;
   };
 
