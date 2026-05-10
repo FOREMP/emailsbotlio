@@ -1,104 +1,78 @@
-## Goal
+# Reduce Supabase Disk IO Usage
 
-1. Surface a **real** bounce rate in Analytics (separate from "we never sent it").
-2. Let you swap the contact list on an existing sequence without recreating it.
-3. Audit + confirm replies and unsubscribes are routed correctly to the right mailboxes outside the system.
+## Why this is happening
 
-Open tracking is explicitly out of scope for now (your call — correct one during warm-up).
+You're on the **Nano** compute tier (43 Mbps baseline). Once your Daily Disk IO Budget burns out, the database throttles to baseline — that's why login times out, queries hang, and even the dashboard's own SQL editor returns "connection timeout". This is **not** a code bug in auth; auth simply can't talk to a saturated DB.
 
----
+Two things are silently chewing through IO 24/7, even when you're not sending email:
 
-## 1. Real bounce tracking
+### 1. `run-sequences` cron runs **every single minute, forever**
+Every minute, the cron job `run-sequences-every-minute` invokes the `run-sequences` edge function. That function:
+- Always queries `sending_domains`
+- Always queries `enrollments` (twice — pass A and pass B)
+- For each due enrollment runs 6–10 more queries (`sequence_nodes`, `sequence_edges`, `contacts`, `do_not_contact`, `suppressed_emails`, `senders`, `sent_emails`, plus repeated `enrollments` updates)
 
-### What's there today
-- `send-cold-email` writes `sent_emails.status` = `queued` → `sent` or `failed` (where `failed` = Lovable's API rejected it before it left, e.g. `invalid_email`, `domain_not_verified`).
-- `handle-email-suppression` already exists as a webhook receiver from Lovable Emails for `bounce` / `complaint` / `unsubscribe`. **But** it only writes to `email_send_log` (a table that doesn't exist in this project) and `suppressed_emails`. It never marks the matching `sent_emails` row as `bounced` / `complained`.
-- That's why `bounced = 0` everywhere. The data isn't being captured into the table Analytics reads from.
+That's **1,440 ticks/day × multiple table scans = the bulk of your IO**, even when zero emails are being sent.
 
-### Changes
-- **DB migration**: add columns to `sent_emails`:
-  - `bounced_at timestamptz`, `bounce_type text` (`hard` / `soft` / `complaint`)
-  - `complained_at timestamptz`
-  - allow new statuses: `bounced`, `complained` (plus existing `queued`, `sent`, `failed`).
-  - Add an index on `message_id` (used by webhook lookup).
-- **Rewrite `handle-email-suppression`** so when it receives a Lovable Emails event, it:
-  1. Upserts into `suppressed_emails` (already does).
-  2. Updates the matching `sent_emails` row by `message_id`: sets `status = 'bounced' | 'complained'`, stamps the timestamp, fills `error_message` with the provider reason.
-  3. Falls back to matching by `recipient_email` (latest row) when `message_id` isn't present.
-- **Confirm webhook is wired**: I'll check `email_domain--check_email_domain_status` and the Lovable Emails dashboard config so the webhook URL actually points at this function. If not, surface that as the blocker before deploying.
-- **Analytics fix** (`useAnalytics.ts` + `KpiCards.tsx`):
-  - Split the KPIs into:
-    - **Sent** = `status in ('sent','bounced','complained')` (i.e. actually left the building)
-    - **Failed (not sent)** = `status = 'failed'` — new card, replaces today's misleading "bounced = failed" lump
-    - **Bounced** = `status = 'bounced'` only — true bounce rate over Sent
-    - **Complaints** = `status = 'complained'` (small card / under bounce)
-  - `bounceRate = bounced / sent` (not `/sent+failed`)
-  - Same change in `VolumeTrendChart` + `SenderTable` so the per-sender breakdown matches.
+### 2. Dashboard / Analytics issue many `count: 'exact'` queries
+`Dashboard.tsx` fires 6 parallel `count: 'exact'` queries on every visit (contacts, contact_lists, senders, sequences, sent_emails, imported_files). On Postgres, `count(*) exact` is a full table scan — very IO-heavy as tables grow. `useAnalytics.ts` does similar broad selects.
 
-### What you'll see after
-- A **Failed** card showing the 17/13/etc. addresses Lovable refused (today's "bounced").
-- A **Bounced** card that's accurate (currently 0, will populate as real bounces come in from receiving MTAs).
-- A **Complaints** card for spam-marks.
+### 3. Other contributors (smaller but real)
+- `email_send_log` is append-only and grows forever — scans get slower over time
+- `auth_logs` / `postgres_logs` / `function_edge_logs` retention
+- Possible missing indexes on `enrollments(status, next_send_at, last_sent_at)` and `sent_emails(sender_id, created_at)`
 
 ---
 
-## 2. Change the contact list on an existing sequence
+## Plan to fix it
 
-### What's there today
-- `Sequences.tsx`: list is only set on creation; there's a Pencil button that just renames.
-- `SequenceCanvas.tsx`: the Trigger node has a `contact_list_id` config — editing it there already updates the sequence, but it's not obvious and there's no re-enrollment.
+### Step 1 — Slow down `run-sequences` dramatically (biggest win)
+Change the cron from `* * * * *` (every minute) to `*/10 * * * *` (every 10 min). Email cadence is measured in hours/days, so this changes nothing user-visible but cuts that workload by **10×**.
+Also add an early-exit: if `enrollments` has no due rows, skip all downstream queries.
 
-### Changes
-- In `Sequences.tsx` row actions, add **"Change list"** action → dialog with the same list dropdown used at creation.
-- On save:
-  - Update `sequences.contact_list_id` AND the Trigger node's `config.contact_list_id` so both stay in sync.
-  - Show a confirm step: "This will not unenroll contacts already in the sequence. New contacts from the new list will be enrolled on the next tick. Continue?"
-  - Do NOT auto-delete existing enrollments (safer default). Offer a separate "Pause and clear pending enrollments" toggle inside the dialog for when you want a clean swap.
-- Re-uses the existing `enroll-contacts` edge function for the new list — no backend change needed.
+### Step 2 — Replace `count: 'exact'` with cheap estimates
+- Dashboard counts → use `count: 'estimated'` (reads `pg_class.reltuples`, no scan), or cache in a tiny `dashboard_stats` table refreshed hourly.
+- `useAnalytics` → same treatment, plus add a 60s React Query cache so revisits don't refetch.
 
----
+### Step 3 — Add indexes on the hot paths
+```text
+enrollments (status, next_send_at)
+enrollments (status, last_sent_at)
+sent_emails (sender_id, created_at)
+sent_emails (created_at)         -- for analytics windows
+contact_activity (enrollment_id, created_at)
+```
+Indexes turn full table scans into index seeks — huge IO reduction.
 
-## 3. Audit replies + unsubscribe routing
+### Step 4 — Trim log/append-only growth
+- Add a weekly cron that deletes `email_send_log` rows older than 30 days (you only need recent history for debugging).
+- Same for `contact_activity` older than 90 days if you don't need it long-term.
 
-This is verification work, not a code change unless I find a problem. I'll:
+### Step 5 — Kill the redundant daily keep-alive cron
+`keep-alive-daily` exists to stop a free-tier project pausing. You're way past that — the project is active 24/7 from real traffic. Remove it; one less moving part.
 
-1. **Confirm reply addresses** are what you expect:
-   - foremp.eu, foremp.one, foremp.email → `eric@foremp.se`
-   - botlio.email, botlio.eu, botlio.io → `eric@botlio.io`
-   - Send-cold-email uses `domainRow.reply_to_email` and passes it as `reply_to` to Lovable Emails — verified in code. So replies will go to those mailboxes.
-2. **Open question for you**: do `eric@foremp.se` and `eric@botlio.io` actually exist as real receiving mailboxes you check? I can't test that from here. I'll send a probe email to each and ask you to confirm receipt + reply, and we'll trace the round trip.
-3. **Unsubscribe routing**:
-   - Lovable Emails injects the visible unsubscribe link (we pass `unsubscribe_token`).
-   - When clicked, Lovable POSTs to `handle-email-suppression` with `reason: 'unsubscribe'` → adds to `suppressed_emails`. We'll confirm the 2 foremp unsubscribes are present in that table (they should be).
-   - Gap: we don't currently mirror them into `do_not_contact` for the user, so the per-user "unsubscribed" count in Analytics may be off. Fix: in `handle-email-suppression`, also insert into `do_not_contact` for every `user_id` who's ever emailed that address (looked up from `sent_emails`). Small additional change.
-4. **Reply tracking**: `sent_emails.replied_at` is currently never written. Replies go straight to your real mailbox — that's fine — but the dashboard will always show 0 replies. Two options:
-   - **(a)** Leave it (you read replies in Gmail/whatever, dashboard is just for sends). Recommended for now.
-   - **(b)** Wire a Lovable Emails inbound webhook to stamp `replied_at`. Bigger change, can do later.
-   I'll default to **(a)** and add a small footnote on the Replied KPI: "tracked via reply webhook — not enabled" so it's not mistaken for "no replies".
+### Step 6 — Verify and (optionally) bump compute later
+After steps 1–4, watch the "Disk IO consumed per day" chart for 24h. If it drops below ~50%, you're safe to stay on Nano. If it's still pegged, the next step is upgrading to **Micro** (the cheapest tier with much higher baseline IO) — but I expect steps 1–4 alone will fix it.
 
 ---
 
-## Technical changes summary
+## Technical details (for the next build step)
 
-**DB migration**
-- `sent_emails`: add `bounced_at`, `complained_at`, `bounce_type`; allow new status values.
-- Index `sent_emails(message_id)`.
+Files I'll change:
+- `supabase/migrations/<new>.sql`
+  - `cron.unschedule('run-sequences-every-minute')` then re-schedule at `*/10 * * * *`
+  - `cron.unschedule('keep-alive-daily')`
+  - `CREATE INDEX IF NOT EXISTS` statements listed above
+  - New cron: nightly `DELETE FROM email_send_log WHERE created_at < now() - interval '30 days'`
+- `supabase/functions/run-sequences/index.ts`
+  - Early-return if pass A + pass B return zero rows (skip domain query too by reordering)
+- `src/pages/Dashboard.tsx`
+  - Switch the 6 `count: 'exact'` to `count: 'estimated'`
+  - Wrap in React Query with `staleTime: 60_000`
+- `src/hooks/useAnalytics.ts`
+  - Add `staleTime` and replace any `count: 'exact'` with `'estimated'`
 
-**Edge functions**
-- `handle-email-suppression`: rewrite to update `sent_emails` by `message_id`/email, drop the broken `email_send_log` insert, also insert into `do_not_contact` per affected user.
+No schema-breaking changes, no impact on email sending behavior beyond a max ~10-minute delay before a sequence step fires.
 
-**Frontend**
-- `useAnalytics.ts`: split bounced vs failed; add complained.
-- `KpiCards.tsx`: 7 cards (Sent, Delivered, Failed, Bounced, Complaints, Replied, Unsubscribed) — Replied marked as "tracking off".
-- `Sequences.tsx`: "Change list" action + dialog.
-
-**Verification (no code, just findings reported back to you)**
-- Confirm Lovable Emails webhook URL points at `handle-email-suppression`.
-- Confirm `eric@foremp.se` and `eric@botlio.io` receive a probe email + that replies show up there.
-- Confirm 2 existing foremp unsubscribes are in `suppressed_emails`.
-
----
-
-## What I need from you to start
-- Approve the plan.
-- Confirm: do you want me to send the two test/probe emails (one to each reply mailbox) as part of the audit? (Y/N — default Y.)
+## Expected outcome
+Disk IO drops well under your daily budget → DB stops throttling → login works instantly → dashboards load fast.
