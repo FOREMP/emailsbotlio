@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Send, ArrowLeft, Mail } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { useAuth } from "@/contexts/AuthContext";
+import { clearStoredAuthSession, useAuth } from "@/contexts/AuthContext";
 import { useEffect } from "react";
 
 const Auth = () => {
@@ -88,6 +88,7 @@ const Auth = () => {
         if (error) throw error;
         setConfirmationSent(true);
       } else {
+        clearStoredAuthSession();
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
         navigate("/dashboard");
