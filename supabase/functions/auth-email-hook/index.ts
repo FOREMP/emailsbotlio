@@ -36,17 +36,17 @@ const EMAIL_TEMPLATES: Record<string, React.ComponentType<any>> = {
 }
 
 // Configuration
-const SITE_NAME = "Email AI"
-const SENDER_DOMAIN = "notify.foremp.one"
-const ROOT_DOMAIN = "foremp.one"
-const FROM_DOMAIN = "notify.foremp.one" // Domain shown in From address (may be root or sender subdomain)
+const SITE_NAME = "emailsbotlio"
+const SENDER_DOMAIN = "notify.foremp.email"
+const ROOT_DOMAIN = "foremp.email"
+const FROM_DOMAIN = "notify.foremp.email" // Domain shown in From address (may be root or sender subdomain)
 
 // Sample data for preview mode ONLY (not used in actual email sending).
 // URLs are baked in at scaffold time from the project's real data.
 // The sample email uses a fixed placeholder (RFC 6761 .test TLD) so the Go backend
 // can always find-and-replace it with the actual recipient when sending test emails,
 // even if the project's domain has changed since the template was scaffolded.
-const SAMPLE_PROJECT_URL = "https://d6bf7a7f-b789-4c79-a79c-982fa80de230.lovableproject.com"
+const SAMPLE_PROJECT_URL = "https://emailsbotlio.lovable.app"
 const SAMPLE_EMAIL = "user@example.test"
 const SAMPLE_DATA: Record<string, object> = {
   signup: {
@@ -70,6 +70,7 @@ const SAMPLE_DATA: Record<string, object> = {
   },
   email_change: {
     siteName: SITE_NAME,
+    oldEmail: SAMPLE_EMAIL,
     email: SAMPLE_EMAIL,
     newEmail: SAMPLE_EMAIL,
     confirmationUrl: SAMPLE_PROJECT_URL,
@@ -225,6 +226,7 @@ async function handleWebhook(req: Request): Promise<Response> {
     confirmationUrl: payload.data.url,
     token: payload.data.token,
     email: payload.data.email,
+    oldEmail: payload.data.old_email,
     newEmail: payload.data.new_email,
   }
 
