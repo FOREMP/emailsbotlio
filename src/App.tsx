@@ -17,6 +17,7 @@ import Sequences from "./pages/Sequences.tsx";
 import SequenceCanvas from "./pages/SequenceCanvas.tsx";
 import Analytics from "./pages/Analytics.tsx";
 import Auth from "./pages/Auth.tsx";
+import ResetPassword from "./pages/ResetPassword.tsx";
 import Unsubscribe from "./pages/Unsubscribe.tsx";
 import NotFound from "./pages/NotFound.tsx";
 
@@ -39,6 +40,7 @@ const App = () => (
             <Route path="/" element={<Index />} />
             <Route path="/pricing" element={<Pricing />} />
             <Route path="/auth" element={<Auth />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/dashboard" element={protect(<Dashboard />)} />
             <Route path="/senders" element={protect(<Senders />)} />
             <Route path="/contacts" element={protect(<Contacts />)} />

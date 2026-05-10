@@ -9,12 +9,14 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useEffect } from "react";
 
 const Auth = () => {
-  const [isSignUp, setIsSignUp] = useState(false);
+  const [mode, setMode] = useState<"signin" | "signup" | "forgot">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [accessCode, setAccessCode] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
 
   const SIGNUP_ACCESS_CODE = "FOREMPemail";
   const [confirmationSent, setConfirmationSent] = useState(false);
@@ -26,12 +28,37 @@ const Auth = () => {
     if (user) navigate("/dashboard", { replace: true });
   }, [user, navigate]);
 
+  const isSignUp = mode === "signup";
+  const isForgot = mode === "forgot";
+
+  const switchMode = (next: "signin" | "signup" | "forgot") => {
+    setMode(next);
+    setError(null);
+    setInfo(null);
+  };
+
+  const friendlyError = (msg: string) => {
+    const m = msg.toLowerCase();
+    if (m.includes("invalid login")) return "Wrong email or password. Try again or reset your password.";
+    if (m.includes("email not confirmed")) return "Please confirm your email before signing in. Check your inbox.";
+    if (m.includes("rate")) return "Too many attempts. Please wait a moment and try again.";
+    return msg;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
+    setInfo(null);
     setLoading(true);
 
     try {
-      if (isSignUp) {
+      if (isForgot) {
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: `${window.location.origin}/reset-password`,
+        });
+        if (error) throw error;
+        setInfo(`If an account exists for ${email}, a reset link is on its way.`);
+      } else if (isSignUp) {
         if (accessCode !== SIGNUP_ACCESS_CODE) {
           throw new Error("Invalid access code. Sign-up is restricted.");
         }
@@ -46,19 +73,14 @@ const Auth = () => {
         if (error) throw error;
         setConfirmationSent(true);
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
         navigate("/dashboard");
       }
-    } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.message,
-        variant: "destructive",
-      });
+    } catch (err: any) {
+      const msg = friendlyError(err?.message ?? "Something went wrong.");
+      setError(msg);
+      toast({ title: "Error", description: msg, variant: "destructive" });
     } finally {
       setLoading(false);
     }
@@ -79,7 +101,7 @@ const Auth = () => {
               We sent a confirmation link to <strong className="text-foreground">{email}</strong>. Click it to activate your account.
             </p>
           </div>
-          <Button variant="ghost" onClick={() => { setConfirmationSent(false); setIsSignUp(false); }} className="text-sm">
+          <Button variant="ghost" onClick={() => { setConfirmationSent(false); switchMode("signin"); }} className="text-sm">
             Back to sign in
           </Button>
         </div>
@@ -87,10 +109,16 @@ const Auth = () => {
     );
   }
 
+  const title = isForgot ? "Reset your password" : isSignUp ? "Create your account" : "Welcome back";
+  const subtitle = isForgot
+    ? "We'll email you a link to set a new password."
+    : isSignUp
+    ? "Start sending smart campaigns"
+    : "Sign in to your MailxSend account";
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm space-y-8">
-        {/* Logo */}
         <div className="text-center">
           <button onClick={() => navigate("/")} className="inline-flex items-center gap-2 text-muted-foreground hover:text-foreground text-sm mb-8 transition-colors">
             <ArrowLeft className="h-4 w-4" /> Back to home
@@ -99,77 +127,72 @@ const Auth = () => {
             <Send className="h-6 w-6 text-primary-foreground" />
           </div>
           <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
-            {isSignUp ? "Create your account" : "Welcome back"}
+            {title}
           </h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            {isSignUp ? "Start sending smart campaigns" : "Sign in to your MailxSend account"}
-          </p>
+          <p className="text-muted-foreground text-sm mt-1">{subtitle}</p>
         </div>
 
-        {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
           {isSignUp && (
             <div>
               <label className="text-sm font-medium mb-1.5 block">Full name</label>
-              <Input
-                placeholder="Your name"
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                required
-              />
+              <Input placeholder="Your name" value={fullName} onChange={(e) => setFullName(e.target.value)} required />
             </div>
           )}
           <div>
             <label className="text-sm font-medium mb-1.5 block">Email</label>
-            <Input
-              type="email"
-              placeholder="you@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
+            <Input type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
           </div>
-          <div>
-            <label className="text-sm font-medium mb-1.5 block">Password</label>
-            <Input
-              type="password"
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={6}
-            />
-          </div>
+          {!isForgot && (
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-sm font-medium">Password</label>
+                {!isSignUp && (
+                  <button type="button" onClick={() => switchMode("forgot")} className="text-xs text-primary hover:underline">
+                    Forgot password?
+                  </button>
+                )}
+              </div>
+              <Input type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} />
+            </div>
+          )}
           {isSignUp && (
             <div>
               <label className="text-sm font-medium mb-1.5 block">Access code</label>
-              <Input
-                type="password"
-                placeholder="Required to create an account"
-                value={accessCode}
-                onChange={(e) => setAccessCode(e.target.value)}
-                required
-              />
+              <Input type="password" placeholder="Required to create an account" value={accessCode} onChange={(e) => setAccessCode(e.target.value)} required />
               <p className="text-xs text-muted-foreground mt-1">Sign-up is restricted. Ask the team for the access code.</p>
             </div>
           )}
-          <Button
-            type="submit"
-            disabled={loading}
-            className="w-full gradient-primary border-0 text-primary-foreground hover:opacity-90"
-          >
-            {loading ? "Please wait…" : isSignUp ? "Create account" : "Sign in"}
+
+          {error && (
+            <div className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-3 py-2">
+              {error}
+            </div>
+          )}
+          {info && (
+            <div className="text-sm text-foreground bg-primary/10 border border-primary/30 rounded-md px-3 py-2">
+              {info}
+            </div>
+          )}
+
+          <Button type="submit" disabled={loading} className="w-full gradient-primary border-0 text-primary-foreground hover:opacity-90">
+            {loading ? "Please wait…" : isForgot ? "Send reset link" : isSignUp ? "Create account" : "Sign in"}
           </Button>
         </form>
 
-        <div className="text-center text-sm text-muted-foreground">
-          {isSignUp ? "Already have an account?" : "Don't have an account?"}{" "}
-          <button
-            onClick={() => setIsSignUp(!isSignUp)}
-            className="text-primary font-medium hover:underline"
-          >
-            {isSignUp ? "Sign in" : "Sign up"}
-          </button>
+        <div className="text-center text-sm text-muted-foreground space-y-2">
+          {isForgot ? (
+            <button onClick={() => switchMode("signin")} className="text-primary font-medium hover:underline">
+              Back to sign in
+            </button>
+          ) : (
+            <div>
+              {isSignUp ? "Already have an account?" : "Don't have an account?"}{" "}
+              <button onClick={() => switchMode(isSignUp ? "signin" : "signup")} className="text-primary font-medium hover:underline">
+                {isSignUp ? "Sign in" : "Sign up"}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
