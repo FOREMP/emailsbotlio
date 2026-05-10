@@ -93,7 +93,7 @@ const Auth = () => {
         navigate("/dashboard");
       }
     } catch (err: any) {
-      const msg = friendlyError(err?.message ?? "Something went wrong.");
+      const msg = friendlyError(err);
       setError(msg);
       toast({ title: "Error", description: msg, variant: "destructive" });
     } finally {
