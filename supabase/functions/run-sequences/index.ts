@@ -58,6 +58,19 @@ Deno.serve(async (req) => {
 
   const nowIso = new Date().toISOString()
 
+  // Cheap pre-check: are there ANY due enrollments? If not, skip everything.
+  const dueProbe = await supabase
+    .from('enrollments')
+    .select('id', { head: true, count: 'exact' })
+    .in('status', ['active', 'waiting_capacity'])
+    .or(`next_send_at.is.null,next_send_at.lte.${nowIso}`)
+    .limit(1)
+  if (!dueProbe.error && (dueProbe.count ?? 0) === 0) {
+    return new Response(JSON.stringify({ ok: true, idle: true }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    })
+  }
+
   // Load verified sending domains once per tick
   const { data: verifiedDomainRows } = await supabase
     .from('sending_domains')
