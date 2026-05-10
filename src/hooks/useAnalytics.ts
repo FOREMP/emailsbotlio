@@ -37,12 +37,14 @@ export type SentEmailRow = {
 export const useSentEmails = (filters: AnalyticsFilters) => {
   return useQuery({
     queryKey: ["analytics-sent", filters],
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
     queryFn: async () => {
       let q = supabase
         .from("sent_emails")
         .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject")
         .order("sent_at", { ascending: false })
-        .limit(5000);
+        .limit(2000);
       const since = rangeToSince(filters.range);
       if (since) q = q.gte("sent_at", since.toISOString());
       if (filters.senderId !== "all") q = q.eq("sender_id", filters.senderId);
@@ -67,6 +69,8 @@ const getSequenceEnrollmentIds = async (sequenceId: string) => {
 export const useSequences = () =>
   useQuery({
     queryKey: ["analytics-sequences"],
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
     queryFn: async () => {
       const { data } = await supabase.from("sequences").select("id, name, status").order("created_at", { ascending: false });
       return data ?? [];
@@ -76,6 +80,8 @@ export const useSequences = () =>
 export const useSenders = () =>
   useQuery({
     queryKey: ["analytics-senders"],
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
     queryFn: async () => {
       const { data } = await supabase.from("senders").select("id, from_name, from_email, daily_limit, warmup_enabled, warmup_target");
       return data ?? [];
@@ -85,10 +91,12 @@ export const useSenders = () =>
 export const useEnrollments = (filters: AnalyticsFilters) =>
   useQuery({
     queryKey: ["analytics-enrollments", filters],
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
     queryFn: async () => {
       let q = supabase.from("enrollments").select("id, sequence_id, status, last_error, error_at, created_at");
       if (filters.sequenceId !== "all") q = q.eq("sequence_id", filters.sequenceId);
-      const { data } = await q.limit(5000);
+      const { data } = await q.limit(2000);
       return data ?? [];
     },
   });
@@ -96,6 +104,8 @@ export const useEnrollments = (filters: AnalyticsFilters) =>
 export const useUnsubscribed = (filters: AnalyticsFilters) =>
   useQuery({
     queryKey: ["analytics-unsub", filters],
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
     queryFn: async () => {
       let q = supabase.from("do_not_contact").select("id, created_at");
       const since = rangeToSince(filters.range);
@@ -108,6 +118,8 @@ export const useUnsubscribed = (filters: AnalyticsFilters) =>
 export const useRecentActivity = (filters: AnalyticsFilters) =>
   useQuery({
     queryKey: ["analytics-activity", filters],
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
     queryFn: async () => {
       let q = supabase
         .from("contact_activity")
