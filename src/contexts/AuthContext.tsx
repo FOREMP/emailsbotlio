@@ -4,6 +4,19 @@ import { supabase } from "@/integrations/supabase/client";
 
 const AUTH_STORAGE_KEY = "sb-eyliwidiljmzllsmytdh-auth-token";
 
+const storedSessionIsExpired = () => {
+  if (typeof window === "undefined") return false;
+  try {
+    const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
+    if (!raw) return false;
+    const value = JSON.parse(raw);
+    const expiresAt = Number(value?.expires_at ?? 0);
+    return Boolean(expiresAt) && expiresAt * 1000 <= Date.now() + 30_000;
+  } catch {
+    return true;
+  }
+};
+
 export const clearStoredAuthSession = () => {
   if (typeof window === "undefined") return;
   [AUTH_STORAGE_KEY, `${AUTH_STORAGE_KEY}-code-verifier`, `${AUTH_STORAGE_KEY}-user`].forEach((key) => {
@@ -43,6 +56,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     const restoreSession = async () => {
       try {
+        if (storedSessionIsExpired()) {
+          clearStoredAuthSession();
+          setSession(null);
+          return;
+        }
+
         const result = await Promise.race([
           supabase.auth.getSession(),
           new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 8000)),
