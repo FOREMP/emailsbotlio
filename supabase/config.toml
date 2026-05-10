@@ -11,3 +11,5 @@ project_id = "eyliwidiljmzllsmytdh"
     verify_jwt = false
   [functions.send-transactional-email]
     verify_jwt = true
+  [functions.email-login]
+    verify_jwt = false
