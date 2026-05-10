@@ -40,6 +40,7 @@ const App = () => (
             <Route path="/" element={<Index />} />
             <Route path="/pricing" element={<Pricing />} />
             <Route path="/auth" element={<Auth />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/dashboard" element={protect(<Dashboard />)} />
             <Route path="/senders" element={protect(<Senders />)} />
             <Route path="/contacts" element={protect(<Contacts />)} />
