@@ -26,7 +26,7 @@ export const KpiCards = ({ kpis, unsubscribed }: Props) => {
     { label: "Failed", value: kpis.failed.toLocaleString(), icon: XCircle, sub: fmtPct(kpis.failRate), hint: "Rejected before sending (invalid address, no sender, etc.)" },
     { label: "Bounced", value: kpis.bounced.toLocaleString(), icon: AlertTriangle, sub: fmtPct(kpis.bounceRate), hint: "Receiving server rejected after delivery attempt" },
     { label: "Complaints", value: kpis.complained.toLocaleString(), icon: Flag, sub: null, hint: "Marked as spam by the recipient" },
-    { label: "Opened", value: kpis.opened.toLocaleString(), icon: MailOpen, sub: "tracking off", hint: "Open tracking is disabled during warmup" },
+    { label: "Opened", value: kpis.opened.toLocaleString(), icon: MailOpen, sub: fmtPct(kpis.openRate), hint: "Unique opens via tracking pixel (delivered base)" },
     { label: "Replied", value: kpis.replied.toLocaleString(), icon: Reply, sub: "tracking off", hint: "Replies go to your inbox; webhook tracking disabled" },
     { label: "Unsubscribed", value: unsubscribed.toLocaleString(), icon: UserMinus, sub: null, hint: null },
   ];
