@@ -622,7 +622,9 @@ export type Database = {
           enrollment_id: string | null
           error_message: string | null
           id: string
+          last_opened_at: string | null
           message_id: string | null
+          open_count: number
           opened_at: string | null
           recipient_email: string
           replied_at: string | null
@@ -642,7 +644,9 @@ export type Database = {
           enrollment_id?: string | null
           error_message?: string | null
           id?: string
+          last_opened_at?: string | null
           message_id?: string | null
+          open_count?: number
           opened_at?: string | null
           recipient_email: string
           replied_at?: string | null
@@ -662,7 +666,9 @@ export type Database = {
           enrollment_id?: string | null
           error_message?: string | null
           id?: string
+          last_opened_at?: string | null
           message_id?: string | null
+          open_count?: number
           opened_at?: string | null
           recipient_email?: string
           replied_at?: string | null
