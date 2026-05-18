@@ -17,12 +17,15 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!))
 }
 
-function plainToHtml(s: string): string {
+function plainToHtml(s: string, trackingPixelUrl?: string): string {
   // Convert newlines to <br> explicitly — many email clients (Gmail, Outlook)
   // strip CSS like `white-space: pre-wrap`, which collapses \n into spaces and
   // makes the signature appear on one line ("Best regards, Name, Company").
   const escaped = escapeHtml(s).replace(/\r\n/g, '\n').replace(/\n/g, '<br>')
-  return `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.55">${escaped}</div>`
+  const pixel = trackingPixelUrl
+    ? `<img src="${trackingPixelUrl}" width="1" height="1" alt="" style="display:block;border:0;outline:none;height:1px;width:1px;opacity:0" />`
+    : ''
+  return `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.55">${escaped}${pixel}</div>`
 }
 
 function deriveCompany(domain: string, brandFromDb?: string | null): string {
@@ -260,7 +263,7 @@ Deno.serve(async (req) => {
       reply_to: replyTo,
       sender_domain: senderDomain,
       subject: finalSubject,
-      html: plainToHtml(finalBody),
+      html: plainToHtml(finalBody, `${url}/functions/v1/track-open?m=${encodeURIComponent(messageId)}`),
       text: finalBody,
       purpose: 'transactional',
       label: 'cold-outreach',
