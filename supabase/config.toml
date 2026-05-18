@@ -13,3 +13,5 @@ project_id = "eyliwidiljmzllsmytdh"
     verify_jwt = true
   [functions.email-login]
     verify_jwt = false
+  [functions.track-open]
+    verify_jwt = false
