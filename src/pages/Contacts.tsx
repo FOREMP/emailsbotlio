@@ -102,16 +102,22 @@ const Contacts = () => {
     enabled: !!selectedList && contacts.length > 0,
     queryFn: async () => {
       const ids = contacts.map((c) => c.id);
-      const { data } = await supabase
-        .from("sent_emails")
-        .select("contact_id, sent_at")
-        .in("contact_id", ids)
-        .eq("status", "sent")
-        .order("sent_at", { ascending: false });
       const map: Record<string, string> = {};
-      (data ?? []).forEach((r: any) => {
-        if (r.contact_id && !map[r.contact_id]) map[r.contact_id] = r.sent_at;
-      });
+      // Batch to avoid HTTP 414 (URL too long) when a list has many contacts.
+      const CHUNK = 200;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const slice = ids.slice(i, i + CHUNK);
+        const { data, error } = await supabase
+          .from("sent_emails")
+          .select("contact_id, sent_at")
+          .in("contact_id", slice)
+          .eq("status", "sent")
+          .order("sent_at", { ascending: false });
+        if (error) continue;
+        (data ?? []).forEach((r: any) => {
+          if (r.contact_id && !map[r.contact_id]) map[r.contact_id] = r.sent_at;
+        });
+      }
       return map;
     },
   });
