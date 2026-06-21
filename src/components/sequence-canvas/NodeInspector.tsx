@@ -211,14 +211,29 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
             <div>
               <Label>Sender strategy</Label>
               <Select
-                value={cfg.sender_strategy ?? "all"}
-                onValueChange={(v) => onChange({ ...cfg, sender_strategy: v, sender_id: v === "specific" ? cfg.sender_id : undefined, brand: v === "brand" ? (cfg.brand ?? domains[0]) : undefined })}
+                value={
+                  cfg.sender_strategy === "brand"
+                    ? `brand:${cfg.brand ?? ""}`
+                    : cfg.sender_strategy === "specific"
+                    ? "specific"
+                    : "all"
+                }
+                onValueChange={(v) => {
+                  if (v === "all") {
+                    onChange({ ...cfg, sender_strategy: "all", sender_id: undefined, brand: undefined });
+                  } else if (v === "specific") {
+                    onChange({ ...cfg, sender_strategy: "specific", brand: undefined });
+                  } else if (v.startsWith("brand:")) {
+                    const brand = v.slice("brand:".length);
+                    onChange({ ...cfg, sender_strategy: "brand", brand, sender_id: undefined });
+                  }
+                }}
               >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Rotate across all active senders</SelectItem>
                   {domains.map((b) => (
-                    <SelectItem key={b} value="brand" disabled={cfg.sender_strategy === "brand" && cfg.brand === b}>
+                    <SelectItem key={b} value={`brand:${b}`}>
                       Rotate within brand: {b}
                     </SelectItem>
                   ))}
@@ -226,17 +241,6 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
                 </SelectContent>
               </Select>
             </div>
-            {cfg.sender_strategy === "brand" && (
-              <div>
-                <Label>Brand</Label>
-                <Select value={cfg.brand ?? domains[0]} onValueChange={(v) => set("brand", v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {domains.map((b) => <SelectItem key={b} value={b}>{b}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
             {cfg.sender_strategy === "specific" && (
               <div>
                 <Label>Sender</Label>
