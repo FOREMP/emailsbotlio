@@ -47,8 +47,8 @@ Deno.serve(async (req) => {
         .eq('id', site.contact_id)
         .single()
       const cf = (contact?.custom_fields ?? {}) as Record<string, unknown>
-      const websiteField = (cf.website ?? cf.url ?? cf.homepage) as string | undefined
-      if (websiteField) targetUrl = normaliseUrl(websiteField)
+      const websiteField = (cf.website ?? cf.url ?? cf.homepage ?? cf.hemsida ?? cf.webbsida ?? cf.webbplats ?? cf.site ?? cf.domain) as string | undefined
+      if (websiteField) targetUrl = normaliseUrl(String(websiteField))
       else if (contact?.email) {
         const domain = String(contact.email).split('@')[1]
         if (domain && !isFreeEmail(domain)) targetUrl = `https://${domain}`
