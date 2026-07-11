@@ -126,6 +126,22 @@ Deno.serve(async (req) => {
   }
 })
 
+function buildUrlCandidates(raw: string): string[] {
+  const cleaned = raw.trim().replace(/\/+$/, '')
+  let host = cleaned.replace(/^https?:\/\//i, '').replace(/\/.*$/, '')
+  if (!host) return [cleaned]
+  const bare = host.replace(/^www\./i, '')
+  const withWww = `www.${bare}`
+  const out = new Set<string>()
+  // Prefer original first
+  out.add(cleaned.startsWith('http') ? cleaned : `https://${bare}`)
+  out.add(`https://${bare}`)
+  out.add(`https://${withWww}`)
+  out.add(`http://${bare}`)
+  out.add(`http://${withWww}`)
+  return Array.from(out)
+}
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
