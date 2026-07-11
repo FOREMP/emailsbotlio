@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2, Sparkles, Search, ExternalLink, RefreshCw, Plus } from "lucide-react";
+import { Loader2, Sparkles, Search, ExternalLink, RefreshCw, Plus, Wand2, Rocket } from "lucide-react";
 import { toast } from "sonner";
 
 type SiteRow = {
