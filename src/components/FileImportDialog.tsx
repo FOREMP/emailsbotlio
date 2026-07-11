@@ -487,6 +487,7 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
                           <SelectItem value="phone">📱 Phone</SelectItem>
                           <SelectItem value="first_name">👤 First Name</SelectItem>
                           <SelectItem value="last_name">👤 Last Name</SelectItem>
+                          <SelectItem value="website">🌐 Website (permanent variable)</SelectItem>
                           <SelectItem value="custom">🏷️ New custom variable</SelectItem>
                           {existingColumns.map((col) => (
                             <SelectItem key={col} value={`reuse:${col}`}>♻️ Reuse: {col}</SelectItem>
