@@ -421,7 +421,7 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
                         const next = { ...prev };
                         for (const h of parsed.headers) {
                           const role = next[h];
-                          if (role !== "email" && role !== "phone" && role !== "first_name" && role !== "last_name") {
+                          if (role !== "email" && role !== "phone" && role !== "first_name" && role !== "last_name" && role !== "website") {
                             next[h] = "skip";
                           }
                         }
