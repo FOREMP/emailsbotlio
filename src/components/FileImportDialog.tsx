@@ -99,6 +99,9 @@ function autoDetectMapping(headers: string[], existingColumns: string[] = []): C
     } else if (!assigned.has("last_name") && LAST_NAME_PATTERNS.includes(lower)) {
       mapping[headers[i]] = "last_name";
       assigned.add("last_name");
+    } else if (!assigned.has("website") && WEBSITE_PATTERNS.includes(lower)) {
+      mapping[headers[i]] = "website";
+      assigned.add("website");
     } else {
       // Try to match an existing custom column by name (case-insensitive)
       const matchIdx = existingLower.indexOf(lower);
