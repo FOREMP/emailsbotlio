@@ -1,7 +1,9 @@
-// Scrapes a lead's existing website with Firecrawl and stores the raw content
-// + branding + images in generated_sites.scraped_content. Fails fast if the
-// scrape returned an error page or too little real content — so we don't
-// generate a hallucinated site on top of "400 Bad Request".
+// Scrapes a lead's existing site with Firecrawl. Strategy:
+// 1. Find the working root URL (try https/http × www variants).
+// 2. Map the site to discover subpages.
+// 3. Pick ONLY the home page + best "om oss" + best "tjänster" page (sv+en aliases).
+// 4. Scrape each of those pages individually and store them under scraped_content.pages.
+// Fails fast if the root page looks like an HTTP error or is nearly empty.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const corsHeaders = {
@@ -40,77 +42,86 @@ Deno.serve(async (req) => {
     const fcKey = Deno.env.get('FIRECRAWL_API_KEY')
     if (!fcKey) return json({ error: 'FIRECRAWL_API_KEY missing' }, 500)
 
-    // Try several URL variants — many small business sites 400 on the wrong host/scheme
+    // ---- 1. Find a working root URL by scraping variants ----
     const candidates = buildUrlCandidates(site.source_url)
-    let fcResp: Response | null = null
-    let fcData: any = null
-    let usedUrl = site.source_url
     const attempts: { url: string; status: number; title?: string }[] = []
+    let rootScrape: any = null
+    let usedUrl = site.source_url
 
     for (const candidate of candidates) {
-      const r = await fetch(`${FIRECRAWL_V2}/scrape`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: candidate,
-          formats: ['markdown', 'links', 'branding', 'summary'],
-          onlyMainContent: true,
-        }),
-      })
-      const d = await r.json()
-      const payloadPeek = d?.data ?? d
-      const sc: number | undefined = payloadPeek?.metadata?.statusCode ?? payloadPeek?.metadata?.status_code
-      const title: string = payloadPeek?.metadata?.title ?? ''
-      attempts.push({ url: candidate, status: sc ?? r.status, title: title.slice(0, 60) })
-      if (r.ok && (!sc || sc < 400)) {
-        fcResp = r; fcData = d; usedUrl = candidate
+      const { data, status, title } = await scrapeOne(candidate, fcKey)
+      attempts.push({ url: candidate, status, title: (title || '').slice(0, 60) })
+      const badTitle = /(400|401|403|404|500|502|503|504)\s*(bad request|unauthorized|forbidden|not found|error|gateway|unavailable)|access denied|cloudflare|attention required/i
+      const looksBad = (status && status >= 400) || badTitle.test(title || '')
+      if (data && !looksBad && (data.markdown || '').trim().length > 300) {
+        rootScrape = data
+        usedUrl = candidate
         break
       }
-      fcResp = r; fcData = d; usedUrl = candidate
     }
 
-    if (!fcResp!.ok) {
+    if (!rootScrape) {
       await supabase.from('generated_sites').update({
         status: 'failed',
-        error_message: `Scrape failed on all URL variants. Attempts: ${JSON.stringify(attempts).slice(0, 400)}`,
+        error_message: `Root page failed on all variants: ${attempts.map(a => `${a.url}→${a.status}`).join(', ')}`,
       }).eq('id', generated_site_id)
-      return json({ error: 'scrape failed', attempts, details: fcData }, fcResp!.status)
+      return json({ error: 'root scrape failed', attempts }, 422)
     }
 
-    const payload = fcData.data ?? fcData
-    const title: string = payload.metadata?.title ?? ''
-    const statusCode: number | undefined = payload.metadata?.statusCode ?? payload.metadata?.status_code
-    const markdown: string = payload.markdown ?? ''
+    // ---- 2. Map the site to discover subpages ----
+    let allLinks: string[] = []
+    try {
+      const mapResp = await fetch(`${FIRECRAWL_V2}/map`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: usedUrl, limit: 200, includeSubdomains: false }),
+      })
+      const mapJson = await mapResp.json()
+      allLinks = (mapJson?.links ?? mapJson?.data?.links ?? []).map((l: any) => typeof l === 'string' ? l : l?.url).filter(Boolean)
+    } catch (_) { /* map is best-effort */ }
 
-    // Fail fast on obvious error pages / empty scrapes so generator doesn't hallucinate
-    const badTitleRe = /(400|401|403|404|500|502|503|504)\s*(bad request|unauthorized|forbidden|not found|error|gateway|unavailable)|access denied|cloudflare|attention required/i
-    const looksLikeErrorPage =
-      (statusCode && statusCode >= 400) ||
-      badTitleRe.test(title) ||
-      badTitleRe.test(markdown.slice(0, 500))
-    const tooShort = markdown.trim().length < 400
-
-    if (looksLikeErrorPage || tooShort) {
-      const reason = looksLikeErrorPage
-        ? `Source site returned an error page on all variants (tried: ${attempts.map(a => `${a.url}→${a.status}`).join(', ')}). Fix source_url or skip this lead.`
-        : `Source site returned too little content (${markdown.trim().length} chars). Cannot generate a meaningful demo.`
-      await supabase.from('generated_sites').update({
-        status: 'failed',
-        error_message: reason,
-        scraped_content: { title, statusCode, markdown_preview: markdown.slice(0, 500), scraped_at: new Date().toISOString(), attempts },
-      }).eq('id', generated_site_id)
-      return json({ error: reason, attempts }, 422)
+    // Fallback: use links from root page if map returned nothing
+    if (allLinks.length === 0 && Array.isArray(rootScrape.links)) {
+      allLinks = rootScrape.links
     }
+
+    // ---- 3. Pick best about + services page ----
+    const aboutUrl = pickBestUrl(allLinks, usedUrl, [
+      /\/(om[-_ ]?oss|om[-_ ]?foretaget|about|about[-_ ]?us|company|foretaget)(\/|$|\.)/i,
+      /\/(om|about)(\/|$|\.)/i,
+    ])
+    const servicesUrl = pickBestUrl(allLinks, usedUrl, [
+      /\/(tjanster|tjänster|vara[-_ ]?tjanster|våra[-_ ]?tjänster|services|service|verkstad|erbjudanden|behandlingar)(\/|$|\.)/i,
+      /\/(services|service|tjanster|tjänster)(\/|$|\.)/i,
+    ])
+
+    // ---- 4. Scrape about + services individually ----
+    const pages: Record<string, any> = {
+      home: normalizePage(rootScrape, usedUrl),
+    }
+    if (aboutUrl && aboutUrl !== usedUrl) {
+      const r = await scrapeOne(aboutUrl, fcKey)
+      if (r.data && (r.data.markdown || '').trim().length > 150) pages.about = normalizePage(r.data, aboutUrl)
+    }
+    if (servicesUrl && servicesUrl !== usedUrl && servicesUrl !== aboutUrl) {
+      const r = await scrapeOne(servicesUrl, fcKey)
+      if (r.data && (r.data.markdown || '').trim().length > 150) pages.services = normalizePage(r.data, servicesUrl)
+    }
+
+    // Aggregate images across all scraped pages
+    const allImages = new Set<string>()
+    Object.values(pages).forEach((p: any) => (p.images || []).forEach((i: string) => allImages.add(i)))
 
     const scraped = {
-      title,
-      description: payload.metadata?.description,
-      summary: payload.summary,
-      markdown,
-      links: (payload.links ?? []).slice(0, 100),
-      branding: payload.branding ?? null,
-      images: extractImages(payload),
+      title: rootScrape.metadata?.title ?? '',
+      description: rootScrape.metadata?.description ?? '',
+      summary: rootScrape.summary ?? '',
+      branding: rootScrape.branding ?? null,
       source_url_used: usedUrl,
+      discovered_about_url: aboutUrl,
+      discovered_services_url: servicesUrl,
+      pages,                              // { home, about?, services? } each with { url, title, markdown, images }
+      images: Array.from(allImages).slice(0, 20),
       scraped_at: new Date().toISOString(),
     }
 
@@ -119,21 +130,83 @@ Deno.serve(async (req) => {
       scraped_content: scraped,
     }).eq('id', generated_site_id)
 
-    return json({ ok: true, chars: markdown.length, links: scraped.links.length })
+    return json({
+      ok: true,
+      pages_scraped: Object.keys(pages),
+      about_url: aboutUrl,
+      services_url: servicesUrl,
+      total_chars: Object.values(pages).reduce((sum: number, p: any) => sum + (p.markdown?.length || 0), 0),
+    })
   } catch (err) {
     console.error('scrape-lead-data error', err)
     return json({ error: (err as Error).message }, 500)
   }
 })
 
+async function scrapeOne(url: string, fcKey: string): Promise<{ data: any | null; status: number; title: string }> {
+  try {
+    const r = await fetch(`${FIRECRAWL_V2}/scrape`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url,
+        formats: ['markdown', 'links', 'branding', 'summary'],
+        onlyMainContent: true,
+      }),
+    })
+    const j = await r.json()
+    const payload = j?.data ?? j
+    const status = payload?.metadata?.statusCode ?? payload?.metadata?.status_code ?? r.status
+    const title = payload?.metadata?.title ?? ''
+    if (!r.ok) return { data: null, status, title }
+    return { data: payload, status, title }
+  } catch (_) {
+    return { data: null, status: 0, title: '' }
+  }
+}
+
+function normalizePage(payload: any, url: string) {
+  const md: string = payload.markdown ?? ''
+  const imgs = new Set<string>()
+  const re = /!\[[^\]]*\]\(([^)]+)\)/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(md)) !== null) {
+    if (m[1] && /^https?:\/\//.test(m[1])) imgs.add(m[1])
+  }
+  if (payload.branding?.images) {
+    Object.values(payload.branding.images).forEach((v) => typeof v === 'string' && imgs.add(v))
+  }
+  return {
+    url,
+    title: payload.metadata?.title ?? '',
+    description: payload.metadata?.description ?? '',
+    summary: payload.summary ?? '',
+    markdown: md,
+    images: Array.from(imgs).slice(0, 12),
+  }
+}
+
+function pickBestUrl(links: string[], rootUrl: string, patterns: RegExp[]): string | null {
+  if (!links.length) return null
+  let rootHost = ''
+  try { rootHost = new URL(rootUrl).hostname.replace(/^www\./, '') } catch (_) { /* ignore */ }
+  const sameDomain = links.filter((l) => {
+    try { return new URL(l).hostname.replace(/^www\./, '') === rootHost } catch (_) { return false }
+  })
+  for (const pat of patterns) {
+    const hit = sameDomain.find((l) => pat.test(l))
+    if (hit) return hit
+  }
+  return null
+}
+
 function buildUrlCandidates(raw: string): string[] {
   const cleaned = raw.trim().replace(/\/+$/, '')
-  let host = cleaned.replace(/^https?:\/\//i, '').replace(/\/.*$/, '')
+  const host = cleaned.replace(/^https?:\/\//i, '').replace(/\/.*$/, '')
   if (!host) return [cleaned]
   const bare = host.replace(/^www\./i, '')
   const withWww = `www.${bare}`
   const out = new Set<string>()
-  // Prefer original first
   out.add(cleaned.startsWith('http') ? cleaned : `https://${bare}`)
   out.add(`https://${bare}`)
   out.add(`https://${withWww}`)
@@ -147,18 +220,4 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   })
-}
-
-function extractImages(payload: any): string[] {
-  const images = new Set<string>()
-  const md: string = payload.markdown ?? ''
-  const re = /!\[[^\]]*\]\(([^)]+)\)/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(md)) !== null) {
-    if (m[1] && /^https?:\/\//.test(m[1])) images.add(m[1])
-  }
-  if (payload.branding?.images) {
-    Object.values(payload.branding.images).forEach((v) => typeof v === 'string' && images.add(v))
-  }
-  return Array.from(images).slice(0, 20)
 }
