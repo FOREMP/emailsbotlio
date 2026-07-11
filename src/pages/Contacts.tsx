@@ -306,58 +306,83 @@ const Contacts = () => {
     if (!selectedList) return;
     setImporting(true);
     try {
-      // Dedupe against emails already present in this list (case-insensitive)
-      const incomingEmails = importedContacts
-        .map((c) => (c.email || "").trim().toLowerCase())
-        .filter(Boolean);
-      let existingEmailsLower = new Set<string>();
-      if (incomingEmails.length > 0) {
-        // Fetch in chunks to avoid URL length limits
-        const chunkSize = 200;
-        for (let i = 0; i < incomingEmails.length; i += chunkSize) {
-          const chunk = incomingEmails.slice(i, i + chunkSize);
-          const { data: existing } = await supabase
-            .from("contacts")
-            .select("email")
-            .eq("list_id", selectedList)
-            .in("email", chunk);
-          (existing ?? []).forEach((r: any) => {
-            if (r.email) existingEmailsLower.add(String(r.email).toLowerCase());
-          });
+      const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
+      const normalizeEmail = (raw: string) =>
+        (raw || "")
+          .replace(/^(%20)+|(%20)+$/gi, "")
+          .replace(/^\s+|\s+$/g, "")
+          .toLowerCase();
+
+      // Expand rows: split comma/semicolon-separated emails in one cell into multiple rows.
+      // Drop rows without any email (they were being saved as junk).
+      let skippedNoEmail = 0;
+      let skippedInvalid = 0;
+      const expanded: Array<{ row: typeof importedContacts[number]; email: string }> = [];
+      for (const c of importedContacts) {
+        const rawList = (c.email || "").split(/[;,]/).map(normalizeEmail).filter(Boolean);
+        if (rawList.length === 0) { skippedNoEmail++; continue; }
+        for (const e of rawList) {
+          if (!EMAIL_RE.test(e)) { skippedInvalid++; continue; }
+          expanded.push({ row: c, email: e });
         }
       }
 
-      // Also dedupe duplicates within the incoming file itself
+      // Fetch ALL existing emails in this list once (case-insensitive Set) so
+      // mixed-case duplicates in DB are caught reliably.
+      const existingLower = new Set<string>();
+      {
+        const pageSize = 1000;
+        let from = 0;
+        while (true) {
+          const { data: page, error } = await supabase
+            .from("contacts")
+            .select("email")
+            .eq("list_id", selectedList)
+            .not("email", "is", null)
+            .range(from, from + pageSize - 1);
+          if (error) throw error;
+          const rows = page ?? [];
+          for (const r of rows as any[]) {
+            if (r.email) existingLower.add(normalizeEmail(String(r.email)));
+          }
+          if (rows.length < pageSize) break;
+          from += pageSize;
+        }
+      }
+
       const seenInBatch = new Set<string>();
       let skippedDuplicates = 0;
-      const contactsToInsert = importedContacts
-        .map((c) => ({
+      const contactsToInsert: any[] = [];
+      for (const { row: c, email } of expanded) {
+        if (existingLower.has(email) || seenInBatch.has(email)) {
+          skippedDuplicates++;
+          continue;
+        }
+        seenInBatch.add(email);
+        contactsToInsert.push({
           user_id: user!.id,
           list_id: selectedList,
           first_name: c.first_name || null,
           last_name: c.last_name || null,
-          email: c.email || null,
+          email, // normalized
           phone: c.phone || null,
           custom_fields: Object.keys(c.custom_fields).length > 0 ? c.custom_fields : null,
-        }))
-        .filter((row) => {
-          const e = (row.email || "").trim().toLowerCase();
-          if (!e) return true; // keep rows without email (rare)
-          if (existingEmailsLower.has(e) || seenInBatch.has(e)) {
-            skippedDuplicates++;
-            return false;
-          }
-          seenInBatch.add(e);
-          return true;
         });
+      }
 
       if (contactsToInsert.length > 0) {
-        const { error } = await supabase.from("contacts").insert(contactsToInsert);
-        if (error) throw error;
+        const chunk = 500;
+        for (let i = 0; i < contactsToInsert.length; i += chunk) {
+          const { error } = await supabase.from("contacts").insert(contactsToInsert.slice(i, i + chunk));
+          if (error) throw error;
+        }
       }
-      if (skippedDuplicates > 0) {
-        toast.info(`Skipped ${skippedDuplicates} duplicate email${skippedDuplicates === 1 ? "" : "s"} already in this list`);
-      }
+
+      const parts: string[] = [`Imported ${contactsToInsert.length}`];
+      if (skippedDuplicates > 0) parts.push(`${skippedDuplicates} duplicates`);
+      if (skippedInvalid > 0) parts.push(`${skippedInvalid} invalid`);
+      if (skippedNoEmail > 0) parts.push(`${skippedNoEmail} without email`);
+      toast.success(parts.join(" · "));
 
       const existingList = lists.find((l) => l.id === selectedList);
       const existingCols: string[] = Array.isArray((existingList as any)?.columns) ? (existingList as any).columns : [];
