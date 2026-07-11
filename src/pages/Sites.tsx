@@ -103,7 +103,7 @@ const Sites = () => {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const runStep = async (siteId: string, step: "audit-site" | "scrape-lead-data") => {
+  const runStep = async (siteId: string, step: "audit-site" | "scrape-lead-data" | "generate-site" | "deploy-site") => {
     setBusyId(siteId);
     try {
       const { data, error } = await supabase.functions.invoke(step, {
