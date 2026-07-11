@@ -92,14 +92,14 @@ Deno.serve(async (req) => {
 
     if (looksLikeErrorPage || tooShort) {
       const reason = looksLikeErrorPage
-        ? `Source site returned an error page (title: "${title.slice(0, 80)}"${statusCode ? `, status ${statusCode}` : ''}). Cannot generate — fix source_url or skip this lead.`
+        ? `Source site returned an error page on all variants (tried: ${attempts.map(a => `${a.url}→${a.status}`).join(', ')}). Fix source_url or skip this lead.`
         : `Source site returned too little content (${markdown.trim().length} chars). Cannot generate a meaningful demo.`
       await supabase.from('generated_sites').update({
         status: 'failed',
         error_message: reason,
-        scraped_content: { title, statusCode, markdown_preview: markdown.slice(0, 500), scraped_at: new Date().toISOString() },
+        scraped_content: { title, statusCode, markdown_preview: markdown.slice(0, 500), scraped_at: new Date().toISOString(), attempts },
       }).eq('id', generated_site_id)
-      return json({ error: reason }, 422)
+      return json({ error: reason, attempts }, 422)
     }
 
     const scraped = {
@@ -110,6 +110,7 @@ Deno.serve(async (req) => {
       links: (payload.links ?? []).slice(0, 100),
       branding: payload.branding ?? null,
       images: extractImages(payload),
+      source_url_used: usedUrl,
       scraped_at: new Date().toISOString(),
     }
 
