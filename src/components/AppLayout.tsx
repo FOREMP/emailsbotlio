@@ -1,6 +1,6 @@
 import { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, Send, Users, Mail, FileSpreadsheet, Globe, BarChart3 } from "lucide-react";
+import { LayoutDashboard, Send, Users, Mail, FileSpreadsheet, Globe, BarChart3, Sparkles } from "lucide-react";
 import Header from "@/components/Header";
 import { cn } from "@/lib/utils";
 
@@ -9,6 +9,7 @@ const tabs = [
   { to: "/sequences", label: "Sequences", icon: Send },
   { to: "/analytics", label: "Analytics", icon: BarChart3 },
   { to: "/contacts", label: "Contacts", icon: Users },
+  { to: "/sites", label: "Sites", icon: Sparkles },
   { to: "/senders", label: "Senders", icon: Mail },
   { to: "/domains", label: "Domains", icon: Globe },
   { to: "/files", label: "Files", icon: FileSpreadsheet },

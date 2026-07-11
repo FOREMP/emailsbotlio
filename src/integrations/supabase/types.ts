@@ -81,6 +81,7 @@ export type Database = {
         Row: {
           created_at: string
           custom_fields: Json | null
+          demo_site_url: string | null
           email: string | null
           first_name: string | null
           id: string
@@ -94,6 +95,7 @@ export type Database = {
         Insert: {
           created_at?: string
           custom_fields?: Json | null
+          demo_site_url?: string | null
           email?: string | null
           first_name?: string | null
           id?: string
@@ -107,6 +109,7 @@ export type Database = {
         Update: {
           created_at?: string
           custom_fields?: Json | null
+          demo_site_url?: string | null
           email?: string | null
           first_name?: string | null
           id?: string
@@ -263,6 +266,93 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      generated_sites: {
+        Row: {
+          audit_reason: string | null
+          audit_score: number | null
+          click_count: number
+          contact_id: string
+          cost_credits: number | null
+          created_at: string
+          demo_site_url: string | null
+          error_message: string | null
+          generated_files: Json | null
+          github_repo_url: string | null
+          id: string
+          last_clicked_at: string | null
+          scraped_content: Json | null
+          sequence_id: string | null
+          source_url: string | null
+          status: string
+          template: string
+          updated_at: string
+          user_id: string
+          vercel_deployment_url: string | null
+          vercel_project_id: string | null
+        }
+        Insert: {
+          audit_reason?: string | null
+          audit_score?: number | null
+          click_count?: number
+          contact_id: string
+          cost_credits?: number | null
+          created_at?: string
+          demo_site_url?: string | null
+          error_message?: string | null
+          generated_files?: Json | null
+          github_repo_url?: string | null
+          id?: string
+          last_clicked_at?: string | null
+          scraped_content?: Json | null
+          sequence_id?: string | null
+          source_url?: string | null
+          status?: string
+          template?: string
+          updated_at?: string
+          user_id: string
+          vercel_deployment_url?: string | null
+          vercel_project_id?: string | null
+        }
+        Update: {
+          audit_reason?: string | null
+          audit_score?: number | null
+          click_count?: number
+          contact_id?: string
+          cost_credits?: number | null
+          created_at?: string
+          demo_site_url?: string | null
+          error_message?: string | null
+          generated_files?: Json | null
+          github_repo_url?: string | null
+          id?: string
+          last_clicked_at?: string | null
+          scraped_content?: Json | null
+          sequence_id?: string | null
+          source_url?: string | null
+          status?: string
+          template?: string
+          updated_at?: string
+          user_id?: string
+          vercel_deployment_url?: string | null
+          vercel_project_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "generated_sites_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "generated_sites_sequence_id_fkey"
+            columns: ["sequence_id"]
+            isOneToOne: false
+            referencedRelation: "sequences"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       imported_files: {
         Row: {
