@@ -227,7 +227,7 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
   const updateMapping = (header: string, value: string) => {
     setMapping((prev) => {
       const next = { ...prev };
-      const uniqueRoles = ["email", "phone", "first_name", "last_name"];
+      const uniqueRoles = ["email", "phone", "first_name", "last_name", "website"];
       if (uniqueRoles.includes(value)) {
         for (const key of Object.keys(next)) {
           if (next[key] === value) next[key] = "custom";
