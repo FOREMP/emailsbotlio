@@ -1,6 +1,7 @@
 // Scrapes a lead's existing website with Firecrawl and stores the raw content
-// + branding + images in generated_sites.scraped_content. This becomes the
-// input for the site generator in Fas 2.
+// + branding + images in generated_sites.scraped_content. Fails fast if the
+// scrape returned an error page or too little real content — so we don't
+// generate a hallucinated site on top of "400 Bad Request".
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const corsHeaders = {
@@ -34,12 +35,11 @@ Deno.serve(async (req) => {
     if (siteErr || !site) return json({ error: 'site not found' }, 404)
     if (!site.source_url) return json({ error: 'no source_url — run audit first' }, 400)
 
-    await supabase.from('generated_sites').update({ status: 'scraping' }).eq('id', generated_site_id)
+    await supabase.from('generated_sites').update({ status: 'scraping', error_message: null }).eq('id', generated_site_id)
 
     const fcKey = Deno.env.get('FIRECRAWL_API_KEY')
     if (!fcKey) return json({ error: 'FIRECRAWL_API_KEY missing' }, 500)
 
-    // Full scrape: markdown + links + branding + summary
     const fcResp = await fetch(`${FIRECRAWL_V2}/scrape`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
@@ -59,11 +59,35 @@ Deno.serve(async (req) => {
     }
 
     const payload = fcData.data ?? fcData
+    const title: string = payload.metadata?.title ?? ''
+    const statusCode: number | undefined = payload.metadata?.statusCode ?? payload.metadata?.status_code
+    const markdown: string = payload.markdown ?? ''
+
+    // Fail fast on obvious error pages / empty scrapes so generator doesn't hallucinate
+    const badTitleRe = /(400|401|403|404|500|502|503|504)\s*(bad request|unauthorized|forbidden|not found|error|gateway|unavailable)|access denied|cloudflare|attention required/i
+    const looksLikeErrorPage =
+      (statusCode && statusCode >= 400) ||
+      badTitleRe.test(title) ||
+      badTitleRe.test(markdown.slice(0, 500))
+    const tooShort = markdown.trim().length < 400
+
+    if (looksLikeErrorPage || tooShort) {
+      const reason = looksLikeErrorPage
+        ? `Source site returned an error page (title: "${title.slice(0, 80)}"${statusCode ? `, status ${statusCode}` : ''}). Cannot generate — fix source_url or skip this lead.`
+        : `Source site returned too little content (${markdown.trim().length} chars). Cannot generate a meaningful demo.`
+      await supabase.from('generated_sites').update({
+        status: 'failed',
+        error_message: reason,
+        scraped_content: { title, statusCode, markdown_preview: markdown.slice(0, 500), scraped_at: new Date().toISOString() },
+      }).eq('id', generated_site_id)
+      return json({ error: reason }, 422)
+    }
+
     const scraped = {
-      title: payload.metadata?.title,
+      title,
       description: payload.metadata?.description,
       summary: payload.summary,
-      markdown: payload.markdown,
+      markdown,
       links: (payload.links ?? []).slice(0, 100),
       branding: payload.branding ?? null,
       images: extractImages(payload),
@@ -75,7 +99,7 @@ Deno.serve(async (req) => {
       scraped_content: scraped,
     }).eq('id', generated_site_id)
 
-    return json({ ok: true, chars: scraped.markdown?.length ?? 0, links: scraped.links.length })
+    return json({ ok: true, chars: markdown.length, links: scraped.links.length })
   } catch (err) {
     console.error('scrape-lead-data error', err)
     return json({ error: (err as Error).message }, 500)
