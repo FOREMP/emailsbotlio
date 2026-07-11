@@ -235,6 +235,15 @@ const Sites = () => {
                           <Sparkles className="h-3 w-3" />
                           <span className="ml-1">Scrape</span>
                         </Button>
+                        <Button size="sm" variant="ghost" disabled={busyId === s.id || !["scraped","generated","failed"].includes(s.status)} onClick={() => runStep(s.id, "generate-site")}>
+                          <Wand2 className="h-3 w-3" />
+                          <span className="ml-1">Generate</span>
+                        </Button>
+                        <Button size="sm" variant="ghost" disabled={busyId === s.id || !["generated","live","failed"].includes(s.status)} onClick={() => runStep(s.id, "deploy-site")}>
+                          <Rocket className="h-3 w-3" />
+                          <span className="ml-1">Deploy</span>
+                        </Button>
+
                       </TableCell>
                     </TableRow>
                   ))}
