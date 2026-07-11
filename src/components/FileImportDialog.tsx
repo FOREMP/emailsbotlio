@@ -511,6 +511,9 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
                       {isReuse && (
                         <Badge variant="outline" className="text-xs font-mono">→ {`{{${reusedKey}}}`}</Badge>
                       )}
+                      {m === "website" && (
+                        <Badge variant="secondary" className="text-xs font-mono">{`{{${WEBSITE_KEY}}}`}</Badge>
+                      )}
                       <Button
                         type="button"
                         variant="ghost"
