@@ -287,6 +287,8 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
         if (role === "custom") {
           const key = customNames[header] || sanitizeVarKey(header);
           if (row[header]) contact.custom_fields[key] = row[header];
+        } else if (role === "website") {
+          if (row[header]) contact.custom_fields[WEBSITE_KEY] = row[header];
         } else if (typeof role === "string" && role.startsWith("reuse:")) {
           const key = role.slice("reuse:".length);
           if (row[header]) contact.custom_fields[key] = row[header];
