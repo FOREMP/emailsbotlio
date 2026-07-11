@@ -306,18 +306,58 @@ const Contacts = () => {
     if (!selectedList) return;
     setImporting(true);
     try {
-      const contactsToInsert = importedContacts.map((c) => ({
-        user_id: user!.id,
-        list_id: selectedList,
-        first_name: c.first_name || null,
-        last_name: c.last_name || null,
-        email: c.email || null,
-        phone: c.phone || null,
-        custom_fields: Object.keys(c.custom_fields).length > 0 ? c.custom_fields : null,
-      }));
+      // Dedupe against emails already present in this list (case-insensitive)
+      const incomingEmails = importedContacts
+        .map((c) => (c.email || "").trim().toLowerCase())
+        .filter(Boolean);
+      let existingEmailsLower = new Set<string>();
+      if (incomingEmails.length > 0) {
+        // Fetch in chunks to avoid URL length limits
+        const chunkSize = 200;
+        for (let i = 0; i < incomingEmails.length; i += chunkSize) {
+          const chunk = incomingEmails.slice(i, i + chunkSize);
+          const { data: existing } = await supabase
+            .from("contacts")
+            .select("email")
+            .eq("list_id", selectedList)
+            .in("email", chunk);
+          (existing ?? []).forEach((r: any) => {
+            if (r.email) existingEmailsLower.add(String(r.email).toLowerCase());
+          });
+        }
+      }
 
-      const { error } = await supabase.from("contacts").insert(contactsToInsert);
-      if (error) throw error;
+      // Also dedupe duplicates within the incoming file itself
+      const seenInBatch = new Set<string>();
+      let skippedDuplicates = 0;
+      const contactsToInsert = importedContacts
+        .map((c) => ({
+          user_id: user!.id,
+          list_id: selectedList,
+          first_name: c.first_name || null,
+          last_name: c.last_name || null,
+          email: c.email || null,
+          phone: c.phone || null,
+          custom_fields: Object.keys(c.custom_fields).length > 0 ? c.custom_fields : null,
+        }))
+        .filter((row) => {
+          const e = (row.email || "").trim().toLowerCase();
+          if (!e) return true; // keep rows without email (rare)
+          if (existingEmailsLower.has(e) || seenInBatch.has(e)) {
+            skippedDuplicates++;
+            return false;
+          }
+          seenInBatch.add(e);
+          return true;
+        });
+
+      if (contactsToInsert.length > 0) {
+        const { error } = await supabase.from("contacts").insert(contactsToInsert);
+        if (error) throw error;
+      }
+      if (skippedDuplicates > 0) {
+        toast.info(`Skipped ${skippedDuplicates} duplicate email${skippedDuplicates === 1 ? "" : "s"} already in this list`);
+      }
 
       const existingList = lists.find((l) => l.id === selectedList);
       const existingCols: string[] = Array.isArray((existingList as any)?.columns) ? (existingList as any).columns : [];
