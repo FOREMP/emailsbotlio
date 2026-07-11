@@ -30,8 +30,10 @@ Deno.serve(async (req) => {
       .single()
     if (siteErr || !site) return json({ error: 'site not found' }, 404)
     const files = site.generated_files as Record<string, string> | null
-    const html = files?.['index.html']
-    if (!html) return json({ error: 'no generated_files.index.html — run generate first' }, 400)
+    if (!files || !files['index.html']) return json({ error: 'no generated_files.index.html — run generate first' }, 400)
+    const filesArray = Object.entries(files)
+      .filter(([, data]) => typeof data === 'string' && data.length > 0)
+      .map(([file, data]) => ({ file, data }))
 
     // Get contact for a nice project name
     const { data: contact } = await supabase
