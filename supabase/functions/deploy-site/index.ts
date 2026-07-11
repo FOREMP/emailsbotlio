@@ -87,6 +87,29 @@ Deno.serve(async (req) => {
     const url = deployData.url ? `https://${deployData.url}` : null
     const aliasUrl = deployData.alias?.[0] ? `https://${deployData.alias[0]}` : url
 
+    // Disable Vercel deployment protection (SSO/password) so the demo is publicly viewable.
+    // Safe to call every deploy — idempotent.
+    if (deployData.projectId) {
+      try {
+        const patchResp = await fetch(`https://api.vercel.com/v9/projects/${deployData.projectId}`, {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${vercelToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            ssoProtection: null,
+            passwordProtection: null,
+          }),
+        })
+        if (!patchResp.ok) {
+          console.warn('Could not disable protection:', patchResp.status, await patchResp.text())
+        }
+      } catch (e) {
+        console.warn('protection patch failed', e)
+      }
+    }
+
     await supabase.from('generated_sites').update({
       status: 'live',
       vercel_project_id: deployData.projectId ?? null,
