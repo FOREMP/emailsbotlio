@@ -40,22 +40,41 @@ Deno.serve(async (req) => {
     const fcKey = Deno.env.get('FIRECRAWL_API_KEY')
     if (!fcKey) return json({ error: 'FIRECRAWL_API_KEY missing' }, 500)
 
-    const fcResp = await fetch(`${FIRECRAWL_V2}/scrape`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url: site.source_url,
-        formats: ['markdown', 'links', 'branding', 'summary'],
-        onlyMainContent: true,
-      }),
-    })
-    const fcData = await fcResp.json()
-    if (!fcResp.ok) {
+    // Try several URL variants — many small business sites 400 on the wrong host/scheme
+    const candidates = buildUrlCandidates(site.source_url)
+    let fcResp: Response | null = null
+    let fcData: any = null
+    let usedUrl = site.source_url
+    const attempts: { url: string; status: number; title?: string }[] = []
+
+    for (const candidate of candidates) {
+      const r = await fetch(`${FIRECRAWL_V2}/scrape`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: candidate,
+          formats: ['markdown', 'links', 'branding', 'summary'],
+          onlyMainContent: true,
+        }),
+      })
+      const d = await r.json()
+      const payloadPeek = d?.data ?? d
+      const sc: number | undefined = payloadPeek?.metadata?.statusCode ?? payloadPeek?.metadata?.status_code
+      const title: string = payloadPeek?.metadata?.title ?? ''
+      attempts.push({ url: candidate, status: sc ?? r.status, title: title.slice(0, 60) })
+      if (r.ok && (!sc || sc < 400)) {
+        fcResp = r; fcData = d; usedUrl = candidate
+        break
+      }
+      fcResp = r; fcData = d; usedUrl = candidate
+    }
+
+    if (!fcResp!.ok) {
       await supabase.from('generated_sites').update({
         status: 'failed',
-        error_message: `Scrape failed (${fcResp.status}): ${JSON.stringify(fcData).slice(0, 400)}`,
+        error_message: `Scrape failed on all URL variants. Attempts: ${JSON.stringify(attempts).slice(0, 400)}`,
       }).eq('id', generated_site_id)
-      return json({ error: 'scrape failed', details: fcData }, fcResp.status)
+      return json({ error: 'scrape failed', attempts, details: fcData }, fcResp!.status)
     }
 
     const payload = fcData.data ?? fcData
