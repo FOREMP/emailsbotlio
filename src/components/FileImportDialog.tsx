@@ -51,6 +51,9 @@ const EMAIL_PATTERNS = ["email", "e-mail", "email_address", "emailaddress", "mai
 const PHONE_PATTERNS = ["phone", "phone_number", "phonenumber", "tel", "telephone", "mobile", "cell"];
 const FIRST_NAME_PATTERNS = ["first_name", "firstname", "first name", "fname", "given_name"];
 const LAST_NAME_PATTERNS = ["last_name", "lastname", "last name", "lname", "surname", "family_name"];
+const WEBSITE_PATTERNS = ["website", "web site", "url", "homepage", "home_page", "site", "domain", "hemsida", "webbsida", "webbplats", "web"];
+/** Permanent custom variable key for a lead's website. Used by templates as {{website}} and by the site auditor. */
+export const WEBSITE_KEY = "website";
 
 type ColumnMapping = {
   // Standard fields, "skip", "custom" (new variable name = column header), or "reuse:<existing_key>"
@@ -96,6 +99,9 @@ function autoDetectMapping(headers: string[], existingColumns: string[] = []): C
     } else if (!assigned.has("last_name") && LAST_NAME_PATTERNS.includes(lower)) {
       mapping[headers[i]] = "last_name";
       assigned.add("last_name");
+    } else if (!assigned.has("website") && WEBSITE_PATTERNS.includes(lower)) {
+      mapping[headers[i]] = "website";
+      assigned.add("website");
     } else {
       // Try to match an existing custom column by name (case-insensitive)
       const matchIdx = existingLower.indexOf(lower);
@@ -221,7 +227,7 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
   const updateMapping = (header: string, value: string) => {
     setMapping((prev) => {
       const next = { ...prev };
-      const uniqueRoles = ["email", "phone", "first_name", "last_name"];
+      const uniqueRoles = ["email", "phone", "first_name", "last_name", "website"];
       if (uniqueRoles.includes(value)) {
         for (const key of Object.keys(next)) {
           if (next[key] === value) next[key] = "custom";
@@ -242,10 +248,11 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
 
   const hasEmail = Object.values(mapping).includes("email");
 
-  /** Resolved variable key for a given header (only meaningful for custom/reuse). */
+  /** Resolved variable key for a given header (only meaningful for custom/reuse/website). */
   const resolveKey = (header: string): string | null => {
     const m = mapping[header];
     if (m === "custom") return customNames[header] || sanitizeVarKey(header);
+    if (m === "website") return WEBSITE_KEY;
     if (typeof m === "string" && m.startsWith("reuse:")) return m.slice("reuse:".length);
     return null;
   };
@@ -280,6 +287,8 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
         if (role === "custom") {
           const key = customNames[header] || sanitizeVarKey(header);
           if (row[header]) contact.custom_fields[key] = row[header];
+        } else if (role === "website") {
+          if (row[header]) contact.custom_fields[WEBSITE_KEY] = row[header];
         } else if (typeof role === "string" && role.startsWith("reuse:")) {
           const key = role.slice("reuse:".length);
           if (row[header]) contact.custom_fields[key] = row[header];
@@ -412,7 +421,7 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
                         const next = { ...prev };
                         for (const h of parsed.headers) {
                           const role = next[h];
-                          if (role !== "email" && role !== "phone" && role !== "first_name" && role !== "last_name") {
+                          if (role !== "email" && role !== "phone" && role !== "first_name" && role !== "last_name" && role !== "website") {
                             next[h] = "skip";
                           }
                         }
@@ -478,6 +487,7 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
                           <SelectItem value="phone">📱 Phone</SelectItem>
                           <SelectItem value="first_name">👤 First Name</SelectItem>
                           <SelectItem value="last_name">👤 Last Name</SelectItem>
+                          <SelectItem value="website">🌐 Website (permanent variable)</SelectItem>
                           <SelectItem value="custom">🏷️ New custom variable</SelectItem>
                           {existingColumns.map((col) => (
                             <SelectItem key={col} value={`reuse:${col}`}>♻️ Reuse: {col}</SelectItem>
@@ -500,6 +510,9 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
                       )}
                       {isReuse && (
                         <Badge variant="outline" className="text-xs font-mono">→ {`{{${reusedKey}}}`}</Badge>
+                      )}
+                      {m === "website" && (
+                        <Badge variant="secondary" className="text-xs font-mono">{`{{${WEBSITE_KEY}}}`}</Badge>
                       )}
                       <Button
                         type="button"
