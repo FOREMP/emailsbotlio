@@ -51,6 +51,9 @@ const EMAIL_PATTERNS = ["email", "e-mail", "email_address", "emailaddress", "mai
 const PHONE_PATTERNS = ["phone", "phone_number", "phonenumber", "tel", "telephone", "mobile", "cell"];
 const FIRST_NAME_PATTERNS = ["first_name", "firstname", "first name", "fname", "given_name"];
 const LAST_NAME_PATTERNS = ["last_name", "lastname", "last name", "lname", "surname", "family_name"];
+const WEBSITE_PATTERNS = ["website", "web site", "url", "homepage", "home_page", "site", "domain", "hemsida", "webbsida", "webbplats", "web"];
+/** Permanent custom variable key for a lead's website. Used by templates as {{website}} and by the site auditor. */
+export const WEBSITE_KEY = "website";
 
 type ColumnMapping = {
   // Standard fields, "skip", "custom" (new variable name = column header), or "reuse:<existing_key>"
