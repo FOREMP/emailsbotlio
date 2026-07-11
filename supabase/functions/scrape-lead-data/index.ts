@@ -40,22 +40,41 @@ Deno.serve(async (req) => {
     const fcKey = Deno.env.get('FIRECRAWL_API_KEY')
     if (!fcKey) return json({ error: 'FIRECRAWL_API_KEY missing' }, 500)
 
-    const fcResp = await fetch(`${FIRECRAWL_V2}/scrape`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url: site.source_url,
-        formats: ['markdown', 'links', 'branding', 'summary'],
-        onlyMainContent: true,
-      }),
-    })
-    const fcData = await fcResp.json()
-    if (!fcResp.ok) {
+    // Try several URL variants — many small business sites 400 on the wrong host/scheme
+    const candidates = buildUrlCandidates(site.source_url)
+    let fcResp: Response | null = null
+    let fcData: any = null
+    let usedUrl = site.source_url
+    const attempts: { url: string; status: number; title?: string }[] = []
+
+    for (const candidate of candidates) {
+      const r = await fetch(`${FIRECRAWL_V2}/scrape`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: candidate,
+          formats: ['markdown', 'links', 'branding', 'summary'],
+          onlyMainContent: true,
+        }),
+      })
+      const d = await r.json()
+      const payloadPeek = d?.data ?? d
+      const sc: number | undefined = payloadPeek?.metadata?.statusCode ?? payloadPeek?.metadata?.status_code
+      const title: string = payloadPeek?.metadata?.title ?? ''
+      attempts.push({ url: candidate, status: sc ?? r.status, title: title.slice(0, 60) })
+      if (r.ok && (!sc || sc < 400)) {
+        fcResp = r; fcData = d; usedUrl = candidate
+        break
+      }
+      fcResp = r; fcData = d; usedUrl = candidate
+    }
+
+    if (!fcResp!.ok) {
       await supabase.from('generated_sites').update({
         status: 'failed',
-        error_message: `Scrape failed (${fcResp.status}): ${JSON.stringify(fcData).slice(0, 400)}`,
+        error_message: `Scrape failed on all URL variants. Attempts: ${JSON.stringify(attempts).slice(0, 400)}`,
       }).eq('id', generated_site_id)
-      return json({ error: 'scrape failed', details: fcData }, fcResp.status)
+      return json({ error: 'scrape failed', attempts, details: fcData }, fcResp!.status)
     }
 
     const payload = fcData.data ?? fcData
@@ -73,14 +92,14 @@ Deno.serve(async (req) => {
 
     if (looksLikeErrorPage || tooShort) {
       const reason = looksLikeErrorPage
-        ? `Source site returned an error page (title: "${title.slice(0, 80)}"${statusCode ? `, status ${statusCode}` : ''}). Cannot generate — fix source_url or skip this lead.`
+        ? `Source site returned an error page on all variants (tried: ${attempts.map(a => `${a.url}→${a.status}`).join(', ')}). Fix source_url or skip this lead.`
         : `Source site returned too little content (${markdown.trim().length} chars). Cannot generate a meaningful demo.`
       await supabase.from('generated_sites').update({
         status: 'failed',
         error_message: reason,
-        scraped_content: { title, statusCode, markdown_preview: markdown.slice(0, 500), scraped_at: new Date().toISOString() },
+        scraped_content: { title, statusCode, markdown_preview: markdown.slice(0, 500), scraped_at: new Date().toISOString(), attempts },
       }).eq('id', generated_site_id)
-      return json({ error: reason }, 422)
+      return json({ error: reason, attempts }, 422)
     }
 
     const scraped = {
@@ -91,6 +110,7 @@ Deno.serve(async (req) => {
       links: (payload.links ?? []).slice(0, 100),
       branding: payload.branding ?? null,
       images: extractImages(payload),
+      source_url_used: usedUrl,
       scraped_at: new Date().toISOString(),
     }
 
@@ -105,6 +125,22 @@ Deno.serve(async (req) => {
     return json({ error: (err as Error).message }, 500)
   }
 })
+
+function buildUrlCandidates(raw: string): string[] {
+  const cleaned = raw.trim().replace(/\/+$/, '')
+  let host = cleaned.replace(/^https?:\/\//i, '').replace(/\/.*$/, '')
+  if (!host) return [cleaned]
+  const bare = host.replace(/^www\./i, '')
+  const withWww = `www.${bare}`
+  const out = new Set<string>()
+  // Prefer original first
+  out.add(cleaned.startsWith('http') ? cleaned : `https://${bare}`)
+  out.add(`https://${bare}`)
+  out.add(`https://${withWww}`)
+  out.add(`http://${bare}`)
+  out.add(`http://${withWww}`)
+  return Array.from(out)
+}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
