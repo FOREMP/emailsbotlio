@@ -64,9 +64,7 @@ Deno.serve(async (req) => {
         name: projectName,
         project: projectName,
         target: 'production',
-        files: [
-          { file: 'index.html', data: html },
-        ],
+        files: filesArray,
         projectSettings: {
           framework: null,
           buildCommand: null,
