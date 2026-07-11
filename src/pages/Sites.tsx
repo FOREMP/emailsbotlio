@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2, Sparkles, Search, ExternalLink, RefreshCw, Plus } from "lucide-react";
+import { Loader2, Sparkles, Search, ExternalLink, RefreshCw, Plus, Wand2, Rocket } from "lucide-react";
 import { toast } from "sonner";
 
 type SiteRow = {
@@ -103,7 +103,7 @@ const Sites = () => {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const runStep = async (siteId: string, step: "audit-site" | "scrape-lead-data") => {
+  const runStep = async (siteId: string, step: "audit-site" | "scrape-lead-data" | "generate-site" | "deploy-site") => {
     setBusyId(siteId);
     try {
       const { data, error } = await supabase.functions.invoke(step, {
@@ -235,6 +235,15 @@ const Sites = () => {
                           <Sparkles className="h-3 w-3" />
                           <span className="ml-1">Scrape</span>
                         </Button>
+                        <Button size="sm" variant="ghost" disabled={busyId === s.id || !["scraped","generated","failed"].includes(s.status)} onClick={() => runStep(s.id, "generate-site")}>
+                          <Wand2 className="h-3 w-3" />
+                          <span className="ml-1">Generate</span>
+                        </Button>
+                        <Button size="sm" variant="ghost" disabled={busyId === s.id || !["generated","live","failed"].includes(s.status)} onClick={() => runStep(s.id, "deploy-site")}>
+                          <Rocket className="h-3 w-3" />
+                          <span className="ml-1">Deploy</span>
+                        </Button>
+
                       </TableCell>
                     </TableRow>
                   ))}
