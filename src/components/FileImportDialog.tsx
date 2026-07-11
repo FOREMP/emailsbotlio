@@ -248,10 +248,11 @@ export default function FileImportDialog({ open, onOpenChange, onImport, importi
 
   const hasEmail = Object.values(mapping).includes("email");
 
-  /** Resolved variable key for a given header (only meaningful for custom/reuse). */
+  /** Resolved variable key for a given header (only meaningful for custom/reuse/website). */
   const resolveKey = (header: string): string | null => {
     const m = mapping[header];
     if (m === "custom") return customNames[header] || sanitizeVarKey(header);
+    if (m === "website") return WEBSITE_KEY;
     if (typeof m === "string" && m.startsWith("reuse:")) return m.slice("reuse:".length);
     return null;
   };
