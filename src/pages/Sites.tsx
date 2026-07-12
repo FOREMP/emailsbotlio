@@ -48,6 +48,10 @@ const Sites = () => {
   const qc = useQueryClient();
   const [selectedList, setSelectedList] = useState<string>("");
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [extraFor, setExtraFor] = useState<SiteRow | null>(null);
+  const [extraMaps, setExtraMaps] = useState("");
+  const [extraImagesText, setExtraImagesText] = useState("");
+  const [savingExtra, setSavingExtra] = useState(false);
 
   const { data: sites = [], isLoading } = useQuery({
     queryKey: ["generated_sites"],
