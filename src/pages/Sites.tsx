@@ -128,6 +128,47 @@ const Sites = () => {
     }
   };
 
+  const openExtra = async (site: SiteRow) => {
+    try {
+      const { data, error } = await supabase
+        .from("contacts")
+        .select("custom_fields")
+        .eq("id", site.contact_id)
+        .single();
+      if (error) throw error;
+      const cf = (data?.custom_fields ?? {}) as Record<string, unknown>;
+      setExtraMaps(typeof cf.google_maps_url === "string" ? cf.google_maps_url : "");
+      setExtraImagesText(Array.isArray(cf.extra_images) ? (cf.extra_images as string[]).join("\n") : "");
+      setExtraFor(site);
+    } catch (e) {
+      toast.error(`Could not load contact: ${(e as Error).message}`);
+    }
+  };
+
+  const saveExtra = async () => {
+    if (!extraFor) return;
+    setSavingExtra(true);
+    try {
+      const { data: cur } = await supabase
+        .from("contacts")
+        .select("custom_fields")
+        .eq("id", extraFor.contact_id)
+        .single();
+      const cf = { ...((cur?.custom_fields ?? {}) as Record<string, unknown>) };
+      const images = extraImagesText.split(/\s+/).map((s) => s.trim()).filter((s) => /^https?:\/\//i.test(s));
+      if (extraMaps.trim()) cf.google_maps_url = extraMaps.trim(); else delete cf.google_maps_url;
+      if (images.length) cf.extra_images = images; else delete cf.extra_images;
+      const { error } = await supabase.from("contacts").update({ custom_fields: cf }).eq("id", extraFor.contact_id);
+      if (error) throw error;
+      toast.success(`Saved ${images.length} extra image(s)${extraMaps.trim() ? " + Maps link" : ""}`);
+      setExtraFor(null);
+    } catch (e) {
+      toast.error(`Save failed: ${(e as Error).message}`);
+    } finally {
+      setSavingExtra(false);
+    }
+  };
+
   const stats = {
     total: sites.length,
     live: sites.filter((s) => s.status === "live").length,
