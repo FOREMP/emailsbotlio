@@ -1,9 +1,10 @@
-// Scrapes a lead's existing site with Firecrawl. Strategy:
-// 1. Find the working root URL (try https/http × www variants).
+// Scrapes a lead's existing site with Firecrawl.
+// 1. Find working root URL (https/http × www variants).
 // 2. Map the site to discover subpages.
-// 3. Pick ONLY the home page + best "om oss" + best "tjänster" page (sv+en aliases).
-// 4. Scrape each of those pages individually and store them under scraped_content.pages.
-// Fails fast if the root page looks like an HTTP error or is nearly empty.
+// 3. Pick best "om oss" + best "tjänster" page from prioritized slug lists (sv + en).
+// 4. Scrape home + about + services individually.
+// 5. Capture a screenshot of the home page (design inspo for the generator).
+// 6. Persist full branding palette + fonts.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const corsHeaders = {
@@ -13,9 +14,24 @@ const corsHeaders = {
 
 const FIRECRAWL_V2 = 'https://api.firecrawl.dev/v2'
 
-interface ScrapeRequest {
-  generated_site_id: string
-}
+// Ordered slug fallback lists. First hit wins.
+const ABOUT_SLUGS = [
+  'om-oss', 'omoss', 'om_oss', 'om',
+  'om-foretaget', 'omforetaget', 'foretaget', 'foretag',
+  'historia', 'var-historia', 'vilka-vi-ar', 'vilka-ar-vi',
+  'info', 'information', 'kontakt-info',
+  'about', 'about-us', 'aboutus', 'company', 'who-we-are', 'our-story', 'story',
+]
+const SERVICES_SLUGS = [
+  'tjanster', 'tjänster', 'vara-tjanster', 'våra-tjänster', 'vara_tjanster',
+  'service', 'services', 'servicetjanster',
+  'verkstad', 'verkstadstjanster', 'bilservice',
+  'reparation', 'reparationer', 'bilreparation',
+  'erbjudanden', 'sortiment', 'produkter',
+  'vad-vi-gor', 'what-we-do', 'offerings', 'solutions',
+]
+
+interface ScrapeRequest { generated_site_id: string }
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
@@ -42,14 +58,14 @@ Deno.serve(async (req) => {
     const fcKey = Deno.env.get('FIRECRAWL_API_KEY')
     if (!fcKey) return json({ error: 'FIRECRAWL_API_KEY missing' }, 500)
 
-    // ---- 1. Find a working root URL by scraping variants ----
+    // ---- 1. Find a working root URL by scraping variants (with screenshot) ----
     const candidates = buildUrlCandidates(site.source_url)
     const attempts: { url: string; status: number; title?: string }[] = []
     let rootScrape: any = null
     let usedUrl = site.source_url
 
     for (const candidate of candidates) {
-      const { data, status, title } = await scrapeOne(candidate, fcKey)
+      const { data, status, title } = await scrapeOne(candidate, fcKey, true)
       attempts.push({ url: candidate, status, title: (title || '').slice(0, 60) })
       const badTitle = /(400|401|403|404|500|502|503|504)\s*(bad request|unauthorized|forbidden|not found|error|gateway|unavailable)|access denied|cloudflare|attention required/i
       const looksBad = (status && status >= 400) || badTitle.test(title || '')
@@ -80,31 +96,24 @@ Deno.serve(async (req) => {
       allLinks = (mapJson?.links ?? mapJson?.data?.links ?? []).map((l: any) => typeof l === 'string' ? l : l?.url).filter(Boolean)
     } catch (_) { /* map is best-effort */ }
 
-    // Fallback: use links from root page if map returned nothing
     if (allLinks.length === 0 && Array.isArray(rootScrape.links)) {
       allLinks = rootScrape.links
     }
 
-    // ---- 3. Pick best about + services page ----
-    const aboutUrl = pickBestUrl(allLinks, usedUrl, [
-      /\/(om[-_ ]?oss|om[-_ ]?foretaget|about|about[-_ ]?us|company|foretaget)(\/|$|\.)/i,
-      /\/(om|about)(\/|$|\.)/i,
-    ])
-    const servicesUrl = pickBestUrl(allLinks, usedUrl, [
-      /\/(tjanster|tjänster|vara[-_ ]?tjanster|våra[-_ ]?tjänster|services|service|verkstad|erbjudanden|behandlingar)(\/|$|\.)/i,
-      /\/(services|service|tjanster|tjänster)(\/|$|\.)/i,
-    ])
+    // ---- 3. Pick best about + services via ordered slug lists ----
+    const aboutUrl = pickBySlugList(allLinks, usedUrl, ABOUT_SLUGS)
+    const servicesUrl = pickBySlugList(allLinks, usedUrl, SERVICES_SLUGS)
 
     // ---- 4. Scrape about + services individually ----
     const pages: Record<string, any> = {
       home: normalizePage(rootScrape, usedUrl),
     }
     if (aboutUrl && aboutUrl !== usedUrl) {
-      const r = await scrapeOne(aboutUrl, fcKey)
+      const r = await scrapeOne(aboutUrl, fcKey, false)
       if (r.data && (r.data.markdown || '').trim().length > 150) pages.about = normalizePage(r.data, aboutUrl)
     }
     if (servicesUrl && servicesUrl !== usedUrl && servicesUrl !== aboutUrl) {
-      const r = await scrapeOne(servicesUrl, fcKey)
+      const r = await scrapeOne(servicesUrl, fcKey, false)
       if (r.data && (r.data.markdown || '').trim().length > 150) pages.services = normalizePage(r.data, servicesUrl)
     }
 
@@ -112,15 +121,21 @@ Deno.serve(async (req) => {
     const allImages = new Set<string>()
     Object.values(pages).forEach((p: any) => (p.images || []).forEach((i: string) => allImages.add(i)))
 
+    // Screenshot URL — Firecrawl returns it under payload.screenshot (or in metadata)
+    const screenshotUrl: string | null = rootScrape.screenshot
+      ?? rootScrape.metadata?.screenshot
+      ?? null
+
     const scraped = {
       title: rootScrape.metadata?.title ?? '',
       description: rootScrape.metadata?.description ?? '',
       summary: rootScrape.summary ?? '',
       branding: rootScrape.branding ?? null,
+      screenshot_url: screenshotUrl,
       source_url_used: usedUrl,
       discovered_about_url: aboutUrl,
       discovered_services_url: servicesUrl,
-      pages,                              // { home, about?, services? } each with { url, title, markdown, images }
+      pages,
       images: Array.from(allImages).slice(0, 20),
       scraped_at: new Date().toISOString(),
     }
@@ -135,6 +150,8 @@ Deno.serve(async (req) => {
       pages_scraped: Object.keys(pages),
       about_url: aboutUrl,
       services_url: servicesUrl,
+      screenshot: !!screenshotUrl,
+      branding_colors: !!(rootScrape.branding?.colors),
       total_chars: Object.values(pages).reduce((sum: number, p: any) => sum + (p.markdown?.length || 0), 0),
     })
   } catch (err) {
@@ -143,16 +160,14 @@ Deno.serve(async (req) => {
   }
 })
 
-async function scrapeOne(url: string, fcKey: string): Promise<{ data: any | null; status: number; title: string }> {
+async function scrapeOne(url: string, fcKey: string, includeScreenshot: boolean): Promise<{ data: any | null; status: number; title: string }> {
   try {
+    const formats: any[] = ['markdown', 'links', 'branding', 'summary']
+    if (includeScreenshot) formats.push({ type: 'screenshot', fullPage: false })
     const r = await fetch(`${FIRECRAWL_V2}/scrape`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url,
-        formats: ['markdown', 'links', 'branding', 'summary'],
-        onlyMainContent: true,
-      }),
+      body: JSON.stringify({ url, formats, onlyMainContent: true }),
     })
     const j = await r.json()
     const payload = j?.data ?? j
@@ -186,19 +201,25 @@ function normalizePage(payload: any, url: string) {
   }
 }
 
-function pickBestUrl(links: string[], rootUrl: string, patterns: RegExp[]): string | null {
+function pickBySlugList(links: string[], rootUrl: string, slugs: string[]): string | null {
   if (!links.length) return null
   let rootHost = ''
   try { rootHost = new URL(rootUrl).hostname.replace(/^www\./, '') } catch (_) { /* ignore */ }
   const sameDomain = links.filter((l) => {
     try { return new URL(l).hostname.replace(/^www\./, '') === rootHost } catch (_) { return false }
   })
-  for (const pat of patterns) {
-    const hit = sameDomain.find((l) => pat.test(l))
+  for (const slug of slugs) {
+    // Match /slug, /slug/, /slug.html at end of path
+    const pat = new RegExp(`/${escapeRegex(slug)}(/|$|\\.html?$)`, 'i')
+    const hit = sameDomain.find((l) => {
+      try { return pat.test(new URL(l).pathname) } catch (_) { return false }
+    })
     if (hit) return hit
   }
   return null
 }
+
+function escapeRegex(s: string) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') }
 
 function buildUrlCandidates(raw: string): string[] {
   const cleaned = raw.trim().replace(/\/+$/, '')

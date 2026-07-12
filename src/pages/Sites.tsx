@@ -7,7 +7,11 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2, Sparkles, Search, ExternalLink, RefreshCw, Plus, Wand2, Rocket } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Loader2, Sparkles, Search, ExternalLink, RefreshCw, Plus, Wand2, Rocket, Info } from "lucide-react";
 import { toast } from "sonner";
 
 type SiteRow = {
@@ -44,6 +48,10 @@ const Sites = () => {
   const qc = useQueryClient();
   const [selectedList, setSelectedList] = useState<string>("");
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [extraFor, setExtraFor] = useState<SiteRow | null>(null);
+  const [extraMaps, setExtraMaps] = useState("");
+  const [extraImagesText, setExtraImagesText] = useState("");
+  const [savingExtra, setSavingExtra] = useState(false);
 
   const { data: sites = [], isLoading } = useQuery({
     queryKey: ["generated_sites"],
@@ -117,6 +125,47 @@ const Sites = () => {
       toast.error(`${step} failed: ${(e as Error).message}`);
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const openExtra = async (site: SiteRow) => {
+    try {
+      const { data, error } = await supabase
+        .from("contacts")
+        .select("custom_fields")
+        .eq("id", site.contact_id)
+        .single();
+      if (error) throw error;
+      const cf = (data?.custom_fields ?? {}) as Record<string, unknown>;
+      setExtraMaps(typeof cf.google_maps_url === "string" ? cf.google_maps_url : "");
+      setExtraImagesText(Array.isArray(cf.extra_images) ? (cf.extra_images as string[]).join("\n") : "");
+      setExtraFor(site);
+    } catch (e) {
+      toast.error(`Could not load contact: ${(e as Error).message}`);
+    }
+  };
+
+  const saveExtra = async () => {
+    if (!extraFor) return;
+    setSavingExtra(true);
+    try {
+      const { data: cur } = await supabase
+        .from("contacts")
+        .select("custom_fields")
+        .eq("id", extraFor.contact_id)
+        .single();
+      const cf = { ...((cur?.custom_fields ?? {}) as Record<string, unknown>) };
+      const images = extraImagesText.split(/\s+/).map((s) => s.trim()).filter((s) => /^https?:\/\//i.test(s));
+      if (extraMaps.trim()) cf.google_maps_url = extraMaps.trim(); else delete cf.google_maps_url;
+      if (images.length) cf.extra_images = images; else delete cf.extra_images;
+      const { error } = await supabase.from("contacts").update({ custom_fields: cf as any }).eq("id", extraFor.contact_id);
+      if (error) throw error;
+      toast.success(`Saved ${images.length} extra image(s)${extraMaps.trim() ? " + Maps link" : ""}`);
+      setExtraFor(null);
+    } catch (e) {
+      toast.error(`Save failed: ${(e as Error).message}`);
+    } finally {
+      setSavingExtra(false);
     }
   };
 
@@ -243,7 +292,10 @@ const Sites = () => {
                           <Rocket className="h-3 w-3" />
                           <span className="ml-1">Deploy</span>
                         </Button>
-
+                        <Button size="sm" variant="ghost" onClick={() => openExtra(s)} title="Add Google Maps link + extra images">
+                          <Info className="h-3 w-3" />
+                          <span className="ml-1">Extra</span>
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -253,6 +305,48 @@ const Sites = () => {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={!!extraFor} onOpenChange={(o) => !o && setExtraFor(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Extra info for {extraFor?.contacts?.email}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="maps">Google Maps embed URL</Label>
+              <Input
+                id="maps"
+                placeholder="https://www.google.com/maps/embed?pb=..."
+                value={extraMaps}
+                onChange={(e) => setExtraMaps(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Öppna Google Maps → Dela → Bädda in en karta → kopiera src-URL:en (den som börjar med maps/embed).
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="imgs">Extra bild-URLer (en per rad)</Label>
+              <Textarea
+                id="imgs"
+                rows={6}
+                placeholder="https://example.com/photo1.jpg&#10;https://example.com/photo2.jpg"
+                value={extraImagesText}
+                onChange={(e) => setExtraImagesText(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Bilder från Google Maps, gamla hemsidan eller egna foton. Dessa prioriteras före Unsplash i genereringen.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setExtraFor(null)}>Avbryt</Button>
+            <Button onClick={saveExtra} disabled={savingExtra}>
+              {savingExtra && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Spara
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

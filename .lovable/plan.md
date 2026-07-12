@@ -1,43 +1,86 @@
+## Del 1 – Audit (idag + de senaste 3 dagarna)
 
-## Plan: städa upp + aktivera för imorgon
+**Sends (0 fails — allt går igenom):**
 
-### 1. Fixa import-dedupen (`src/pages/Contacts.tsx`)
-- Normalisera email: trim, ta bort `%20`-prefix, lowercase — **spara normaliserat värde i DB**, inte råvärdet.
-- Splitta celler med `,` eller `;` till separata kontakter.
-- Skippa rader helt utan email (**inte** spara som junk).
-- Validera format (måste matcha `x@y.z`) — annars räknas som "invalid".
-- Byt case-sensitive `.in("email", chunk)` → hämta alla befintliga emails i listan en gång, jämför i JS-Set med lowercase.
-- Toast: `Imported X · Y duplicates · Z invalid · W without email`.
 
-### 2. SQL-städning av Agency London 2 (migration)
-- Radera **992 rader utan email**.
-- Trimma + lowercase alla emails i listan.
-- Radera dubletter (behåll äldsta `created_at` per email).
-- Radera rader vars email finns i `suppressed_emails` eller `do_not_contact` för din user.
-- Förväntat resultat: **~690 rena kontakter** kvar.
+| Datum                | Agency outreach | Bil handlare London | Totalt | Opens    |
+| -------------------- | --------------- | ------------------- | ------ | -------- |
+| 11 jul (idag, pågår) | 27              | 32                  | 59     | 28 (47%) |
+| 10 jul               | 98              | 98                  | 196    | 70 (36%) |
+| 9 jul                | 60              | 57                  | 117    | 42 (36%) |
 
-### 3. Auto-enrolla nya kontakter i "Agency outreach"
-Direkt i samma migration, insert av `enrollments` för alla kontakter i listan som:
-- inte redan är enrollade i sekvensen
-- inte finns i `sent_emails` (cross-sequence-dedupe, samma regel som edge-funktionen)
-- inte finns i DNC/suppressed
 
-Enrollment sätts på entry-noden (`63beb24f-...`, schedule) med `status='active'` och `next_send_at=now()` — samma fält som `enroll-contacts`-funktionen använder. Efter migration är sekvensen "redo för imorgon" utan att du behöver klicka något.
+Öppningsfrekvensen är stark (36–47%), särskilt idag. Ingen bounce/fail-våg — botlio-inboxarna beter sig som de ska.
 
-### 4. Runway-uppskattning
-Din nuvarande aktiva kapacitet: **10 inboxes, ~216 sends/dag** (8×25 + 2×8).
+**Enrollments kvar:**
 
-Sekvensen har **2 emails** (initial + follow-up), så varje kontakt kostar ~2 sends totalt.
+- **Agency outreach:** 307 aktiva (776 klara, 9 unsub)
+- **Bil handlare London:** 352 aktiva (400 klara, 2 unsub)
 
-| Nytt i listan efter städning | ~600 fräscha kontakter (efter DNC/redan-mailade-skip) |
-|---|---|
-| Totalt sends att skicka | ~1 200 (600 × 2) |
-| Vid full kapacitet 216/dag | **~5–6 dagar** |
-| Vid realistiskt utnyttjande ~150/dag (schedule-nod gating, helger) | **~8 dagar** |
+**Runway per lista (baseline ~50 sends/dag/sequence):**
 
-Follow-up:en skickas efter den `wait`-nod-fördröjning sekvensen har konfigurerad, så andra vågen börjar hamna i kö några dagar efter första vågen — sammanlagt ~1,5–2 veckors körning innan listan är helt tömd.
+- Agency London 2 (691 med email): ~6 dagar tills alla aktiva enrollments är genom första + follow-up
+- Bilhandlare London 1 (755 med email): ~7 dagar
+- Bil firmor LA (230 med email): reserv, inte startad
+- Agencys 1 (374 med email): reserv, inte startad
 
-### Ingen ny sekvens-logik ändras
-Endast import-flödet och engångsstädning + engångsenrollment. Send-loopen, sender-rotation och follow-up-timing rörs inte.
+Slutsats: allt rullar rent, inga fel att åtgärda. Vi har ~1 vecka innan vi behöver fylla på med nästa lista.
 
-Godkänn så kör jag alla tre stegen i samma sväng.
+---
+
+## Del 2 – Site generator: nästa våg av förbättringar
+
+### A. Färger från Firecrawl branding
+
+`scrape-lead-data` frågar redan efter `branding`, men `generate-site` använder bara `primary`/`accent`. Utöka så vi tar med hela paletten (background, textPrimary, textSecondary, buttonPrimary) och fonts (`branding.fonts[].family`) från Firecrawl in i prompten. Om branding saknas → fall tillbaka på nuvarande mörk premium-default.
+
+### B. Skärmdump som design-inspo
+
+Idag använder vi bara markdown. Lägg till:
+
+1. `scrape-lead-data`: begär också `screenshot` i formats, spara base64 (eller URL) i `scraped_content.screenshot`.
+2. `generate-site`: skicka skärmdumpen som en `image_url`-del i user-meddelandet till Claude (OpenRouter stödjer multimodal på Sonnet 4.5). Prompt-instruktion: "Använd skärmdumpen ENDAST som stil-inspo (färgkänsla, luftighet, ton) — kopiera inte layout eller texter."
+
+### C. Smartare sub-page discovery
+
+Nu matchar vi bara `omoss`/`tjanster`. Utöka `pickBestUrl`-mönstren till ordnade fallback-listor:
+
+**About-slugs (i prioriteringsordning):**
+`om-oss`, `omoss`, `om`, `foretaget`, `foretag`, `om-foretaget`, `historia`, `info`, `information`, `vilka-vi-ar`, `vilka-ar-vi`, `about`, `about-us`, `company`, `who-we-are`
+
+**Services-slugs:**
+`tjanster`, `vara-tjanster`, `service`, `services`, `verkstad`, `verkstadstjanster`, `reparation`, `reparationer`, `bilservice`, `erbjudanden`, `sortiment`, `vad-vi-gor`, `what-we-do`, `offerings`
+
+Loopa listan tills första träff. Även: kolla nav-länkarnas ankartext i `rootScrape.links` för att hitta "Om oss"-länkar som ligger på weird slugs (t.ex. `/page-42`).
+
+### D. Extra web-research för mer info och bilder
+
+&nbsp;
+
+1. **Bilder utöver Unsplash:**
+  - Behåll `branding.images` (logo, favicon, og-image) från Firecrawl som vi redan får.
+  - Plocka riktiga bilder från `pages.home/about/services.images` som är hostade på deras egen domän — dessa är alltid autentiska av företaget.
+  - Manuell overrides: lägg ett `custom_fields.extra_images` fält på contact (array av URLs) så du kan klistra in Google Maps-bilder, gamla hemsidebilder osv. `generate-site` prioriterar dessa före Unsplash.
+2. E. Prompt-uppdatering i `generate-site`
+
+- Ta emot: full branding-palett, fonts, screenshot (som image content-part), extra_images-URLs, maps-url, kund-citat.
+- Regel: använd deras riktiga färger som primär palett om `branding.colors` finns, annars mörk default.
+- Regel: använd deras riktiga fonts från Firecrawl om vi hittar dem, annars Space Grotesk + Inter.
+- Skärmdumpen är stil-referens, inte layout-kopia.
+- Fortsatt: aldrig hitta på fakta.
+
+---
+
+## Teknisk sammanfattning (för dig som utvecklare)
+
+**Filer som ändras:**
+
+- `supabase/functions/scrape-lead-data/index.ts` — utöka slug-listor, lägg till `screenshot` i formats, lägg till valfri Firecrawl `search`-fas, spara branding-full palett + fonts.
+- `supabase/functions/generate-site/index.ts` — läs full branding, skicka screenshot som multimodal part till OpenRouter (`content: [{type:'text',...},{type:'image_url', image_url:{url}}]`), inkludera extra_images/maps_url/citat i prompten, mappa deras färger till CSS-variabler.
+- `src/pages/Sites.tsx` — ny liten "Extra info"-dialog per lead med fält för `google_maps_url` och `extra_images[]` (sparas i contactens custom_fields).
+
+**Ingen DB-migration behövs** — allt går i befintliga `custom_fields` (jsonb) och `generated_sites.scraped_content` (jsonb).
+
+**Kostnadsnot:** Firecrawl search + screenshot-scrape drar ~2–3 extra credits per lead. OpenRouter multimodal på Sonnet 4.5 kostar lite mer per generering (bilden räknas som ~1000 tokens).
+
+Godkänn så bygger jag i denna ordning: (1) slug-fallbacks + screenshot-capture, (2) branding-färger i generatorn, (3) multimodal prompt med screenshot, (4) Maps + extra bilder UI, (5) Firecrawl search för recensioner.
