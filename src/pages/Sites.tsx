@@ -292,7 +292,10 @@ const Sites = () => {
                           <Rocket className="h-3 w-3" />
                           <span className="ml-1">Deploy</span>
                         </Button>
-
+                        <Button size="sm" variant="ghost" onClick={() => openExtra(s)} title="Add Google Maps link + extra images">
+                          <Info className="h-3 w-3" />
+                          <span className="ml-1">Extra</span>
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -302,6 +305,48 @@ const Sites = () => {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={!!extraFor} onOpenChange={(o) => !o && setExtraFor(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Extra info for {extraFor?.contacts?.email}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="maps">Google Maps embed URL</Label>
+              <Input
+                id="maps"
+                placeholder="https://www.google.com/maps/embed?pb=..."
+                value={extraMaps}
+                onChange={(e) => setExtraMaps(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Öppna Google Maps → Dela → Bädda in en karta → kopiera src-URL:en (den som börjar med maps/embed).
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="imgs">Extra bild-URLer (en per rad)</Label>
+              <Textarea
+                id="imgs"
+                rows={6}
+                placeholder="https://example.com/photo1.jpg&#10;https://example.com/photo2.jpg"
+                value={extraImagesText}
+                onChange={(e) => setExtraImagesText(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Bilder från Google Maps, gamla hemsidan eller egna foton. Dessa prioriteras före Unsplash i genereringen.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setExtraFor(null)}>Avbryt</Button>
+            <Button onClick={saveExtra} disabled={savingExtra}>
+              {savingExtra && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Spara
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
