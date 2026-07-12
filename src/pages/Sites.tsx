@@ -158,7 +158,7 @@ const Sites = () => {
       const images = extraImagesText.split(/\s+/).map((s) => s.trim()).filter((s) => /^https?:\/\//i.test(s));
       if (extraMaps.trim()) cf.google_maps_url = extraMaps.trim(); else delete cf.google_maps_url;
       if (images.length) cf.extra_images = images; else delete cf.extra_images;
-      const { error } = await supabase.from("contacts").update({ custom_fields: cf }).eq("id", extraFor.contact_id);
+      const { error } = await supabase.from("contacts").update({ custom_fields: cf as any }).eq("id", extraFor.contact_id);
       if (error) throw error;
       toast.success(`Saved ${images.length} extra image(s)${extraMaps.trim() ? " + Maps link" : ""}`);
       setExtraFor(null);
