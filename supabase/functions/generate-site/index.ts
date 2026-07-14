@@ -4,6 +4,7 @@
 // from Firecrawl branding when available. Prioritizes real lead images
 // (custom_fields.extra_images + scraped page images) over Unsplash.
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { buildLibraryPrompt } from './templates.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -107,7 +108,23 @@ Deno.serve(async (req) => {
 
     const screenshotUrl: string | null = scraped.screenshot_url ?? null
 
+    const sectionLibrary = buildLibraryPrompt()
+
     const systemPrompt = `Du är en senior art director och webbutvecklare för premium svenska bilverkstadssajter. Du levererar en KOMPLETT MULTI-PAGE-sajt: 3 separata HTML-filer som länkar via en delad sticky top-nav.
+
+SEKTIONSBIBLIOTEK — KRITISKT:
+Du får ett bibliotek med handkodade premium-sektioner nedan. **Använd dessa som byggblock — hitta INTE på egna layouts från noll.** Välj 5–7 sektioner per sida som passar denna verkstad, remixa dem så här:
+- Byt ut {{PLACEHOLDERS}} mot kundens riktiga innehåll (namn, telefon, tjänster, etc)
+- Byt ut {{IMAGE_N}} mot riktiga URLer från bild-poolen
+- Behåll CSS-variabel-strukturen (var(--primary) etc) — de mappas till kundens riktiga färger
+- Behåll layouten och styling — ändra bara innehållet
+- Använd ALDRIG samma sektion två gånger på samma sida
+- Hem: 5–7 sektioner (nav → hero → trust/stats → services → process → gallery/about → cta → contact → footer)
+- Om-oss: 4–5 sektioner (nav → page_header → about_split → values → cta → footer)
+- Tjänster: 5–6 sektioner (nav → page_header → services (detailed eller bento) → process → faq → cta → footer)
+
+CSS-VARIABLER som ska defineras i <head> på VARJE sida (:root):
+--primary, --secondary, --accent, --bg, --surface, --text, --text-muted, --font-display, --font-body
 
 RETURFORMAT — kritiskt:
 Svara med ETT giltigt JSON-objekt (och inget annat, ingen markdown-inramning):
@@ -176,7 +193,11 @@ Om telefonen finns → alla "Ring oss"-knappar ska vara <a href="tel:NUMMER">. O
 Ingen förklaring före eller efter JSON-objektet.`
 
     const userTextParts = [
-      'Bygg 3-sidig premium-sajt för denna bilverkstad.',
+      'Bygg 3-sidig premium-sajt för denna bilverkstad genom att välja och remixa sektioner från biblioteket nedan.',
+      '',
+      '===== SEKTIONSBIBLIOTEK (använd som byggblock — hitta ej på egna layouts) =====',
+      sectionLibrary,
+      '===== SLUT SEKTIONSBIBLIOTEK =====',
       '',
       'FAKTA (endast detta — hitta aldrig på siffror, adresser eller årtal):',
       JSON.stringify(facts, null, 2),

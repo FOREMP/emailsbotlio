@@ -1,86 +1,68 @@
-## Del 1 – Audit (idag + de senaste 3 dagarna)
+## Mål
 
-**Sends (0 fails — allt går igenom):**
+Höja kvaliteten på genererade sajter dramatiskt genom att ge Claude Sonnet 4.5 ett bibliotek av handplockade premium-sektioner att remixa — istället för att låta den improvisera från noll varje gång.
 
+## Så funkar det
 
-| Datum                | Agency outreach | Bil handlare London | Totalt | Opens    |
-| -------------------- | --------------- | ------------------- | ------ | -------- |
-| 11 jul (idag, pågår) | 27              | 32                  | 59     | 28 (47%) |
-| 10 jul               | 98              | 98                  | 196    | 70 (36%) |
-| 9 jul                | 60              | 57                  | 117    | 42 (36%) |
+Vi bygger en katalog med 8–12 premium HTML-sektioner (hero, tjänste-grid, process, galleri, CTA-band, kontakt, footer, om-oss-hero, service-detalj, FAQ, testimonial-block, trust-strip). Varje sektion är:
 
+- Ren HTML + inline CSS, ingen JS
+- Använder CSS-variabler för färger (`var(--primary)` etc) så vi kan swap:a in kundens branding
+- Bild-URLer är `{{IMAGE_1}}`-tokens som ersätts vid generering
+- Text-innehåll är korta lorem-liknande placeholders — Claude skriver om med kundens riktiga innehåll
 
-Öppningsfrekvensen är stark (36–47%), särskilt idag. Ingen bounce/fail-våg — botlio-inboxarna beter sig som de ska.
+Claude får hela biblioteket i prompten + instruktion: "Välj 5–7 sektioner per sida som passar denna verkstad. Remixa dem, byt inte layout. Fyll med kundens riktiga inneåll. Byt CSS-variabler till deras färger."
 
-**Enrollments kvar:**
+## Filer som ändras
 
-- **Agency outreach:** 307 aktiva (776 klara, 9 unsub)
-- **Bil handlare London:** 352 aktiva (400 klara, 2 unsub)
+**Nytt:** `supabase/functions/generate-site/templates.ts`
 
-**Runway per lista (baseline ~50 sends/dag/sequence):**
+Exporterar `SECTION_LIBRARY` som record: `{ hero_fullbleed: {name, description, html}, hero_split: {...}, services_grid_3col: {...}, ... }`. Varje sektion är 60–150 rader polerad HTML/CSS baserad på award-winning verkstads/service-sajter (asymmetriska layouts, generös whitespace, dramatiska hovers, layered depth). Jag skriver dessa själv i handkodad premium-kvalitet.
 
-- Agency London 2 (691 med email): ~6 dagar tills alla aktiva enrollments är genom första + follow-up
-- Bilhandlare London 1 (755 med email): ~7 dagar
-- Bil firmor LA (230 med email): reserv, inte startad
-- Agencys 1 (374 med email): reserv, inte startad
+**Uppdateras:** `supabase/functions/generate-site/index.ts`
 
-Slutsats: allt rullar rent, inga fel att åtgärda. Vi har ~1 vecka innan vi behöver fylla på med nästa lista.
+- Importera `SECTION_LIBRARY`
+- Ny system-prompt-sektion: "SEKTIONSBIBLIOTEK — välj och remixa från dessa, hitta inte på egna layouts från noll"
+- Skicka hela biblioteket som JSON i user-content
+- Instruera: hem = 5–7 sektioner, om-oss = 4–5, tjänster = 5–6, aldrig samma sektion två gånger på samma sida
+- Behåll all befintlig logik: branding-färger via CSS-variabler, screenshot som stil-inspo, bild-pool, sticky nav, aldrig hitta på fakta
 
----
+## Sektionsbiblioteket — konkret innehåll
 
-## Del 2 – Site generator: nästa våg av förbättringar
+**Heros (3):** full-bleed image + gradient overlay + stor typografi | split 60/40 med bild höger | video-feel med parallax-känsla via CSS
 
-### A. Färger från Firecrawl branding
+**Trust/social proof (2):** logotyp-strip av bilmärken | statistik-band (år i branschen, antal servicear, etc — bara om vi har fakta)
 
-`scrape-lead-data` frågar redan efter `branding`, men `generate-site` använder bara `primary`/`accent`. Utöka så vi tar med hela paletten (background, textPrimary, textSecondary, buttonPrimary) och fonts (`branding.fonts[].family`) från Firecrawl in i prompten. Om branding saknas → fall tillbaka på nuvarande mörk premium-default.
+**Tjänster (3):** 3-kol kort med ikoner | asymmetriskt bento-grid | lista med thumbnails vänster
 
-### B. Skärmdump som design-inspo
+**Process (1):** 4-stegs horisontell tidslinje med numrerade steg
 
-Idag använder vi bara markdown. Lägg till:
+**Galleri (2):** masonry 3-kol | full-bredd carousel-liknande grid
 
-1. `scrape-lead-data`: begär också `screenshot` i formats, spara base64 (eller URL) i `scraped_content.screenshot`.
-2. `generate-site`: skicka skärmdumpen som en `image_url`-del i user-meddelandet till Claude (OpenRouter stödjer multimodal på Sonnet 4.5). Prompt-instruktion: "Använd skärmdumpen ENDAST som stil-inspo (färgkänsla, luftighet, ton) — kopiera inte layout eller texter."
+**Om-oss (2):** stor bild vänster + text höger med värderingar | citat-block med bakgrundsbild
 
-### C. Smartare sub-page discovery
+**Kontakt (2):** split med Maps-embed höger | centrerad med telefon/adress-kort
 
-Nu matchar vi bara `omoss`/`tjanster`. Utöka `pickBestUrl`-mönstren till ordnade fallback-listor:
+**CTA-band (1):** full-bredd med bakgrundsbild + gradient + stor knapp
 
-**About-slugs (i prioriteringsordning):**
-`om-oss`, `omoss`, `om`, `foretaget`, `foretag`, `om-foretaget`, `historia`, `info`, `information`, `vilka-vi-ar`, `vilka-ar-vi`, `about`, `about-us`, `company`, `who-we-are`
+**Footer (1):** 3-kol med länkar + kontakt + copyright
 
-**Services-slugs:**
-`tjanster`, `vara-tjanster`, `service`, `services`, `verkstad`, `verkstadstjanster`, `reparation`, `reparationer`, `bilservice`, `erbjudanden`, `sortiment`, `vad-vi-gor`, `what-we-do`, `offerings`
+Totalt: 17 sektioner, ~1500 rader HTML — får plats i Claude's kontext (~8k tokens av bibliotek + resten till kundens data).
 
-Loopa listan tills första träff. Även: kolla nav-länkarnas ankartext i `rootScrape.links` för att hitta "Om oss"-länkar som ligger på weird slugs (t.ex. `/page-42`).
+## Vad detta ger
 
-### D. Extra web-research för mer info och bilder
+- Genererade sajter ser ut som "riktiga" premium-sajter, inte som AI-skräp
+- Konsekvent kvalitet — även om Claude har en dålig dag kan den inte generera fula sektioner
+- Variation mellan sajter genom att Claude väljer olika kombinationer per lead
+- Kundens riktiga färger appliceras automatiskt via CSS-variabler
+- Ingen extra kostnad per generering (bara lite fler tokens i prompten)
 
-&nbsp;
+## Vad detta INTE fixar
 
-1. **Bilder utöver Unsplash:**
-  - Behåll `branding.images` (logo, favicon, og-image) från Firecrawl som vi redan får.
-  - Plocka riktiga bilder från `pages.home/about/services.images` som är hostade på deras egen domän — dessa är alltid autentiska av företaget.
-  - Manuell overrides: lägg ett `custom_fields.extra_images` fält på contact (array av URLs) så du kan klistra in Google Maps-bilder, gamla hemsidebilder osv. `generate-site` prioriterar dessa före Unsplash.
-2. E. Prompt-uppdatering i `generate-site`
+- Om Firecrawl skrapar tunt innehåll → sajten blir fortfarande tom (samma problem som nu)
+- Om vi inte har riktiga bilder → Unsplash-fallback ser fortfarande generisk ut
+- Detta löser design-kvaliteten, inte innehålls-kvaliteten
 
-- Ta emot: full branding-palett, fonts, screenshot (som image content-part), extra_images-URLs, maps-url, kund-citat.
-- Regel: använd deras riktiga färger som primär palett om `branding.colors` finns, annars mörk default.
-- Regel: använd deras riktiga fonts från Firecrawl om vi hittar dem, annars Space Grotesk + Inter.
-- Skärmdumpen är stil-referens, inte layout-kopia.
-- Fortsatt: aldrig hitta på fakta.
+## Efter godkännande
 
----
-
-## Teknisk sammanfattning (för dig som utvecklare)
-
-**Filer som ändras:**
-
-- `supabase/functions/scrape-lead-data/index.ts` — utöka slug-listor, lägg till `screenshot` i formats, lägg till valfri Firecrawl `search`-fas, spara branding-full palett + fonts.
-- `supabase/functions/generate-site/index.ts` — läs full branding, skicka screenshot som multimodal part till OpenRouter (`content: [{type:'text',...},{type:'image_url', image_url:{url}}]`), inkludera extra_images/maps_url/citat i prompten, mappa deras färger till CSS-variabler.
-- `src/pages/Sites.tsx` — ny liten "Extra info"-dialog per lead med fält för `google_maps_url` och `extra_images[]` (sparas i contactens custom_fields).
-
-**Ingen DB-migration behövs** — allt går i befintliga `custom_fields` (jsonb) och `generated_sites.scraped_content` (jsonb).
-
-**Kostnadsnot:** Firecrawl search + screenshot-scrape drar ~2–3 extra credits per lead. OpenRouter multimodal på Sonnet 4.5 kostar lite mer per generering (bilden räknas som ~1000 tokens).
-
-Godkänn så bygger jag i denna ordning: (1) slug-fallbacks + screenshot-capture, (2) branding-färger i generatorn, (3) multimodal prompt med screenshot, (4) Maps + extra bilder UI, (5) Firecrawl search för recensioner.
+Jag bygger templates.ts, uppdaterar generate-site, deployar, och du testar Generate på en befintlig lead. Om du vill fler/färre sektionstyper efter första testet är det trivialt att lägga till.
