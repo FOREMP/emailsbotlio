@@ -193,7 +193,11 @@ Om telefonen finns → alla "Ring oss"-knappar ska vara <a href="tel:NUMMER">. O
 Ingen förklaring före eller efter JSON-objektet.`
 
     const userTextParts = [
-      'Bygg 3-sidig premium-sajt för denna bilverkstad.',
+      'Bygg 3-sidig premium-sajt för denna bilverkstad genom att välja och remixa sektioner från biblioteket nedan.',
+      '',
+      '===== SEKTIONSBIBLIOTEK (använd som byggblock — hitta ej på egna layouts) =====',
+      sectionLibrary,
+      '===== SLUT SEKTIONSBIBLIOTEK =====',
       '',
       'FAKTA (endast detta — hitta aldrig på siffror, adresser eller årtal):',
       JSON.stringify(facts, null, 2),
