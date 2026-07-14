@@ -238,9 +238,15 @@ Ingen förklaring före eller efter JSON-objektet.`
     // Run the long AI call in the background so we don't hold the request
     // open (avoids WORKER_RESOURCE_LIMIT / 546). Client polls generated_sites.status.
     const runGeneration = async () => {
+      // Hard 120s timeout — if OpenRouter hangs, we still write a failure
+      // instead of leaving the row stuck in "generating" forever after the
+      // edge worker gets killed by the platform.
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 120_000)
       try {
         const aiResp = await fetch(OPENROUTER_URL, {
           method: 'POST',
+          signal: controller.signal,
           headers: {
             Authorization: `Bearer ${openrouterKey}`,
             'Content-Type': 'application/json',
@@ -254,10 +260,14 @@ Ingen förklaring före eller efter JSON-objektet.`
               { role: 'user', content: userContent },
             ],
             temperature: 0.6,
-            max_tokens: 16000,
+            // 10k is plenty for 3 HTML pages (~3-4k tokens each) and cuts
+            // generation time roughly in half vs 16k, keeping us safely
+            // under the edge worker's wall-clock budget.
+            max_tokens: 10000,
             response_format: { type: 'json_object' },
           }),
         })
+        clearTimeout(timeoutId)
 
         if (!aiResp.ok) {
           const errText = await aiResp.text()
@@ -267,6 +277,7 @@ Ingen förklaring före eller efter JSON-objektet.`
           }).eq('id', generated_site_id)
           return
         }
+
 
         const aiData = await aiResp.json()
         const raw: string = aiData.choices?.[0]?.message?.content ?? ''
@@ -302,13 +313,18 @@ Ingen förklaring före eller efter JSON-objektet.`
           generated_files: files,
         }).eq('id', generated_site_id)
       } catch (err) {
+        clearTimeout(timeoutId)
+        const msg = (err as Error).name === 'AbortError'
+          ? 'Timed out after 120s — model took too long. Retry.'
+          : `Background error: ${(err as Error).message}`
         console.error('background generate error', err)
         await supabase.from('generated_sites').update({
           status: 'failed',
-          error_message: `Background error: ${(err as Error).message}`,
+          error_message: msg,
         }).eq('id', generated_site_id)
       }
     }
+
 
     // @ts-ignore EdgeRuntime is available in Supabase Edge Functions
     EdgeRuntime.waitUntil(runGeneration())

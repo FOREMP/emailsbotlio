@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
@@ -27,8 +27,10 @@ type SiteRow = {
   error_message: string | null;
   click_count: number;
   created_at: string;
+  updated_at?: string;
   contacts?: { first_name: string | null; last_name: string | null; email: string | null };
 };
+
 
 const statusColor: Record<string, string> = {
   pending: "bg-muted text-muted-foreground",
@@ -64,7 +66,41 @@ const Sites = () => {
       if (error) throw error;
       return (data ?? []) as unknown as SiteRow[];
     },
+    // Auto-refresh every 8s if anything is mid-flight, so the UI doesn't lie
+    refetchInterval: (q) => {
+      const rows = (q.state.data as SiteRow[] | undefined) ?? [];
+      const inFlight = rows.some((r) =>
+        ["auditing", "scraping", "generating", "deploying"].includes(r.status),
+      );
+      return inFlight ? 8000 : false;
+    },
   });
+
+  // Watchdog: any row stuck in "generating"/"deploying" for >4 min = worker died.
+  // Mark it failed so the user can retry instead of staring at a fake spinner.
+  useEffect(() => {
+    if (!sites.length) return;
+    const stuck = sites.filter((s) => {
+      if (!["generating", "deploying"].includes(s.status)) return false;
+      const stamp = s.updated_at ?? s.created_at;
+      const ageMs = Date.now() - new Date(stamp).getTime();
+      return ageMs > 4 * 60 * 1000;
+
+    });
+    if (!stuck.length) return;
+    (async () => {
+      const ids = stuck.map((s) => s.id);
+      await supabase
+        .from("generated_sites")
+        .update({
+          status: "failed",
+          error_message: "Timed out — background worker died. Click Generate to retry.",
+        })
+        .in("id", ids);
+      qc.invalidateQueries({ queryKey: ["generated_sites"] });
+    })();
+  }, [sites, qc]);
+
 
   const { data: lists = [] } = useQuery({
     queryKey: ["contact_lists_for_sites"],
