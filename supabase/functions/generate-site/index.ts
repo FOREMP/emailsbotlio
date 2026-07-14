@@ -12,7 +12,10 @@ const corsHeaders = {
 }
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
-const MODEL = 'anthropic/claude-sonnet-4.5'
+// DeepSeek V3.1 via OpenRouter — very cheap (~$0.27/1M input, $1.10/1M output),
+// strong at HTML/JSON, 128k context. Roughly 20-30x cheaper than Claude Sonnet 4.5,
+// so a full generation costs ~$0.02-0.03 instead of ~$0.50.
+const MODEL = 'deepseek/deepseek-chat-v3.1'
 const CURRENT_YEAR = new Date().getFullYear()
 
 interface Req { generated_site_id: string; model?: string }
