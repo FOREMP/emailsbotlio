@@ -126,8 +126,6 @@ Du får ett bibliotek med handkodade premium-sektioner nedan. **Använd dessa so
 CSS-VARIABLER som ska defineras i <head> på VARJE sida (:root):
 --primary, --secondary, --accent, --bg, --surface, --text, --text-muted, --font-display, --font-body
 
-`
-
 RETURFORMAT — kritiskt:
 Svara med ETT giltigt JSON-objekt (och inget annat, ingen markdown-inramning):
 {
