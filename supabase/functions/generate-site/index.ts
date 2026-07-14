@@ -80,7 +80,7 @@ Deno.serve(async (req) => {
     const googleMapsUrl: string | null = typeof cf.google_maps_url === 'string' ? cf.google_maps_url : null
 
     // Real images from the lead's own site (their domain)
-    const scrapedImages: string[] = Array.isArray(scraped.images) ? scraped.images.slice(0, 12) : []
+    const scrapedImages: string[] = Array.isArray(scraped.images) ? scraped.images.slice(0, 8) : []
 
     const facts = {
       business_name: (cf.company ?? contact?.company ?? pages.home?.title ?? scraped.title ?? '').toString().trim() || null,
@@ -104,7 +104,7 @@ Deno.serve(async (req) => {
       'https://images.unsplash.com/photo-1493031440916-e69b7a91be16?w=1200&q=80',
       'https://images.unsplash.com/photo-1552930294-3af53b58f61c?w=1200&q=80',
     ]
-    const imagePool = [...extraImages, ...scrapedImages, ...unsplashPool].slice(0, 14)
+    const imagePool = [...extraImages, ...scrapedImages, ...unsplashPool].slice(0, 10)
 
     const screenshotUrl: string | null = scraped.screenshot_url ?? null
 
@@ -209,17 +209,17 @@ Ingen förklaring före eller efter JSON-objektet.`
       `Titel: ${pages.home?.title || scraped.title || ''}`,
       `Beskrivning: ${pages.home?.description || scraped.description || ''}`,
       `Sammanfattning: ${pages.home?.summary || scraped.summary || ''}`,
-      'Markdown (första 4000 tecken):',
-      (pages.home?.markdown || homeMd).slice(0, 4000),
+      'Markdown (första 2500 tecken):',
+      (pages.home?.markdown || homeMd).slice(0, 2500),
       '',
       `--- KÄLLDATA: OM-OSS-SIDAN ${pages.about ? `(${pages.about.url})` : '(hittades ej — härled från hem)'} ---`,
       pages.about
-        ? `Titel: ${pages.about.title}\nMarkdown (första 4000 tecken):\n${pages.about.markdown.slice(0, 4000)}`
+        ? `Titel: ${pages.about.title}\nMarkdown (första 2200 tecken):\n${pages.about.markdown.slice(0, 2200)}`
         : '[Ingen separat about-sida. Använd HEM-sidans markdown för kort företagsbeskrivning. Inga påhittade fakta.]',
       '',
       `--- KÄLLDATA: TJÄNSTER-SIDAN ${pages.services ? `(${pages.services.url})` : '(hittades ej — härled från hem)'} ---`,
       pages.services
-        ? `Titel: ${pages.services.title}\nMarkdown (första 5000 tecken):\n${pages.services.markdown.slice(0, 5000)}`
+        ? `Titel: ${pages.services.title}\nMarkdown (första 3000 tecken):\n${pages.services.markdown.slice(0, 3000)}`
         : '[Ingen separat tjänster-sida. Extrahera tjänster från HEM-sidans markdown. Om oklart, använd branschstandard-tjänster utan påhittade priser.]',
       '',
       screenshotUrl
@@ -260,9 +260,10 @@ Ingen förklaring före eller efter JSON-objektet.`
               { role: 'user', content: userContent },
             ],
             temperature: 0.6,
-            // 3 HTML pages @ ~4-5k tokens each + JSON overhead needs headroom;
-            // 10k truncated mid-JSON. 14k fits comfortably within the 120s budget.
-            max_tokens: 14000,
+            // 3 complete HTML pages inside JSON need lots of output headroom.
+            // Input is now compacted above, so 20k prevents mid-JSON truncation
+            // while still keeping source/context tokens lower than before.
+            max_tokens: 20000,
             response_format: { type: 'json_object' },
           }),
         })

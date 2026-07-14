@@ -418,9 +418,35 @@ MAPS_EMBED: <iframe src="URL" style="width:100%;height:100%;border:0;min-height:
   },
 }
 
+const GENERATION_TEMPLATE_IDS = [
+  'nav_sticky',
+  'hero_fullbleed',
+  'page_header',
+  'services_grid_3col',
+  'services_bento',
+  'process_timeline',
+  'gallery_masonry',
+  'about_split',
+  'values_grid',
+  'faq_accordion',
+  'cta_band',
+  'contact_split',
+  'contact_centered',
+  'footer',
+] as const
+
+function compactTemplateHtml(html: string): string {
+  return html
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/>\s+</g, '><')
+    .trim()
+}
+
 export function buildLibraryPrompt(): string {
-  const entries = Object.entries(SECTION_LIBRARY).map(([id, s]) => {
-    return `### ${id}\n**${s.name}** — ${s.description}\nPasses för: ${s.slots.join(', ')}\n\n\`\`\`html\n${s.html}\n\`\`\``
+  const entries = GENERATION_TEMPLATE_IDS.map((id) => {
+    const s = SECTION_LIBRARY[id]
+    return `### ${id}\n${s.name} — ${s.description}\nPassar: ${s.slots.join(', ')}\n\`\`\`html\n${compactTemplateHtml(s.html)}\n\`\`\``
   })
-  return entries.join('\n\n---\n\n')
+  return entries.join('\n---\n')
 }
