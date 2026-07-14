@@ -12,7 +12,10 @@ const corsHeaders = {
 }
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
-const MODEL = 'anthropic/claude-sonnet-4.5'
+// DeepSeek V3.1 via OpenRouter — very cheap (~$0.27/1M input, $1.10/1M output),
+// strong at HTML/JSON, 128k context. Roughly 20-30x cheaper than Claude Sonnet 4.5,
+// so a full generation costs ~$0.02-0.03 instead of ~$0.50.
+const MODEL = 'deepseek/deepseek-chat-v3.1'
 const CURRENT_YEAR = new Date().getFullYear()
 
 interface Req { generated_site_id: string; model?: string }
@@ -229,9 +232,12 @@ Ingen förklaring före eller efter JSON-objektet.`
       'Returnera BARA JSON-objektet med de 3 HTML-filerna.',
     ].join('\n')
 
-    // Build multimodal content parts
+    // Multimodal content — only include the screenshot on models that support vision.
+    // DeepSeek V3.1 is text-only; sending an image_url would 400.
+    const chosenModel = model || MODEL
+    const supportsVision = /claude|gpt-4|gpt-5|gemini|llama-.*vision|qwen.*vl/i.test(chosenModel)
     const userContent: any[] = [{ type: 'text', text: userTextParts }]
-    if (screenshotUrl) {
+    if (screenshotUrl && supportsVision) {
       userContent.push({ type: 'image_url', image_url: { url: screenshotUrl } })
     }
 
@@ -254,7 +260,7 @@ Ingen förklaring före eller efter JSON-objektet.`
             'X-Title': 'Botlio Site Generator',
           },
           body: JSON.stringify({
-            model: model || MODEL,
+            model: chosenModel,
             messages: [
               { role: 'system', content: systemPrompt },
               { role: 'user', content: userContent },
@@ -333,7 +339,7 @@ Ingen förklaring före eller efter JSON-objektet.`
       ok: true,
       status: 'generating',
       message: 'Generation started in background. Poll generated_sites.status.',
-      model: model || MODEL,
+      model: chosenModel,
     })
   } catch (err) {
     console.error('generate-site error', err)

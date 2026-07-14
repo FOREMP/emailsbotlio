@@ -1,0 +1,1 @@
+UPDATE public.generated_sites SET status='failed', error_message='Reset — retry with cheaper model (DeepSeek V3.1)' WHERE id='9b6ef73c-a919-4dc3-ad08-804ce89247c5';
