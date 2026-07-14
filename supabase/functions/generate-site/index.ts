@@ -241,111 +241,90 @@ Ingen förklaring före eller efter JSON-objektet.`
       userContent.push({ type: 'image_url', image_url: { url: screenshotUrl } })
     }
 
-    // Run the long AI call in the background so we don't hold the request
-    // open (avoids WORKER_RESOURCE_LIMIT / 546). Client polls generated_sites.status.
-    const runGeneration = async () => {
-      // Hard 120s timeout — if OpenRouter hangs, we still write a failure
-      // instead of leaving the row stuck in "generating" forever after the
-      // edge worker gets killed by the platform.
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 120_000)
-      try {
-        const aiResp = await fetch(OPENROUTER_URL, {
-          method: 'POST',
-          signal: controller.signal,
-          headers: {
-            Authorization: `Bearer ${openrouterKey}`,
-            'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://emailsbotlio.lovable.app',
-            'X-Title': 'Botlio Site Generator',
-          },
-          body: JSON.stringify({
-            model: chosenModel,
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: userContent },
-            ],
-            temperature: 0.6,
-            // 3 complete HTML pages inside JSON need lots of output headroom.
-            // Input is now compacted above, so 20k prevents mid-JSON truncation
-            // while still keeping source/context tokens lower than before.
-            max_tokens: 20000,
-            response_format: { type: 'json_object' },
-          }),
-        })
-        clearTimeout(timeoutId)
+    // Run SYNCHRONOUSLY. EdgeRuntime.waitUntil() does NOT reliably keep the
+    // worker alive after the HTTP response returns — the platform recycles the
+    // isolate and silently kills the fetch, leaving rows stuck in "generating"
+    // until the client watchdog fires. DeepSeek V3.1 responds in ~30–60s which
+    // fits well inside the request window, so we just await it and let the
+    // client's supabase.functions.invoke() call hold the connection open.
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 110_000)
+    try {
+      const aiResp = await fetch(OPENROUTER_URL, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          Authorization: `Bearer ${openrouterKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://emailsbotlio.lovable.app',
+          'X-Title': 'Botlio Site Generator',
+        },
+        body: JSON.stringify({
+          model: chosenModel,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userContent },
+          ],
+          temperature: 0.6,
+          max_tokens: 20000,
+          response_format: { type: 'json_object' },
+        }),
+      })
+      clearTimeout(timeoutId)
 
-        if (!aiResp.ok) {
-          const errText = await aiResp.text()
-          await supabase.from('generated_sites').update({
-            status: 'failed',
-            error_message: `OpenRouter failed (${aiResp.status}): ${errText.slice(0, 400)}`,
-          }).eq('id', generated_site_id)
-          return
-        }
-
-
-        const aiData = await aiResp.json()
-        const raw: string = aiData.choices?.[0]?.message?.content ?? ''
-        const cleaned = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```\s*$/i, '').trim()
-
-        let parsed: Record<string, string> | null = null
-        try { parsed = JSON.parse(cleaned) } catch (_) { parsed = null }
-
-        if (!parsed || parsed.error || !parsed['index.html']) {
-          await supabase.from('generated_sites').update({
-            status: 'failed',
-            error_message: `AI returned invalid multi-page JSON. Preview: ${cleaned.slice(0, 400)}`,
-          }).eq('id', generated_site_id)
-          return
-        }
-
-        const files: Record<string, string> = {}
-        for (const key of ['index.html', 'om-oss.html', 'tjanster.html']) {
-          if (typeof parsed[key] === 'string' && parsed[key].toLowerCase().includes('<html')) {
-            files[key] = parsed[key]
-          }
-        }
-        if (!files['index.html']) {
-          await supabase.from('generated_sites').update({
-            status: 'failed',
-            error_message: 'AI output missing valid index.html',
-          }).eq('id', generated_site_id)
-          return
-        }
-
-        await supabase.from('generated_sites').update({
-          status: 'generated',
-          generated_files: files,
-        }).eq('id', generated_site_id)
-      } catch (err) {
-        clearTimeout(timeoutId)
-        const msg = (err as Error).name === 'AbortError'
-          ? 'Timed out after 120s — model took too long. Retry.'
-          : `Background error: ${(err as Error).message}`
-        console.error('background generate error', err)
-        await supabase.from('generated_sites').update({
-          status: 'failed',
-          error_message: msg,
-        }).eq('id', generated_site_id)
+      if (!aiResp.ok) {
+        const errText = await aiResp.text()
+        const msg = `OpenRouter failed (${aiResp.status}): ${errText.slice(0, 400)}`
+        await supabase.from('generated_sites').update({ status: 'failed', error_message: msg }).eq('id', generated_site_id)
+        return json({ error: msg }, 502)
       }
+
+      const aiData = await aiResp.json()
+      const raw: string = aiData.choices?.[0]?.message?.content ?? ''
+      const cleaned = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```\s*$/i, '').trim()
+
+      let parsed: Record<string, string> | null = null
+      try { parsed = JSON.parse(cleaned) } catch (_) { parsed = null }
+
+      if (!parsed || parsed.error || !parsed['index.html']) {
+        const msg = `AI returned invalid multi-page JSON. Preview: ${cleaned.slice(0, 400)}`
+        await supabase.from('generated_sites').update({ status: 'failed', error_message: msg }).eq('id', generated_site_id)
+        return json({ error: msg }, 422)
+      }
+
+      const files: Record<string, string> = {}
+      for (const key of ['index.html', 'om-oss.html', 'tjanster.html']) {
+        if (typeof parsed[key] === 'string' && parsed[key].toLowerCase().includes('<html')) {
+          files[key] = parsed[key]
+        }
+      }
+      if (!files['index.html']) {
+        const msg = 'AI output missing valid index.html'
+        await supabase.from('generated_sites').update({ status: 'failed', error_message: msg }).eq('id', generated_site_id)
+        return json({ error: msg }, 422)
+      }
+
+      await supabase.from('generated_sites').update({
+        status: 'generated',
+        generated_files: files,
+      }).eq('id', generated_site_id)
+
+      return json({ ok: true, status: 'generated', model: chosenModel })
+    } catch (err) {
+      clearTimeout(timeoutId)
+      const msg = (err as Error).name === 'AbortError'
+        ? 'Timed out after 110s — model took too long. Retry.'
+        : `Error: ${(err as Error).message}`
+      console.error('generate error', err)
+      await supabase.from('generated_sites').update({ status: 'failed', error_message: msg }).eq('id', generated_site_id)
+      return json({ error: msg }, 500)
     }
-
-
-    // @ts-ignore EdgeRuntime is available in Supabase Edge Functions
-    EdgeRuntime.waitUntil(runGeneration())
-
-    return json({
-      ok: true,
-      status: 'generating',
-      message: 'Generation started in background. Poll generated_sites.status.',
-      model: chosenModel,
-    })
   } catch (err) {
     console.error('generate-site error', err)
     return json({ error: (err as Error).message }, 500)
   }
 })
+
 
 
 function json(body: unknown, status = 200): Response {
