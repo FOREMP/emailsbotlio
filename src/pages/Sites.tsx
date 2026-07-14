@@ -27,8 +27,10 @@ type SiteRow = {
   error_message: string | null;
   click_count: number;
   created_at: string;
+  updated_at?: string;
   contacts?: { first_name: string | null; last_name: string | null; email: string | null };
 };
+
 
 const statusColor: Record<string, string> = {
   pending: "bg-muted text-muted-foreground",
