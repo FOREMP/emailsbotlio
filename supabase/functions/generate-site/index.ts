@@ -235,76 +235,88 @@ Ingen förklaring före eller efter JSON-objektet.`
       userContent.push({ type: 'image_url', image_url: { url: screenshotUrl } })
     }
 
-    const aiResp = await fetch(OPENROUTER_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${openrouterKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://emailsbotlio.lovable.app',
-        'X-Title': 'Botlio Site Generator',
-      },
-      body: JSON.stringify({
-        model: model || MODEL,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userContent },
-        ],
-        temperature: 0.6,
-        max_tokens: 32000,
-        response_format: { type: 'json_object' },
-      }),
-    })
+    // Run the long AI call in the background so we don't hold the request
+    // open (avoids WORKER_RESOURCE_LIMIT / 546). Client polls generated_sites.status.
+    const runGeneration = async () => {
+      try {
+        const aiResp = await fetch(OPENROUTER_URL, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${openrouterKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://emailsbotlio.lovable.app',
+            'X-Title': 'Botlio Site Generator',
+          },
+          body: JSON.stringify({
+            model: model || MODEL,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userContent },
+            ],
+            temperature: 0.6,
+            max_tokens: 16000,
+            response_format: { type: 'json_object' },
+          }),
+        })
 
-    if (!aiResp.ok) {
-      const errText = await aiResp.text()
-      await supabase.from('generated_sites').update({
-        status: 'failed',
-        error_message: `OpenRouter failed (${aiResp.status}): ${errText.slice(0, 400)}`,
-      }).eq('id', generated_site_id)
-      return json({ error: 'ai failed', details: errText }, aiResp.status)
-    }
+        if (!aiResp.ok) {
+          const errText = await aiResp.text()
+          await supabase.from('generated_sites').update({
+            status: 'failed',
+            error_message: `OpenRouter failed (${aiResp.status}): ${errText.slice(0, 400)}`,
+          }).eq('id', generated_site_id)
+          return
+        }
 
-    const aiData = await aiResp.json()
-    const raw: string = aiData.choices?.[0]?.message?.content ?? ''
-    const cleaned = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```\s*$/i, '').trim()
+        const aiData = await aiResp.json()
+        const raw: string = aiData.choices?.[0]?.message?.content ?? ''
+        const cleaned = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```\s*$/i, '').trim()
 
-    let parsed: Record<string, string> | null = null
-    try { parsed = JSON.parse(cleaned) } catch (_) { parsed = null }
+        let parsed: Record<string, string> | null = null
+        try { parsed = JSON.parse(cleaned) } catch (_) { parsed = null }
 
-    if (!parsed || parsed.error || !parsed['index.html']) {
-      await supabase.from('generated_sites').update({
-        status: 'failed',
-        error_message: `AI returned invalid multi-page JSON. Preview: ${cleaned.slice(0, 400)}`,
-      }).eq('id', generated_site_id)
-      return json({ error: 'invalid ai output', preview: cleaned.slice(0, 400) }, 422)
-    }
+        if (!parsed || parsed.error || !parsed['index.html']) {
+          await supabase.from('generated_sites').update({
+            status: 'failed',
+            error_message: `AI returned invalid multi-page JSON. Preview: ${cleaned.slice(0, 400)}`,
+          }).eq('id', generated_site_id)
+          return
+        }
 
-    const files: Record<string, string> = {}
-    for (const key of ['index.html', 'om-oss.html', 'tjanster.html']) {
-      if (typeof parsed[key] === 'string' && parsed[key].toLowerCase().includes('<html')) {
-        files[key] = parsed[key]
+        const files: Record<string, string> = {}
+        for (const key of ['index.html', 'om-oss.html', 'tjanster.html']) {
+          if (typeof parsed[key] === 'string' && parsed[key].toLowerCase().includes('<html')) {
+            files[key] = parsed[key]
+          }
+        }
+        if (!files['index.html']) {
+          await supabase.from('generated_sites').update({
+            status: 'failed',
+            error_message: 'AI output missing valid index.html',
+          }).eq('id', generated_site_id)
+          return
+        }
+
+        await supabase.from('generated_sites').update({
+          status: 'generated',
+          generated_files: files,
+        }).eq('id', generated_site_id)
+      } catch (err) {
+        console.error('background generate error', err)
+        await supabase.from('generated_sites').update({
+          status: 'failed',
+          error_message: `Background error: ${(err as Error).message}`,
+        }).eq('id', generated_site_id)
       }
     }
-    if (!files['index.html']) {
-      await supabase.from('generated_sites').update({
-        status: 'failed',
-        error_message: 'AI output missing valid index.html',
-      }).eq('id', generated_site_id)
-      return json({ error: 'no index.html in output' }, 422)
-    }
 
-    await supabase.from('generated_sites').update({
-      status: 'generated',
-      generated_files: files,
-    }).eq('id', generated_site_id)
+    // @ts-ignore EdgeRuntime is available in Supabase Edge Functions
+    EdgeRuntime.waitUntil(runGeneration())
 
     return json({
       ok: true,
-      files: Object.keys(files),
-      total_bytes: Object.values(files).reduce((s, h) => s + h.length, 0),
-      used_screenshot: !!screenshotUrl,
-      used_real_branding: hasRealBranding,
-      extra_images: extraImages.length,
+      status: 'generating',
+      message: 'Generation started in background. Poll generated_sites.status.',
       model: model || MODEL,
     })
   } catch (err) {
@@ -312,6 +324,7 @@ Ingen förklaring före eller efter JSON-objektet.`
     return json({ error: (err as Error).message }, 500)
   }
 })
+
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
