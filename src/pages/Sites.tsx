@@ -82,8 +82,10 @@ const Sites = () => {
     if (!sites.length) return;
     const stuck = sites.filter((s) => {
       if (!["generating", "deploying"].includes(s.status)) return false;
-      const ageMs = Date.now() - new Date(s.created_at).getTime();
+      const stamp = s.updated_at ?? s.created_at;
+      const ageMs = Date.now() - new Date(stamp).getTime();
       return ageMs > 4 * 60 * 1000;
+
     });
     if (!stuck.length) return;
     (async () => {
