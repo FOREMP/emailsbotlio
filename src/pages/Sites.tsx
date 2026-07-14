@@ -64,7 +64,39 @@ const Sites = () => {
       if (error) throw error;
       return (data ?? []) as unknown as SiteRow[];
     },
+    // Auto-refresh every 8s if anything is mid-flight, so the UI doesn't lie
+    refetchInterval: (q) => {
+      const rows = (q.state.data as SiteRow[] | undefined) ?? [];
+      const inFlight = rows.some((r) =>
+        ["auditing", "scraping", "generating", "deploying"].includes(r.status),
+      );
+      return inFlight ? 8000 : false;
+    },
   });
+
+  // Watchdog: any row stuck in "generating"/"deploying" for >4 min = worker died.
+  // Mark it failed so the user can retry instead of staring at a fake spinner.
+  useEffect(() => {
+    if (!sites.length) return;
+    const stuck = sites.filter((s) => {
+      if (!["generating", "deploying"].includes(s.status)) return false;
+      const ageMs = Date.now() - new Date(s.created_at).getTime();
+      return ageMs > 4 * 60 * 1000;
+    });
+    if (!stuck.length) return;
+    (async () => {
+      const ids = stuck.map((s) => s.id);
+      await supabase
+        .from("generated_sites")
+        .update({
+          status: "failed",
+          error_message: "Timed out — background worker died. Click Generate to retry.",
+        })
+        .in("id", ids);
+      qc.invalidateQueries({ queryKey: ["generated_sites"] });
+    })();
+  }, [sites, qc]);
+
 
   const { data: lists = [] } = useQuery({
     queryKey: ["contact_lists_for_sites"],
