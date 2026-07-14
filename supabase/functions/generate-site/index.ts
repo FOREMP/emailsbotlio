@@ -4,6 +4,7 @@
 // from Firecrawl branding when available. Prioritizes real lead images
 // (custom_fields.extra_images + scraped page images) over Unsplash.
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { buildLibraryPrompt } from './templates.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
