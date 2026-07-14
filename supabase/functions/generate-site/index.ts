@@ -260,7 +260,7 @@ Ingen förklaring före eller efter JSON-objektet.`
             'X-Title': 'Botlio Site Generator',
           },
           body: JSON.stringify({
-            model: model || MODEL,
+            model: chosenModel,
             messages: [
               { role: 'system', content: systemPrompt },
               { role: 'user', content: userContent },
