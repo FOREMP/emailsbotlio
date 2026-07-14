@@ -260,10 +260,9 @@ Ingen förklaring före eller efter JSON-objektet.`
               { role: 'user', content: userContent },
             ],
             temperature: 0.6,
-            // 10k is plenty for 3 HTML pages (~3-4k tokens each) and cuts
-            // generation time roughly in half vs 16k, keeping us safely
-            // under the edge worker's wall-clock budget.
-            max_tokens: 10000,
+            // 3 HTML pages @ ~4-5k tokens each + JSON overhead needs headroom;
+            // 10k truncated mid-JSON. 14k fits comfortably within the 120s budget.
+            max_tokens: 14000,
             response_format: { type: 'json_object' },
           }),
         })
