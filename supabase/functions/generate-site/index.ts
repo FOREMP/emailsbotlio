@@ -232,9 +232,12 @@ Ingen förklaring före eller efter JSON-objektet.`
       'Returnera BARA JSON-objektet med de 3 HTML-filerna.',
     ].join('\n')
 
-    // Build multimodal content parts
+    // Multimodal content — only include the screenshot on models that support vision.
+    // DeepSeek V3.1 is text-only; sending an image_url would 400.
+    const chosenModel = model || MODEL
+    const supportsVision = /claude|gpt-4|gpt-5|gemini|llama-.*vision|qwen.*vl/i.test(chosenModel)
     const userContent: any[] = [{ type: 'text', text: userTextParts }]
-    if (screenshotUrl) {
+    if (screenshotUrl && supportsVision) {
       userContent.push({ type: 'image_url', image_url: { url: screenshotUrl } })
     }
 
