@@ -339,7 +339,7 @@ Ingen förklaring före eller efter JSON-objektet.`
       ok: true,
       status: 'generating',
       message: 'Generation started in background. Poll generated_sites.status.',
-      model: model || MODEL,
+      model: chosenModel,
     })
   } catch (err) {
     console.error('generate-site error', err)
