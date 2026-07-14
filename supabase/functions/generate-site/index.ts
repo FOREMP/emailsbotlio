@@ -313,13 +313,18 @@ Ingen förklaring före eller efter JSON-objektet.`
           generated_files: files,
         }).eq('id', generated_site_id)
       } catch (err) {
+        clearTimeout(timeoutId)
+        const msg = (err as Error).name === 'AbortError'
+          ? 'Timed out after 120s — model took too long. Retry.'
+          : `Background error: ${(err as Error).message}`
         console.error('background generate error', err)
         await supabase.from('generated_sites').update({
           status: 'failed',
-          error_message: `Background error: ${(err as Error).message}`,
+          error_message: msg,
         }).eq('id', generated_site_id)
       }
     }
+
 
     // @ts-ignore EdgeRuntime is available in Supabase Edge Functions
     EdgeRuntime.waitUntil(runGeneration())
