@@ -495,6 +495,20 @@ function cssColor(value: string, fallback: string): string {
   return /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v) || /^rgb(a)?\([^)]+\)$/i.test(v) || /^[a-z]+$/i.test(v) ? v : fallback
 }
 
+async function failOrRetry(supabase: any, id: string, attempts: number, msg: string) {
+  if (attempts >= MAX_ATTEMPTS) {
+    await supabase.from('generated_sites').update({
+      status: 'failed',
+      error_message: `${msg} (max ${MAX_ATTEMPTS} attempts reached)`,
+    }).eq('id', id)
+  } else {
+    await supabase.from('generated_sites').update({
+      status: 'queued',
+      queued_at: new Date().toISOString(),
+      error_message: `Retrying (attempt ${attempts}/${MAX_ATTEMPTS}): ${msg}`,
+    }).eq('id', id)
+  }
+}
 
 
 function json(body: unknown, status = 200): Response {
