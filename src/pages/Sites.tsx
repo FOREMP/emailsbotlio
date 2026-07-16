@@ -157,8 +157,20 @@ const Sites = () => {
       const { data, error } = await supabase.functions.invoke(step, {
         body: { generated_site_id: siteId },
       });
-      if (error) throw error;
-      toast.success(`${step} done`);
+      // supabase-js hides the response body on non-2xx and gives a generic
+      // "Failed to send a request" — dig it out so the user sees the real reason.
+      if (error) {
+        let detail = error.message;
+        const ctx = (error as { context?: Response }).context;
+        if (ctx && typeof ctx.text === "function") {
+          try {
+            const body = await ctx.text();
+            if (body) detail = `${error.message}: ${body.slice(0, 300)}`;
+          } catch { /* ignore */ }
+        }
+        throw new Error(detail);
+      }
+      toast.success(`${step} ${data?.status ? `→ ${data.status}` : "done"}`);
       qc.invalidateQueries({ queryKey: ["generated_sites"] });
       return data;
     } catch (e) {
@@ -167,6 +179,7 @@ const Sites = () => {
       setBusyId(null);
     }
   };
+
 
   const openExtra = async (site: SiteRow) => {
     try {
