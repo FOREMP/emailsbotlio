@@ -73,21 +73,21 @@ const Sites = () => {
     refetchInterval: (q) => {
       const rows = (q.state.data as SiteRow[] | undefined) ?? [];
       const inFlight = rows.some((r) =>
-        ["auditing", "scraping", "generating", "deploying"].includes(r.status),
+        ["auditing", "scraping", "queued", "processing", "generating", "deploying"].includes(r.status),
       );
       return inFlight ? 8000 : false;
     },
   });
 
-  // Watchdog: any row stuck in "generating"/"deploying" for >4 min = worker died.
-  // Mark it failed so the user can retry instead of staring at a fake spinner.
+  // Watchdog: any row that hasn't moved for >8 min in an in-flight state = worker
+  // died AND cron didn't rescue it. Mark failed so user can retry.
   useEffect(() => {
     if (!sites.length) return;
     const stuck = sites.filter((s) => {
-      if (!["generating", "deploying"].includes(s.status)) return false;
+      if (!["queued", "processing", "generating", "deploying"].includes(s.status)) return false;
       const stamp = s.updated_at ?? s.created_at;
       const ageMs = Date.now() - new Date(stamp).getTime();
-      return ageMs > 4 * 60 * 1000;
+      return ageMs > 8 * 60 * 1000;
 
     });
     if (!stuck.length) return;
@@ -97,12 +97,13 @@ const Sites = () => {
         .from("generated_sites")
         .update({
           status: "failed",
-          error_message: "Timed out — background worker died. Click Generate to retry.",
+          error_message: "Timed out — no worker progress for 8 min. Click Generate to retry.",
         })
         .in("id", ids);
       qc.invalidateQueries({ queryKey: ["generated_sites"] });
     })();
   }, [sites, qc]);
+
 
 
   const { data: lists = [] } = useQuery({
