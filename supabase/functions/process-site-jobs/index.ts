@@ -265,7 +265,7 @@ ABSOLUTA REGLER:
       if (!aiResp.ok) {
         const errText = await aiResp.text()
         const msg = `OpenRouter failed (${aiResp.status}): ${errText.slice(0, 400)}`
-        await supabase.from('generated_sites').update({ status: 'failed', error_message: msg }).eq('id', generated_site_id)
+        await failOrRetry(supabase, generated_site_id, nextAttempts, msg)
         return json({ error: msg }, 502)
       }
 
@@ -280,7 +280,12 @@ ABSOLUTA REGLER:
         const msg = parsed?.error === 'invalid business name'
           ? 'AI rejected this row because the business name/source data is invalid. Re-run audit/scrape with a working company URL.'
           : `AI returned invalid content JSON. Preview: ${cleaned.slice(0, 400)}`
-        await supabase.from('generated_sites').update({ status: 'failed', error_message: msg }).eq('id', generated_site_id)
+        // "invalid business name" is permanent — don't retry
+        if (parsed?.error === 'invalid business name') {
+          await supabase.from('generated_sites').update({ status: 'failed', error_message: msg }).eq('id', generated_site_id)
+        } else {
+          await failOrRetry(supabase, generated_site_id, nextAttempts, msg)
+        }
         return json({ error: msg }, 422)
       }
 
@@ -295,6 +300,7 @@ ABSOLUTA REGLER:
 
       await supabase.from('generated_sites').update({
         status: 'generated',
+        error_message: null,
         generated_files: files,
       }).eq('id', generated_site_id)
 
@@ -302,12 +308,13 @@ ABSOLUTA REGLER:
     } catch (err) {
       clearTimeout(timeoutId)
       const msg = (err as Error).name === 'AbortError'
-        ? 'Timed out after 70s — model took too long. The prompt is now smaller; retry once, then re-run scrape if it repeats.'
+        ? 'Timed out after 70s — model took too long.'
         : `Error: ${(err as Error).message}`
       console.error('generate error', err)
-      await supabase.from('generated_sites').update({ status: 'failed', error_message: msg }).eq('id', generated_site_id)
+      await failOrRetry(supabase, generated_site_id, nextAttempts, msg)
       return json({ error: msg }, 500)
     }
+
   } catch (err) {
     console.error('generate-site error', err)
     return json({ error: (err as Error).message }, 500)
