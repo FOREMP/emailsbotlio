@@ -38,12 +38,15 @@ const statusColor: Record<string, string> = {
   audited: "bg-blue-500/15 text-blue-700 dark:text-blue-300",
   scraping: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300",
   scraped: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300",
+  queued: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
+  processing: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
   generating: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
   deploying: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
   live: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
   failed: "bg-destructive/15 text-destructive",
   skipped: "bg-muted text-muted-foreground",
 };
+
 
 const Sites = () => {
   const { user } = useAuth();
@@ -70,21 +73,21 @@ const Sites = () => {
     refetchInterval: (q) => {
       const rows = (q.state.data as SiteRow[] | undefined) ?? [];
       const inFlight = rows.some((r) =>
-        ["auditing", "scraping", "generating", "deploying"].includes(r.status),
+        ["auditing", "scraping", "queued", "processing", "generating", "deploying"].includes(r.status),
       );
       return inFlight ? 8000 : false;
     },
   });
 
-  // Watchdog: any row stuck in "generating"/"deploying" for >4 min = worker died.
-  // Mark it failed so the user can retry instead of staring at a fake spinner.
+  // Watchdog: any row that hasn't moved for >8 min in an in-flight state = worker
+  // died AND cron didn't rescue it. Mark failed so user can retry.
   useEffect(() => {
     if (!sites.length) return;
     const stuck = sites.filter((s) => {
-      if (!["generating", "deploying"].includes(s.status)) return false;
+      if (!["queued", "processing", "generating", "deploying"].includes(s.status)) return false;
       const stamp = s.updated_at ?? s.created_at;
       const ageMs = Date.now() - new Date(stamp).getTime();
-      return ageMs > 4 * 60 * 1000;
+      return ageMs > 8 * 60 * 1000;
 
     });
     if (!stuck.length) return;
@@ -94,12 +97,13 @@ const Sites = () => {
         .from("generated_sites")
         .update({
           status: "failed",
-          error_message: "Timed out — background worker died. Click Generate to retry.",
+          error_message: "Timed out — no worker progress for 8 min. Click Generate to retry.",
         })
         .in("id", ids);
       qc.invalidateQueries({ queryKey: ["generated_sites"] });
     })();
   }, [sites, qc]);
+
 
 
   const { data: lists = [] } = useQuery({
@@ -153,8 +157,20 @@ const Sites = () => {
       const { data, error } = await supabase.functions.invoke(step, {
         body: { generated_site_id: siteId },
       });
-      if (error) throw error;
-      toast.success(`${step} done`);
+      // supabase-js hides the response body on non-2xx and gives a generic
+      // "Failed to send a request" — dig it out so the user sees the real reason.
+      if (error) {
+        let detail = error.message;
+        const ctx = (error as { context?: Response }).context;
+        if (ctx && typeof ctx.text === "function") {
+          try {
+            const body = await ctx.text();
+            if (body) detail = `${error.message}: ${body.slice(0, 300)}`;
+          } catch { /* ignore */ }
+        }
+        throw new Error(detail);
+      }
+      toast.success(`${step} ${data?.status ? `→ ${data.status}` : "done"}`);
       qc.invalidateQueries({ queryKey: ["generated_sites"] });
       return data;
     } catch (e) {
@@ -163,6 +179,7 @@ const Sites = () => {
       setBusyId(null);
     }
   };
+
 
   const openExtra = async (site: SiteRow) => {
     try {
