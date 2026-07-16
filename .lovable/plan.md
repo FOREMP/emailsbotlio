@@ -1,68 +1,74 @@
-## Mål
+## Problem
 
-Höja kvaliteten på genererade sajter dramatiskt genom att ge Claude Sonnet 4.5 ett bibliotek av handplockade premium-sektioner att remixa — istället för att låta den improvisera från noll varje gång.
+The UI shows `generate-site failed: Failed to send a request to the Edge Function`. This is a client-side supabase-js message that fires when the HTTP request to the function never gets a response — the isolate was killed mid-flight (wall-clock/CPU limit) or the connection was reset. The current function is synchronous: it calls OpenRouter and holds the HTTP request open for up to 70s. When the model is slow or the platform recycles the isolate, no response reaches the browser and the row stays in `generating` until the watchdog flips it to `failed`.
 
-## Så funkar det
+We've iterated on this same failure repeatedly (bigger timeouts, smaller tokens, background workers via `EdgeRuntime.waitUntil`, sync mode). None of them fix the root cause: **a user-visible HTTP request should not depend on a 30–90s AI call finishing inside the same request.**
 
-Vi bygger en katalog med 8–12 premium HTML-sektioner (hero, tjänste-grid, process, galleri, CTA-band, kontakt, footer, om-oss-hero, service-detalj, FAQ, testimonial-block, trust-strip). Varje sektion är:
+## The fix: async job pattern
 
-- Ren HTML + inline CSS, ingen JS
-- Använder CSS-variabler för färger (`var(--primary)` etc) så vi kan swap:a in kundens branding
-- Bild-URLer är `{{IMAGE_1}}`-tokens som ersätts vid generering
-- Text-innehåll är korta lorem-liknande placeholders — Claude skriver om med kundens riktiga innehåll
+Split `generate-site` into two responsibilities:
 
-Claude får hela biblioteket i prompten + instruktion: "Välj 5–7 sektioner per sida som passar denna verkstad. Remixa dem, byt inte layout. Fyll med kundens riktiga inneåll. Byt CSS-variabler till deras färger."
+1. **`generate-site` (fast, <1s):** validates input, flips the row to `queued`, returns 202 immediately with the row id. No AI call in the request path.
+2. **`process-site-jobs` (worker):** picks up `queued` rows one at a time, runs the OpenRouter call + `buildSiteFiles`, writes `generated`/`failed`. Invoked by:
+   - a pg_cron job every minute (primary), and
+   - a fire-and-forget internal call from `generate-site` after it responds (so the user doesn't wait 60s for cron in the happy path).
 
-## Filer som ändras
+The client already polls every 8s while rows are `generating/queued`, so the UI needs no changes beyond accepting the new `queued` status.
 
-**Nytt:** `supabase/functions/generate-site/templates.ts`
+## Weak points to fix in the same pass
 
-Exporterar `SECTION_LIBRARY` som record: `{ hero_fullbleed: {name, description, html}, hero_split: {...}, services_grid_3col: {...}, ... }`. Varje sektion är 60–150 rader polerad HTML/CSS baserad på award-winning verkstads/service-sajter (asymmetriska layouts, generös whitespace, dramatiska hovers, layered depth). Jag skriver dessa själv i handkodad premium-kvalitet.
+- **Client "invoke" swallows real errors.** `supabase.functions.invoke` returns "Failed to send a request…" for anything non-2xx-with-body. Switch the `runStep` call for generate/deploy to a raw `fetch` so we surface the actual status code and body (or read `error.context.response` and display it). Applies to Audit/Scrape/Deploy too.
+- **Watchdog is too aggressive.** 4-minute cutoff can kill a legitimately-running job. Raise to 8 minutes and only flip rows whose `updated_at` hasn't moved (worker touches `updated_at` on pickup, so live jobs won't be reaped).
+- **No row-level lock on the worker.** If two workers race (cron + inline kick), both could pick the same job. Use `UPDATE … WHERE status='queued' RETURNING …` with `FOR UPDATE SKIP LOCKED` semantics via `select … for update skip locked` in a small RPC, or a conditional update from `queued` → `processing` and skip if 0 rows updated.
+- **No retry cap.** A row that fails once can be re-queued forever. Add `attempts int default 0`; worker increments; after 3 it stays `failed` and needs manual reset.
+- **Stuck-row cleanup is manual.** Add a second cron (every 5 min) that flips `processing` rows older than 10 min back to `failed` with a clear message, so a killed worker doesn't leave orphans.
+- **AI response occasionally returns non-JSON despite `response_format`.** Add one retry with `temperature: 0.2` before failing, and log the raw preview into `error_message` (already done) so we can see what happened.
+- **Scraped content sometimes missing images/branding.** Not this bug's cause, but worth noting: worker should mark the row `failed` with a helpful message when `scraped_content` is stale, instead of generating a colorless site.
 
-**Uppdateras:** `supabase/functions/generate-site/index.ts`
+## Technical section
 
-- Importera `SECTION_LIBRARY`
-- Ny system-prompt-sektion: "SEKTIONSBIBLIOTEK — välj och remixa från dessa, hitta inte på egna layouts från noll"
-- Skicka hela biblioteket som JSON i user-content
-- Instruera: hem = 5–7 sektioner, om-oss = 4–5, tjänster = 5–6, aldrig samma sektion två gånger på samma sida
-- Behåll all befintlig logik: branding-färger via CSS-variabler, screenshot som stil-inspo, bild-pool, sticky nav, aldrig hitta på fakta
+**DB migration**
+```sql
+alter table public.generated_sites
+  add column if not exists attempts int not null default 0,
+  add column if not exists queued_at timestamptz;
 
-## Sektionsbiblioteket — konkret innehåll
+-- allow 'queued' and 'processing' as status values (text column, no enum change needed)
 
-**Heros (3):** full-bleed image + gradient overlay + stor typografi | split 60/40 med bild höger | video-feel med parallax-känsla via CSS
+create index if not exists generated_sites_status_queued_idx
+  on public.generated_sites (status, queued_at)
+  where status in ('queued','processing');
+```
 
-**Trust/social proof (2):** logotyp-strip av bilmärken | statistik-band (år i branschen, antal servicear, etc — bara om vi har fakta)
+Cron (via `pg_cron` + `pg_net`, matching existing `run-sequences` pattern):
+```sql
+select cron.schedule(
+  'process-site-jobs',
+  '* * * * *',
+  $$select net.http_post(
+     url:='https://eyliwidiljmzllsmytdh.supabase.co/functions/v1/process-site-jobs',
+     headers:='{"Content-Type":"application/json","Authorization":"Bearer <service-role>"}'::jsonb,
+     body:='{}'::jsonb
+   );$$
+);
+```
 
-**Tjänster (3):** 3-kol kort med ikoner | asymmetriskt bento-grid | lista med thumbnails vänster
+**Edge functions**
+- `supabase/functions/generate-site/index.ts` — reduce to: validate, `update … set status='queued', queued_at=now(), error_message=null where id=? and status in ('pending','scraped','generated','failed')`, then fire-and-forget invoke `process-site-jobs` (don't await), return `{ok:true, status:'queued'}`.
+- `supabase/functions/process-site-jobs/index.ts` (new) — pick one queued row (`update … set status='processing', updated_at=now(), attempts=attempts+1 where id=(select id from generated_sites where status='queued' order by queued_at limit 1 for update skip locked) returning *`), run existing OpenRouter + `buildSiteFiles` logic, write `generated` or `failed`. If `attempts >= 3` on failure, leave as `failed` with "max retries" message.
+- Existing `buildSiteFiles` and prompt code moves into `_shared/site-builder.ts` so both functions can import it (or just lives in `process-site-jobs`).
 
-**Process (1):** 4-stegs horisontell tidslinje med numrerade steg
+**Frontend (`src/pages/Sites.tsx`)**
+- Accept `queued` and `processing` in the in-flight status list (spinner, watchdog).
+- Replace `supabase.functions.invoke('generate-site', …)` for the Generate action with a `fetch` to the function URL so real HTTP errors surface in the toast.
+- Bump watchdog cutoff from 4 → 8 minutes, and only reap rows whose `updated_at` is older than the cutoff.
 
-**Galleri (2):** masonry 3-kol | full-bredd carousel-liknande grid
+**Status colors**
+- Add `queued` and `processing` to `statusColor` map (reuse the amber `generating` style).
 
-**Om-oss (2):** stor bild vänster + text höger med värderingar | citat-block med bakgrundsbild
+## Out of scope
+- Model choice (staying on DeepSeek V3.1).
+- Template/prompt quality — separate concern.
+- Any change to `scrape-lead-data`, `audit-site`, `deploy-site`.
 
-**Kontakt (2):** split med Maps-embed höger | centrerad med telefon/adress-kort
-
-**CTA-band (1):** full-bredd med bakgrundsbild + gradient + stor knapp
-
-**Footer (1):** 3-kol med länkar + kontakt + copyright
-
-Totalt: 17 sektioner, ~1500 rader HTML — får plats i Claude's kontext (~8k tokens av bibliotek + resten till kundens data).
-
-## Vad detta ger
-
-- Genererade sajter ser ut som "riktiga" premium-sajter, inte som AI-skräp
-- Konsekvent kvalitet — även om Claude har en dålig dag kan den inte generera fula sektioner
-- Variation mellan sajter genom att Claude väljer olika kombinationer per lead
-- Kundens riktiga färger appliceras automatiskt via CSS-variabler
-- Ingen extra kostnad per generering (bara lite fler tokens i prompten)
-
-## Vad detta INTE fixar
-
-- Om Firecrawl skrapar tunt innehåll → sajten blir fortfarande tom (samma problem som nu)
-- Om vi inte har riktiga bilder → Unsplash-fallback ser fortfarande generisk ut
-- Detta löser design-kvaliteten, inte innehålls-kvaliteten
-
-## Efter godkännande
-
-Jag bygger templates.ts, uppdaterar generate-site, deployar, och du testar Generate på en befintlig lead. Om du vill fler/färre sektionstyper efter första testet är det trivialt att lägga till.
+After you approve I'll write the migration, the two edge functions, and the Sites.tsx tweaks in one pass.
