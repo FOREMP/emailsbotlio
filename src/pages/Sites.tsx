@@ -38,12 +38,15 @@ const statusColor: Record<string, string> = {
   audited: "bg-blue-500/15 text-blue-700 dark:text-blue-300",
   scraping: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300",
   scraped: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300",
+  queued: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
+  processing: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
   generating: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
   deploying: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
   live: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
   failed: "bg-destructive/15 text-destructive",
   skipped: "bg-muted text-muted-foreground",
 };
+
 
 const Sites = () => {
   const { user } = useAuth();
