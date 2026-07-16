@@ -1,9 +1,8 @@
-// Generates a premium MULTI-PAGE demo site (index + om-oss + tjänster).
-// Reliability note: asking the model to write three full HTML files creates a
-// huge response and regularly hits Supabase Edge runtime limits. This function
-// now asks the model only for a compact content/design plan, then builds the
-// HTML deterministically in code. Result: much lower token use, shorter runtime,
-// and fewer stuck "generating" rows.
+// Worker: claims one queued generated_sites row and generates HTML.
+// Invoked by pg_cron every minute and fired-and-forgotten by generate-site
+// after enqueue. Conditional UPDATE claims a row atomically — safe against
+// concurrent invocations. Retries capped at MAX_ATTEMPTS via `attempts`.
+// Stuck-row reaper: also flips 'processing' rows older than 10 min back to 'failed'.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const corsHeaders = {
@@ -12,13 +11,10 @@ const corsHeaders = {
 }
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
-// DeepSeek V3.1 via OpenRouter — very cheap (~$0.27/1M input, $1.10/1M output),
-// strong at HTML/JSON, 128k context. Roughly 20-30x cheaper than Claude Sonnet 4.5,
-// so a full generation costs ~$0.02-0.03 instead of ~$0.50.
 const MODEL = 'deepseek/deepseek-chat-v3.1'
+const MAX_ATTEMPTS = 3
+const STUCK_MINUTES = 10
 const CURRENT_YEAR = new Date().getFullYear()
-
-interface Req { generated_site_id: string; model?: string }
 
 interface ServiceItem { name: string; description: string }
 interface ValueItem { title: string; text: string }
@@ -40,9 +36,6 @@ interface SitePlan {
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   try {
-    const { generated_site_id, model }: Req = await req.json()
-    if (!generated_site_id) return json({ error: 'generated_site_id required' }, 400)
-
     const openrouterKey = Deno.env.get('OPENROUTER_API_KEY')
     if (!openrouterKey) return json({ error: 'OPENROUTER_API_KEY missing' }, 500)
 
@@ -51,13 +44,60 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     )
 
-    const { data: site, error: siteErr } = await supabase
+    // 1. Reap 'processing' rows older than STUCK_MINUTES (worker died mid-run)
+    const stuckCutoff = new Date(Date.now() - STUCK_MINUTES * 60_000).toISOString()
+    await supabase
       .from('generated_sites')
-      .select('id, contact_id, source_url, scraped_content, template')
+      .update({
+        status: 'failed',
+        error_message: `Worker died mid-generation (>${STUCK_MINUTES} min in processing). Click Generate to retry.`,
+      })
+      .eq('status', 'processing')
+      .lt('updated_at', stuckCutoff)
+
+    // 2. Optional targeted id from generate-site kick, else oldest queued
+    let targetId: string | null = null
+    try {
+      if (req.method === 'POST') {
+        const body = await req.json().catch(() => ({}))
+        if (typeof body?.generated_site_id === 'string') targetId = body.generated_site_id
+      }
+    } catch (_) { /* ignore */ }
+
+    // 3. Find one queued row
+    const findQuery = supabase
+      .from('generated_sites')
+      .select('id')
+      .eq('status', 'queued')
+      .order('queued_at', { ascending: true })
+      .limit(1)
+    if (targetId) findQuery.eq('id', targetId)
+    const { data: candidates, error: findErr } = await findQuery
+    if (findErr) return json({ error: `find failed: ${findErr.message}` }, 500)
+    if (!candidates?.length) return json({ ok: true, message: 'no queued jobs' })
+
+    const generated_site_id = candidates[0].id
+
+    // 4. Atomically claim: only succeeds if row is still 'queued' (race-safe)
+    const { data: claimed, error: claimErr } = await supabase
+      .from('generated_sites')
+      .update({ status: 'processing', updated_at: new Date().toISOString() })
       .eq('id', generated_site_id)
-      .single()
-    if (siteErr || !site) return json({ error: 'site not found' }, 404)
-    if (!site.scraped_content) return json({ error: 'no scraped_content — run scrape first' }, 400)
+      .eq('status', 'queued')
+      .select('id, contact_id, source_url, scraped_content, template, attempts')
+      .maybeSingle()
+    if (claimErr || !claimed) return json({ ok: true, message: 'lost race, another worker claimed it' })
+
+    const site = claimed as any
+
+    const nextAttempts = (site.attempts ?? 0) + 1
+    await supabase.from('generated_sites').update({ attempts: nextAttempts }).eq('id', generated_site_id)
+
+    if (!site.scraped_content) {
+      const msg = 'no scraped_content — run scrape first'
+      await supabase.from('generated_sites').update({ status: 'failed', error_message: msg }).eq('id', generated_site_id)
+      return json({ error: msg }, 400)
+    }
 
     const scraped = site.scraped_content as any
     const pages = scraped.pages ?? {}
@@ -74,10 +114,9 @@ Deno.serve(async (req) => {
       .eq('id', site.contact_id)
       .single()
 
-    await supabase.from('generated_sites').update({ status: 'generating', error_message: null }).eq('id', generated_site_id)
-
     const branding = scraped.branding ?? {}
     const cf = (contact?.custom_fields ?? {}) as Record<string, unknown>
+
 
     // Full brand palette (fall back to premium dark when missing)
     const bc = branding.colors ?? {}
