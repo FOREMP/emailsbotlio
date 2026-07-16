@@ -226,12 +226,13 @@ ABSOLUTA REGLER:
 
     // Multimodal content — only include the screenshot on models that support vision.
     // DeepSeek V3.1 is text-only; sending an image_url would 400.
-    const chosenModel = model || MODEL
+    const chosenModel = MODEL
     const supportsVision = /claude|gpt-4|gpt-5|gemini|llama-.*vision|qwen.*vl/i.test(chosenModel)
     const userContent: any[] = [{ type: 'text', text: userTextParts }]
     if (screenshotUrl && supportsVision) {
       userContent.push({ type: 'image_url', image_url: { url: screenshotUrl } })
     }
+
 
     // Run synchronously but keep the AI output small. The Edge platform can
     // recycle long-running isolates; the safe fix is reducing output tokens,
