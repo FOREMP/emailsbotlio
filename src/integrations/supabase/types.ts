@@ -269,6 +269,7 @@ export type Database = {
       }
       generated_sites: {
         Row: {
+          attempts: number
           audit_reason: string | null
           audit_score: number | null
           click_count: number
@@ -281,6 +282,7 @@ export type Database = {
           github_repo_url: string | null
           id: string
           last_clicked_at: string | null
+          queued_at: string | null
           scraped_content: Json | null
           sequence_id: string | null
           source_url: string | null
@@ -292,6 +294,7 @@ export type Database = {
           vercel_project_id: string | null
         }
         Insert: {
+          attempts?: number
           audit_reason?: string | null
           audit_score?: number | null
           click_count?: number
@@ -304,6 +307,7 @@ export type Database = {
           github_repo_url?: string | null
           id?: string
           last_clicked_at?: string | null
+          queued_at?: string | null
           scraped_content?: Json | null
           sequence_id?: string | null
           source_url?: string | null
@@ -315,6 +319,7 @@ export type Database = {
           vercel_project_id?: string | null
         }
         Update: {
+          attempts?: number
           audit_reason?: string | null
           audit_score?: number | null
           click_count?: number
@@ -327,6 +332,7 @@ export type Database = {
           github_repo_url?: string | null
           id?: string
           last_clicked_at?: string | null
+          queued_at?: string | null
           scraped_content?: Json | null
           sequence_id?: string | null
           source_url?: string | null
