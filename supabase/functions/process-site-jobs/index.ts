@@ -399,6 +399,76 @@ ABSOLUTA REGLER:
   }
 })
 
+// ---------------------------------------------------------------------------
+// Copy polish: run the DeepSeek content plan through Claude Haiku so all the
+// prose feels like a real Swedish copywriter wrote it (natural rhythm, correct
+// punctuation, sentences that flow). Structure/fields are preserved exactly;
+// no new facts are introduced. Cheap: ~1–3k tokens per site on Haiku.
+// ---------------------------------------------------------------------------
+async function polishCopyWithClaude(args: {
+  plan: SitePlan
+  facts: Record<string, unknown>
+  openrouterKey: string
+}): Promise<SitePlan> {
+  const { plan, facts, openrouterKey } = args
+
+  const system = `Du är en senior svensk copywriter för premium bilverkstadssajter.
+
+DIN UPPGIFT: Skriv om ALLA textfält i det medskickade JSON-objektet till naturlig, flytande svenska av hög kvalitet. Ton: modernt, självsäkert, editoriellt — som en välskriven varumärkessajt, inte som en broschyr.
+
+ABSOLUTA REGLER:
+1. Behåll EXAKT samma JSON-struktur, samma nycklar, samma antal element i arrays. Ändra bara textvärdena.
+2. Hitta ALDRIG på nya fakta (adresser, telefon, priser, årtal, certifieringar, kundnamn). Om ett textfält innehåller påhittade siffror eller påhittade certifieringar — ta bort dem och skriv om utan.
+3. Fixa: styltiga meningar, konstig ordföljd, meningar som saknar punkt, för långa meningar (dela i två), upprepningar, klichéer ("marknadens bästa", "vi erbjuder"), engelska direktöversättningar.
+4. Rytm: varje textblock ska ha varierad meningslängd. Undvik att alla meningar börjar med "Vi".
+5. heroLine1 + heroLine2 = korta, slagkraftiga rader (3–7 ord vardera) som fungerar som en headline tillsammans. Punkt i slutet av varje rad.
+6. heroSubline, description, text, answer = 1–3 välformulerade meningar med korrekt interpunktion.
+7. Om ett fält är null/tomt — låt det vara tomt. Fyll aldrig i påhittat innehåll.
+8. Svara med ENBART det uppdaterade JSON-objektet. Ingen markdown, inga kommentarer, ingen förklaring.`
+
+  const user = `FAKTA (påhittad information är förbjuden — håll dig till dessa):
+${JSON.stringify(facts, null, 2)}
+
+INNEHÅLLSPLAN ATT SKRIVA OM (behåll struktur, förbättra bara språket):
+${JSON.stringify(plan, null, 2)}
+
+Returnera samma JSON med förbättrad svensk copy.`
+
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 60_000)
+  try {
+    const resp = await fetch(OPENROUTER_URL, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${openrouterKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://emailsbotlio.lovable.app',
+        'X-Title': 'Botlio Site Copy Polish',
+      },
+      body: JSON.stringify({
+        model: 'anthropic/claude-haiku-4.5',
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        temperature: 0.7,
+        max_tokens: 6000,
+      }),
+    })
+    clearTimeout(timeoutId)
+    if (!resp.ok) throw new Error(`claude polish ${resp.status}: ${(await resp.text()).slice(0, 300)}`)
+    const data = await resp.json()
+    const raw: string = data.choices?.[0]?.message?.content ?? ''
+    const cleaned = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```\s*$/i, '').trim()
+    const polished = JSON.parse(cleaned) as SitePlan
+    // Sanity: keep DeepSeek's plan for any field Claude dropped
+    return { ...plan, ...polished }
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
 function buildSiteFiles({
   plan,
   facts,
