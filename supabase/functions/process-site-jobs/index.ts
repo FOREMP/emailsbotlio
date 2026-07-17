@@ -545,7 +545,7 @@ function buildSiteFiles({
 <body>
   ${nav(active, businessName, primaryHref, primaryLabel, hasContact)}
   ${body}
-  ${footer(businessName, plan.tagline, { phone, email, address }, hasContact)}
+  ${footer(businessName, plan.tagline, { phone, email, address })}
 </body>
 </html>`
 
