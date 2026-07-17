@@ -689,6 +689,9 @@ function normalizeProcess(items?: ProcessStep[]): ProcessStep[] {
     .filter((s) => s.title && s.description)
     .slice(0, 3)
   return cleaned
+}
+
+
 
 function nav(active: 'home' | 'about' | 'services', businessName: string, primaryHref: string | null, primaryLabel: string | null, hasContact: boolean): string {
   const a = (key: string) => active === key ? ' active' : ''
