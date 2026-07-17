@@ -299,99 +299,105 @@ ABSOLUTA REGLER:
     }
 
 
-    // Run synchronously but keep the AI output small. The Edge platform can
-    // recycle long-running isolates; the safe fix is reducing output tokens,
-    // not only increasing timeout. HTML is generated locally below.
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 70_000)
-    try {
-      const aiResp = await fetch(OPENROUTER_URL, {
-        method: 'POST',
-        signal: controller.signal,
-        headers: {
-          Authorization: `Bearer ${openrouterKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://emailsbotlio.lovable.app',
-          'X-Title': 'Botlio Site Generator',
-        },
-        body: JSON.stringify({
-          model: chosenModel,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userContent },
-          ],
-          temperature: 0.6,
-          max_tokens: 8000,
-          response_format: { type: 'json_object' },
-        }),
-      })
-      clearTimeout(timeoutId)
+    // Kick off AI work in the background so this HTTP invocation returns fast
+    // and isn't recycled by the platform mid-generation.
+    const bgTask = (async () => {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 60_000)
+      try {
+        const aiResp = await fetch(OPENROUTER_URL, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            Authorization: `Bearer ${openrouterKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://emailsbotlio.lovable.app',
+            'X-Title': 'Botlio Site Generator',
+          },
+          body: JSON.stringify({
+            model: chosenModel,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userContent },
+            ],
+            temperature: 0.6,
+            max_tokens: 5000,
+            response_format: { type: 'json_object' },
+          }),
+        })
+        clearTimeout(timeoutId)
 
-      if (!aiResp.ok) {
-        const errText = await aiResp.text()
-        const msg = `OpenRouter failed (${aiResp.status}): ${errText.slice(0, 400)}`
-        await failOrRetry(supabase, generated_site_id, nextAttempts, msg)
-        return json({ error: msg }, 502)
-      }
-
-      const aiData = await aiResp.json()
-      const raw: string = aiData.choices?.[0]?.message?.content ?? ''
-      const cleaned = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```\s*$/i, '').trim()
-
-      let parsed: (SitePlan & { error?: string }) | null = null
-      try { parsed = JSON.parse(cleaned) } catch (_) { parsed = null }
-
-      if (!parsed || parsed.error) {
-        const msg = parsed?.error === 'invalid business name'
-          ? 'AI rejected this row because the business name/source data is invalid. Re-run audit/scrape with a working company URL.'
-          : `AI returned invalid content JSON. Preview: ${cleaned.slice(0, 400)}`
-        // "invalid business name" is permanent — don't retry
-        if (parsed?.error === 'invalid business name') {
-          await supabase.from('generated_sites').update({ status: 'failed', error_message: msg }).eq('id', generated_site_id)
-        } else {
+        if (!aiResp.ok) {
+          const errText = await aiResp.text()
+          const msg = `OpenRouter failed (${aiResp.status}): ${errText.slice(0, 400)}`
           await failOrRetry(supabase, generated_site_id, nextAttempts, msg)
+          return
         }
-        return json({ error: msg }, 422)
+
+        const aiData = await aiResp.json()
+        const raw: string = aiData.choices?.[0]?.message?.content ?? ''
+        const cleaned = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```\s*$/i, '').trim()
+
+        let parsed: (SitePlan & { error?: string }) | null = null
+        try { parsed = JSON.parse(cleaned) } catch (_) { parsed = null }
+
+        if (!parsed || parsed.error) {
+          const msg = parsed?.error === 'invalid business name'
+            ? 'AI rejected this row: invalid business name. Re-run audit/scrape with a working URL.'
+            : `AI returned invalid content JSON. Preview: ${cleaned.slice(0, 400)}`
+          if (parsed?.error === 'invalid business name') {
+            await supabase.from('generated_sites').update({ status: 'failed', error_message: msg }).eq('id', generated_site_id)
+          } else {
+            await failOrRetry(supabase, generated_site_id, nextAttempts, msg)
+          }
+          return
+        }
+
+        // Heartbeat between the two AI calls so the reaper doesn't false-positive
+        await supabase.from('generated_sites').update({ updated_at: new Date().toISOString() }).eq('id', generated_site_id)
+
+        const polished = await polishCopyWithClaude({
+          plan: parsed,
+          facts,
+          openrouterKey,
+        }).catch((e) => {
+          console.warn('copy polish failed, using DeepSeek plan:', (e as Error).message)
+          return parsed!
+        })
+
+        const files = buildSiteFiles({
+          plan: polished,
+          facts,
+          brandPalette,
+          brandFonts,
+          imagePool,
+          googleMapsUrl,
+        })
+
+        await supabase.from('generated_sites').update({
+          status: 'generated',
+          error_message: null,
+          generated_files: files,
+          updated_at: new Date().toISOString(),
+        }).eq('id', generated_site_id)
+      } catch (err) {
+        clearTimeout(timeoutId)
+        const msg = (err as Error).name === 'AbortError'
+          ? 'Timed out after 60s — model took too long.'
+          : `Error: ${(err as Error).message}`
+        console.error('generate error', err)
+        await failOrRetry(supabase, generated_site_id, nextAttempts, msg)
       }
+    })()
 
-      // === Copy polish pass ===
-      // DeepSeek handles structure/extraction cheaply, but Swedish prose feels
-      // stilted. Run a small Claude Haiku pass that ONLY rewrites text fields
-      // into natural, flowing copy. Same schema, no new facts invented.
-      const polished = await polishCopyWithClaude({
-        plan: parsed,
-        facts,
-        openrouterKey,
-      }).catch((e) => {
-        console.warn('copy polish failed, falling back to DeepSeek plan:', (e as Error).message)
-        return parsed!
-      })
-
-      const files = buildSiteFiles({
-        plan: polished,
-        facts,
-        brandPalette,
-        brandFonts,
-        imagePool,
-        googleMapsUrl,
-      })
-
-      await supabase.from('generated_sites').update({
-        status: 'generated',
-        error_message: null,
-        generated_files: files,
-      }).eq('id', generated_site_id)
-
-      return json({ ok: true, status: 'generated', model: chosenModel })
-    } catch (err) {
-      clearTimeout(timeoutId)
-      const msg = (err as Error).name === 'AbortError'
-        ? 'Timed out after 70s — model took too long.'
-        : `Error: ${(err as Error).message}`
-      console.error('generate error', err)
-      await failOrRetry(supabase, generated_site_id, nextAttempts, msg)
-      return json({ error: msg }, 500)
+    // @ts-ignore — EdgeRuntime is provided by Supabase
+    if (typeof EdgeRuntime !== 'undefined' && typeof EdgeRuntime.waitUntil === 'function') {
+      // @ts-ignore
+      EdgeRuntime.waitUntil(bgTask)
+      return json({ ok: true, status: 'processing', model: chosenModel }, 202)
     }
+    await bgTask
+    return json({ ok: true, status: 'generated', model: chosenModel })
 
   } catch (err) {
     console.error('generate-site error', err)
@@ -435,7 +441,7 @@ ${JSON.stringify(plan, null, 2)}
 Returnera samma JSON med förbättrad svensk copy.`
 
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 60_000)
+  const timeoutId = setTimeout(() => controller.abort(), 45_000)
   try {
     const resp = await fetch(OPENROUTER_URL, {
       method: 'POST',
@@ -453,7 +459,8 @@ Returnera samma JSON med förbättrad svensk copy.`
           { role: 'user', content: user },
         ],
         temperature: 0.7,
-        max_tokens: 6000,
+        max_tokens: 4000,
+        response_format: { type: 'json_object' },
       }),
     })
     clearTimeout(timeoutId)
