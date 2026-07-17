@@ -441,7 +441,7 @@ ${JSON.stringify(plan, null, 2)}
 Returnera samma JSON med förbättrad svensk copy.`
 
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 60_000)
+  const timeoutId = setTimeout(() => controller.abort(), 45_000)
   try {
     const resp = await fetch(OPENROUTER_URL, {
       method: 'POST',
@@ -459,7 +459,8 @@ Returnera samma JSON med förbättrad svensk copy.`
           { role: 'user', content: user },
         ],
         temperature: 0.7,
-        max_tokens: 6000,
+        max_tokens: 4000,
+        response_format: { type: 'json_object' },
       }),
     })
     clearTimeout(timeoutId)
