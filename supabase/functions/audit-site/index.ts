@@ -102,11 +102,37 @@ Deno.serve(async (req) => {
       headers: { 'Lovable-API-Key': lovableKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'google/gemini-3-flash-preview',
+        // Determinism: temperature 0 + fixed seed + top_p 1 so identical input
+        // produces identical output. Without this Gemini varies scores by ±3.
+        temperature: 0,
+        top_p: 1,
+        seed: 42,
         messages: [
           {
             role: 'system',
-            content:
-              'You audit small-business websites. Rate the site 1-10 on how modern, trustworthy, and conversion-ready it looks based on the provided title and content. 1-3 = outdated/broken, 4-6 = basic but usable, 7-10 = already good. Reply with strict JSON: {"score": number, "reason": string (max 200 chars)}.',
+            content: [
+              'You audit small-business websites and score them 1-10 for how modern, trustworthy and conversion-ready they look.',
+              'Be strict, consistent and deterministic — the SAME input MUST always produce the SAME score. Do not vary tone or scoring between runs.',
+              '',
+              'Scoring rubric (pick the single band that best matches, then pick the exact integer inside it):',
+              '  1  = broken, blank, parked domain, or unreadable',
+              '  2  = extremely outdated (pre-2010 look), no mobile layout, no real content',
+              '  3  = outdated template, weak copy, poor structure, no clear CTA',
+              '  4  = dated but functional; basic info present but ugly typography/layout',
+              '  5  = average small-business site; usable but generic, weak hero, thin content',
+              '  6  = decent modern-ish template with clear services and contact info',
+              '  7  = clearly modern, responsive, good hierarchy, clear CTAs',
+              '  8  = polished, on-brand, strong copy, trust signals (reviews, cases)',
+              '  9  = excellent design and conversion-focused, comparable to top agencies',
+              '  10 = flawless best-in-class, nothing meaningful to improve',
+              '',
+              'Rules:',
+              '- Judge ONLY from the title and content excerpt provided. Do not speculate about images you cannot see.',
+              '- If content is very thin (<300 chars of real copy) cap the score at 4.',
+              '- If the site is unreachable or empty, score 1.',
+              '- Reply with STRICT JSON only: {"score": <integer 1-10>, "reason": "<max 200 chars, cite concrete evidence>"}.',
+              '- The reason MUST reference specific observations (e.g. "no mobile nav", "generic stock hero", "clear service list + phone CTA"). No vague adjectives alone.',
+            ].join('\n'),
           },
           {
             role: 'user',
