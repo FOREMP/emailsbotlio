@@ -141,12 +141,31 @@ Deno.serve(async (req) => {
     // Real images from the lead's own site (their domain)
     const scrapedImages: string[] = Array.isArray(scraped.images) ? scraped.images.slice(0, 8) : []
 
+    // Case-insensitive lookup across all custom_fields keys (handles Phone,
+    // TELEFON, Mobil, phone_number, "Telefonnummer" etc.)
+    const cfLookup = (patterns: RegExp[]): string | null => {
+      for (const [k, v] of Object.entries(cf)) {
+        if (v == null || v === '') continue
+        const key = k.toLowerCase().replace(/[\s_-]/g, '')
+        if (patterns.some((p) => p.test(key))) {
+          const s = String(v).trim()
+          if (s && !/^(null|undefined|n\/a|-)$/i.test(s)) return s
+        }
+      }
+      return null
+    }
+
+    const phoneFromCf = cfLookup([/^phone/, /^tel/, /telefon/, /mobil/, /number/])
+    const addressFromCf = cfLookup([/address/, /adress/, /gata/, /street/])
+    const cityFromCf = cfLookup([/^city$/, /^ort$/, /stad/, /kommun/, /postort/])
+    const emailFromCf = cfLookup([/^email/, /epost/, /^mail/])
+
     const facts = {
       business_name: (cf.company ?? contact?.company ?? pages.home?.title ?? scraped.title ?? '').toString().trim() || null,
-      phone: (cf.phone ?? cf.telefon ?? cf.tel ?? null) as string | null,
-      address: (cf.address ?? cf.adress ?? null) as string | null,
-      city: (cf.city ?? cf.ort ?? null) as string | null,
-      email: contact?.email ?? null,
+      phone: phoneFromCf,
+      address: addressFromCf,
+      city: cityFromCf,
+      email: contact?.email ?? emailFromCf ?? null,
       source_url: site.source_url,
       has_real_branding: hasRealBranding,
       google_maps_url: googleMapsUrl,
