@@ -354,8 +354,21 @@ ABSOLUTA REGLER:
         return json({ error: msg }, 422)
       }
 
-      const files = buildSiteFiles({
+      // === Copy polish pass ===
+      // DeepSeek handles structure/extraction cheaply, but Swedish prose feels
+      // stilted. Run a small Claude Haiku pass that ONLY rewrites text fields
+      // into natural, flowing copy. Same schema, no new facts invented.
+      const polished = await polishCopyWithClaude({
         plan: parsed,
+        facts,
+        openrouterKey,
+      }).catch((e) => {
+        console.warn('copy polish failed, falling back to DeepSeek plan:', (e as Error).message)
+        return parsed!
+      })
+
+      const files = buildSiteFiles({
+        plan: polished,
         facts,
         brandPalette,
         brandFonts,
