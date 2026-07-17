@@ -653,6 +653,43 @@ function normalizeFaqs(items?: FaqItem[]): FaqItem[] {
   return cleaned.length >= 3 ? cleaned : fallback
 }
 
+function normalizePathways(items?: PathwayItem[]): PathwayItem[] {
+  const fallback: PathwayItem[] = [
+    { eyebrow: 'PLANERAT BESÖK', title: 'Starta med bilservice', description: 'När det är dags för ordinarie service eller kontroll inför en längre resa.', ctaLabel: 'Starta med service' },
+    { eyebrow: 'OSÄKER FELBILD', title: 'Boka felsökning', description: 'När bilen varnar, låter annorlunda eller beter sig konstigt utan att du vet varför.', ctaLabel: 'Boka felsökning' },
+    { eyebrow: 'SÄKERHET FÖRST', title: 'Boka bromskontroll', description: 'När bromsarna känns ojämna, låter eller helt enkelt behöver en säkerhetsgenomgång.', ctaLabel: 'Boka bromskontroll' },
+    { eyebrow: 'SÄSONG & KOMFORT', title: 'Boka klimatsystem', description: 'När AC:n tappat effekt eller inför säsongsbyte då komfort och sikt blir avgörande.', ctaLabel: 'Boka klimat' },
+  ]
+  const cleaned = (items || [])
+    .map((p) => ({ eyebrow: cleanText(p?.eyebrow || ''), title: cleanText(p?.title || ''), description: cleanText(p?.description || ''), ctaLabel: cleanText(p?.ctaLabel || 'Läs mer') }))
+    .filter((p) => p.title && p.description)
+    .slice(0, 4)
+  return cleaned.length >= 3 ? cleaned : fallback
+}
+
+function normalizeDifferentiators(items?: DifferentiatorItem[]): DifferentiatorItem[] {
+  const cleaned = (items || [])
+    .map((d) => ({ title: cleanText(d?.title || ''), text: cleanText(d?.text || '') }))
+    .filter((d) => d.title && d.text)
+    .slice(0, 4)
+  return cleaned
+}
+
+function normalizeScenarios(items?: ScenarioItem[]): ScenarioItem[] {
+  const cleaned = (items || [])
+    .map((s) => ({ category: cleanText(s?.category || 'Verkstad'), title: cleanText(s?.title || ''), description: cleanText(s?.description || ''), delivery: cleanText(s?.delivery || '') }))
+    .filter((s) => s.title && s.description && s.delivery)
+    .slice(0, 3)
+  return cleaned
+}
+
+function normalizeProcess(items?: ProcessStep[]): ProcessStep[] {
+  const cleaned = (items || [])
+    .map((s) => ({ title: cleanText(s?.title || ''), description: cleanText(s?.description || ''), outcome: cleanText(s?.outcome || '') }))
+    .filter((s) => s.title && s.description)
+    .slice(0, 3)
+  return cleaned
+
 function nav(active: 'home' | 'about' | 'services', businessName: string, primaryHref: string | null, primaryLabel: string | null, hasContact: boolean): string {
   const a = (key: string) => active === key ? ' active' : ''
   const contactLink = hasContact ? `<a href="index.html#kontakt">Kontakt</a>` : ''
