@@ -385,14 +385,22 @@ function buildSiteFiles({
   </style>
 </head>
 <body>
-  ${nav(active, businessName, primaryHref, primaryLabel)}
+  ${nav(active, businessName, primaryHref, primaryLabel, hasContact)}
   ${body}
   ${footer(businessName, plan.tagline, { phone, email, address })}
 </body>
 </html>`
 
+  const primaryCta = primaryHref && primaryLabel
+    ? `<a class="btn primary" href="${attr(primaryHref)}">${esc(primaryLabel)}</a>`
+    : ''
+  const secondaryServicesCta = `<a class="btn" href="tjanster.html">Se tjänster</a>`
+  const bookCta = primaryHref && primaryLabel
+    ? `<a class="btn" href="${attr(primaryHref)}">Boka</a>`
+    : ''
+
   const homeBody = `
-    <section class="hero"><img src="${attr(img(0))}" alt="${esc(businessName)} verkstad"><div class="hero-content"><div class="pill">${esc(plan.trustTagline || plan.tagline || 'Noggrant arbete, tydlig service')}</div><h1 class="h1">${esc(plan.heroHeadline || `En modernare verkstad för ${businessName}`)}</h1><p class="lead">${esc(plan.heroSubline || plan.tagline || 'En tydlig, förtroendeingivande upplevelse för kunder som vill boka service och reparation.')}</p><div class="btns"><a class="btn primary" href="${attr(primaryHref)}">${esc(primaryLabel)}</a><a class="btn" href="tjanster.html">Se tjänster</a></div></div></section>
+    <section class="hero"><img src="${attr(img(0))}" alt="${esc(businessName)} verkstad"><div class="hero-content"><div class="pill">${esc(plan.trustTagline || plan.tagline || 'Noggrant arbete, tydlig service')}</div><h1 class="h1">${esc(plan.heroHeadline || `En modernare verkstad för ${businessName}`)}</h1><p class="lead">${esc(plan.heroSubline || plan.tagline || 'En tydlig, förtroendeingivande upplevelse för kunder som vill boka service och reparation.')}</p><div class="btns">${primaryCta}${secondaryServicesCta}</div></div></section>
     <section class="section"><div class="wrap"><div class="eyebrow">Tjänster</div><h2 class="h2">Det kunderna behöver — tydligt presenterat</h2><p class="lead">${esc(plan.ctaText || 'Från felsökning till löpande service, med fokus på ett enkelt och tryggt kundflöde.')}</p><div class="grid cards" style="margin-top:38px">${services.slice(0, 3).map(serviceCard).join('')}</div></div></section>
     <section class="section band"><div class="wrap"><div class="eyebrow">Så jobbar vi</div><h2 class="h2">Från bokning till färdig bil</h2><div class="grid process" style="margin-top:38px">${['Boka','Lämna bilen','Vi går igenom arbetet','Hämta tryggt'].map((t, i) => `<div class="step"><div class="num">0${i + 1}</div><h3>${esc(t)}</h3><p class="lead" style="font-size:15px">${esc(['Välj en tid som passar.','Bilen tas emot och behovet gås igenom.','Arbetet utförs med tydlig kommunikation.','Du får tillbaka bilen när allt är klart.'][i])}</p></div>`).join('')}</div></div></section>
     <section class="section"><div class="wrap split"><div><div class="eyebrow">Om verkstaden</div><h2 class="h2">${esc(plan.aboutTitle || businessName)}</h2><p class="lead">${esc(plan.aboutText || 'En lokal bilverkstad med fokus på service, reparation och ett smidigt kundmöte.')}</p><div class="btns"><a class="btn" href="om-oss.html">Läs mer</a></div></div><img class="photo" src="${attr(img(1))}" alt="Verkstadsbild"></div></section>
@@ -403,13 +411,13 @@ function buildSiteFiles({
     ${pageHero('Om oss', plan.aboutTitle || businessName, plan.aboutText || plan.tagline || '', img(1))}
     <section class="section"><div class="wrap split"><img class="photo" src="${attr(img(2))}" alt="Om ${esc(businessName)}"><div><div class="eyebrow">Verkstaden</div><h2 class="h2">${esc(plan.aboutTitle || `Möt ${businessName}`)}</h2><p class="lead">${esc(plan.aboutText || 'En verkstad byggd för tydlig service, bra kommunikation och noggrant utfört arbete.')}</p></div></div></section>
     <section class="section band"><div class="wrap"><div class="eyebrow">Vad vi står för</div><h2 class="h2">Tryggare känsla hela vägen</h2><div class="grid cards" style="margin-top:38px">${values.map((v) => `<div class="card"><h3>${esc(v.title)}</h3><p>${esc(v.text)}</p></div>`).join('')}</div></div></section>
-    <section class="section"><div class="wrap split"><div><h2 class="h2">Redo att lämna in bilen?</h2><p class="lead">${esc(plan.ctaText || 'Gör det enkelt för kunden att ta nästa steg.')}</p><div class="btns"><a class="btn primary" href="${attr(primaryHref)}">${esc(primaryLabel)}</a><a class="btn" href="tjanster.html">Se tjänster</a></div></div><img class="photo" src="${attr(img(3))}" alt="Boka verkstad"></div></section>`
+    ${hasContact ? `<section class="section"><div class="wrap split"><div><h2 class="h2">Redo att lämna in bilen?</h2><p class="lead">${esc(plan.ctaText || 'Gör det enkelt för kunden att ta nästa steg.')}</p><div class="btns">${primaryCta}${secondaryServicesCta}</div></div><img class="photo" src="${attr(img(3))}" alt="Boka verkstad"></div></section>` : ''}`
 
   const servicesBody = `
     ${pageHero('Tjänster', 'Service och reparationer', plan.heroSubline || plan.tagline || '', img(0))}
-    <section class="section"><div class="wrap"><div class="eyebrow">Tjänsteutbud</div><h2 class="h2">Tydligt, professionellt och lätt att boka</h2><div style="margin-top:36px">${services.map((s, i) => `<div class="service-row"><div class="num">${String(i + 1).padStart(2, '0')}</div><div><h3>${esc(s.name)}</h3><p class="lead" style="font-size:16px">${esc(s.description)}</p></div><a class="btn" href="${attr(primaryHref)}">Boka</a></div>`).join('')}</div></div></section>
+    <section class="section"><div class="wrap"><div class="eyebrow">Tjänsteutbud</div><h2 class="h2">Tydligt, professionellt och lätt att boka</h2><div style="margin-top:36px">${services.map((s, i) => `<div class="service-row"><div class="num">${String(i + 1).padStart(2, '0')}</div><div><h3>${esc(s.name)}</h3><p class="lead" style="font-size:16px">${esc(s.description)}</p></div>${bookCta}</div>`).join('')}</div></div></section>
     <section class="section band"><div class="wrap"><div class="eyebrow">Vanliga frågor</div><h2 class="h2">Snabba svar före bokning</h2><div style="margin-top:34px">${faqs.map((f) => `<div class="faq"><h3>${esc(f.question)}</h3><p class="lead" style="font-size:16px">${esc(f.answer)}</p></div>`).join('')}</div></div></section>
-    <section class="section"><div class="wrap split"><img class="photo" src="${attr(img(4))}" alt="Bilverkstad tjänster"><div><h2 class="h2">Boka in en tid</h2><p class="lead">${esc(plan.ctaText || 'Ta kontakt för att hitta rätt service eller reparation för bilen.')}</p><div class="btns"><a class="btn primary" href="${attr(primaryHref)}">${esc(primaryLabel)}</a></div></div></div></section>`
+    ${hasContact ? `<section class="section"><div class="wrap split"><img class="photo" src="${attr(img(4))}" alt="Bilverkstad tjänster"><div><h2 class="h2">Boka in en tid</h2><p class="lead">${esc(plan.ctaText || 'Ta kontakt för att hitta rätt service eller reparation för bilen.')}</p><div class="btns">${primaryCta}</div></div></div></section>` : ''}`
 
   return {
     'index.html': common('home', 'Hem', homeBody),
