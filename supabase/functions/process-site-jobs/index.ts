@@ -141,12 +141,31 @@ Deno.serve(async (req) => {
     // Real images from the lead's own site (their domain)
     const scrapedImages: string[] = Array.isArray(scraped.images) ? scraped.images.slice(0, 8) : []
 
+    // Case-insensitive lookup across all custom_fields keys (handles Phone,
+    // TELEFON, Mobil, phone_number, "Telefonnummer" etc.)
+    const cfLookup = (patterns: RegExp[]): string | null => {
+      for (const [k, v] of Object.entries(cf)) {
+        if (v == null || v === '') continue
+        const key = k.toLowerCase().replace(/[\s_-]/g, '')
+        if (patterns.some((p) => p.test(key))) {
+          const s = String(v).trim()
+          if (s && !/^(null|undefined|n\/a|-)$/i.test(s)) return s
+        }
+      }
+      return null
+    }
+
+    const phoneFromCf = cfLookup([/^phone/, /^tel/, /telefon/, /mobil/, /number/])
+    const addressFromCf = cfLookup([/address/, /adress/, /gata/, /street/])
+    const cityFromCf = cfLookup([/^city$/, /^ort$/, /stad/, /kommun/, /postort/])
+    const emailFromCf = cfLookup([/^email/, /epost/, /^mail/])
+
     const facts = {
       business_name: (cf.company ?? contact?.company ?? pages.home?.title ?? scraped.title ?? '').toString().trim() || null,
-      phone: (cf.phone ?? cf.telefon ?? cf.tel ?? null) as string | null,
-      address: (cf.address ?? cf.adress ?? null) as string | null,
-      city: (cf.city ?? cf.ort ?? null) as string | null,
-      email: contact?.email ?? null,
+      phone: phoneFromCf,
+      address: addressFromCf,
+      city: cityFromCf,
+      email: contact?.email ?? emailFromCf ?? null,
       source_url: site.source_url,
       has_real_branding: hasRealBranding,
       google_maps_url: googleMapsUrl,
@@ -345,8 +364,9 @@ function buildSiteFiles({
   const faqs = normalizeFaqs(plan.faqs)
   const images = imagePool.filter((url) => /^https?:\/\//i.test(url)).slice(0, 8)
   const img = (i: number) => images[i % Math.max(images.length, 1)] || 'https://images.unsplash.com/photo-1487754180451-c456f719a1fc?w=1600&q=80'
-  const primaryHref = phone ? `tel:${phone.replace(/\s+/g, '')}` : 'index.html#kontakt'
-  const primaryLabel = phone ? 'Ring oss' : 'Kontakta oss'
+  const hasContact = Boolean(phone || email || address)
+  const primaryHref = phone ? `tel:${phone.replace(/\s+/g, '')}` : email ? `mailto:${email}` : null
+  const primaryLabel = phone ? 'Ring oss' : email ? 'Mejla oss' : null
   const displayFont = brandFonts[0] || 'Space Grotesk'
 
   const common = (active: 'home' | 'about' | 'services', title: string, body: string) => `<!DOCTYPE html>
@@ -365,14 +385,22 @@ function buildSiteFiles({
   </style>
 </head>
 <body>
-  ${nav(active, businessName, primaryHref, primaryLabel)}
+  ${nav(active, businessName, primaryHref, primaryLabel, hasContact)}
   ${body}
   ${footer(businessName, plan.tagline, { phone, email, address })}
 </body>
 </html>`
 
+  const primaryCta = primaryHref && primaryLabel
+    ? `<a class="btn primary" href="${attr(primaryHref)}">${esc(primaryLabel)}</a>`
+    : ''
+  const secondaryServicesCta = `<a class="btn" href="tjanster.html">Se tjänster</a>`
+  const bookCta = primaryHref && primaryLabel
+    ? `<a class="btn" href="${attr(primaryHref)}">Boka</a>`
+    : ''
+
   const homeBody = `
-    <section class="hero"><img src="${attr(img(0))}" alt="${esc(businessName)} verkstad"><div class="hero-content"><div class="pill">${esc(plan.trustTagline || plan.tagline || 'Noggrant arbete, tydlig service')}</div><h1 class="h1">${esc(plan.heroHeadline || `En modernare verkstad för ${businessName}`)}</h1><p class="lead">${esc(plan.heroSubline || plan.tagline || 'En tydlig, förtroendeingivande upplevelse för kunder som vill boka service och reparation.')}</p><div class="btns"><a class="btn primary" href="${attr(primaryHref)}">${esc(primaryLabel)}</a><a class="btn" href="tjanster.html">Se tjänster</a></div></div></section>
+    <section class="hero"><img src="${attr(img(0))}" alt="${esc(businessName)} verkstad"><div class="hero-content"><div class="pill">${esc(plan.trustTagline || plan.tagline || 'Noggrant arbete, tydlig service')}</div><h1 class="h1">${esc(plan.heroHeadline || `En modernare verkstad för ${businessName}`)}</h1><p class="lead">${esc(plan.heroSubline || plan.tagline || 'En tydlig, förtroendeingivande upplevelse för kunder som vill boka service och reparation.')}</p><div class="btns">${primaryCta}${secondaryServicesCta}</div></div></section>
     <section class="section"><div class="wrap"><div class="eyebrow">Tjänster</div><h2 class="h2">Det kunderna behöver — tydligt presenterat</h2><p class="lead">${esc(plan.ctaText || 'Från felsökning till löpande service, med fokus på ett enkelt och tryggt kundflöde.')}</p><div class="grid cards" style="margin-top:38px">${services.slice(0, 3).map(serviceCard).join('')}</div></div></section>
     <section class="section band"><div class="wrap"><div class="eyebrow">Så jobbar vi</div><h2 class="h2">Från bokning till färdig bil</h2><div class="grid process" style="margin-top:38px">${['Boka','Lämna bilen','Vi går igenom arbetet','Hämta tryggt'].map((t, i) => `<div class="step"><div class="num">0${i + 1}</div><h3>${esc(t)}</h3><p class="lead" style="font-size:15px">${esc(['Välj en tid som passar.','Bilen tas emot och behovet gås igenom.','Arbetet utförs med tydlig kommunikation.','Du får tillbaka bilen när allt är klart.'][i])}</p></div>`).join('')}</div></div></section>
     <section class="section"><div class="wrap split"><div><div class="eyebrow">Om verkstaden</div><h2 class="h2">${esc(plan.aboutTitle || businessName)}</h2><p class="lead">${esc(plan.aboutText || 'En lokal bilverkstad med fokus på service, reparation och ett smidigt kundmöte.')}</p><div class="btns"><a class="btn" href="om-oss.html">Läs mer</a></div></div><img class="photo" src="${attr(img(1))}" alt="Verkstadsbild"></div></section>
@@ -383,13 +411,13 @@ function buildSiteFiles({
     ${pageHero('Om oss', plan.aboutTitle || businessName, plan.aboutText || plan.tagline || '', img(1))}
     <section class="section"><div class="wrap split"><img class="photo" src="${attr(img(2))}" alt="Om ${esc(businessName)}"><div><div class="eyebrow">Verkstaden</div><h2 class="h2">${esc(plan.aboutTitle || `Möt ${businessName}`)}</h2><p class="lead">${esc(plan.aboutText || 'En verkstad byggd för tydlig service, bra kommunikation och noggrant utfört arbete.')}</p></div></div></section>
     <section class="section band"><div class="wrap"><div class="eyebrow">Vad vi står för</div><h2 class="h2">Tryggare känsla hela vägen</h2><div class="grid cards" style="margin-top:38px">${values.map((v) => `<div class="card"><h3>${esc(v.title)}</h3><p>${esc(v.text)}</p></div>`).join('')}</div></div></section>
-    <section class="section"><div class="wrap split"><div><h2 class="h2">Redo att lämna in bilen?</h2><p class="lead">${esc(plan.ctaText || 'Gör det enkelt för kunden att ta nästa steg.')}</p><div class="btns"><a class="btn primary" href="${attr(primaryHref)}">${esc(primaryLabel)}</a><a class="btn" href="tjanster.html">Se tjänster</a></div></div><img class="photo" src="${attr(img(3))}" alt="Boka verkstad"></div></section>`
+    ${hasContact ? `<section class="section"><div class="wrap split"><div><h2 class="h2">Redo att lämna in bilen?</h2><p class="lead">${esc(plan.ctaText || 'Gör det enkelt för kunden att ta nästa steg.')}</p><div class="btns">${primaryCta}${secondaryServicesCta}</div></div><img class="photo" src="${attr(img(3))}" alt="Boka verkstad"></div></section>` : ''}`
 
   const servicesBody = `
     ${pageHero('Tjänster', 'Service och reparationer', plan.heroSubline || plan.tagline || '', img(0))}
-    <section class="section"><div class="wrap"><div class="eyebrow">Tjänsteutbud</div><h2 class="h2">Tydligt, professionellt och lätt att boka</h2><div style="margin-top:36px">${services.map((s, i) => `<div class="service-row"><div class="num">${String(i + 1).padStart(2, '0')}</div><div><h3>${esc(s.name)}</h3><p class="lead" style="font-size:16px">${esc(s.description)}</p></div><a class="btn" href="${attr(primaryHref)}">Boka</a></div>`).join('')}</div></div></section>
+    <section class="section"><div class="wrap"><div class="eyebrow">Tjänsteutbud</div><h2 class="h2">Tydligt, professionellt och lätt att boka</h2><div style="margin-top:36px">${services.map((s, i) => `<div class="service-row"><div class="num">${String(i + 1).padStart(2, '0')}</div><div><h3>${esc(s.name)}</h3><p class="lead" style="font-size:16px">${esc(s.description)}</p></div>${bookCta}</div>`).join('')}</div></div></section>
     <section class="section band"><div class="wrap"><div class="eyebrow">Vanliga frågor</div><h2 class="h2">Snabba svar före bokning</h2><div style="margin-top:34px">${faqs.map((f) => `<div class="faq"><h3>${esc(f.question)}</h3><p class="lead" style="font-size:16px">${esc(f.answer)}</p></div>`).join('')}</div></div></section>
-    <section class="section"><div class="wrap split"><img class="photo" src="${attr(img(4))}" alt="Bilverkstad tjänster"><div><h2 class="h2">Boka in en tid</h2><p class="lead">${esc(plan.ctaText || 'Ta kontakt för att hitta rätt service eller reparation för bilen.')}</p><div class="btns"><a class="btn primary" href="${attr(primaryHref)}">${esc(primaryLabel)}</a></div></div></div></section>`
+    ${hasContact ? `<section class="section"><div class="wrap split"><img class="photo" src="${attr(img(4))}" alt="Bilverkstad tjänster"><div><h2 class="h2">Boka in en tid</h2><p class="lead">${esc(plan.ctaText || 'Ta kontakt för att hitta rätt service eller reparation för bilen.')}</p><div class="btns">${primaryCta}</div></div></div></section>` : ''}`
 
   return {
     'index.html': common('home', 'Hem', homeBody),
@@ -439,9 +467,13 @@ function normalizeFaqs(items?: FaqItem[]): FaqItem[] {
   return cleaned.length >= 3 ? cleaned : fallback
 }
 
-function nav(active: 'home' | 'about' | 'services', businessName: string, primaryHref: string, primaryLabel: string): string {
+function nav(active: 'home' | 'about' | 'services', businessName: string, primaryHref: string | null, primaryLabel: string | null, hasContact: boolean): string {
   const a = (key: string) => active === key ? ' active' : ''
-  return `<nav class="nav"><div class="nav-inner"><a class="brand" href="index.html">${esc(businessName)}</a><div class="links"><a class="${a('home')}" href="index.html">Hem</a><a class="${a('about')}" href="om-oss.html">Om oss</a><a class="${a('services')}" href="tjanster.html">Tjänster</a><a href="index.html#kontakt">Kontakt</a><a class="nav-cta" href="${attr(primaryHref)}">${esc(primaryLabel)}</a></div></div></nav>`
+  const contactLink = hasContact ? `<a href="index.html#kontakt">Kontakt</a>` : ''
+  const cta = primaryHref && primaryLabel
+    ? `<a class="nav-cta" href="${attr(primaryHref)}">${esc(primaryLabel)}</a>`
+    : ''
+  return `<nav class="nav"><div class="nav-inner"><a class="brand" href="index.html">${esc(businessName)}</a><div class="links"><a class="${a('home')}" href="index.html">Hem</a><a class="${a('about')}" href="om-oss.html">Om oss</a><a class="${a('services')}" href="tjanster.html">Tjänster</a>${contactLink}${cta}</div></div></nav>`
 }
 
 function pageHero(eyebrow: string, title: string, sub: string, image: string): string {
@@ -453,20 +485,29 @@ function serviceCard(s: ServiceItem): string {
 }
 
 function contactSection({ phone, email, address, googleMapsUrl }: { phone: string; email: string; address: string; googleMapsUrl: string | null }): string {
+  // Only render if there is real contact data — never fabricate a "kontakt saknas" placeholder.
+  if (!phone && !email && !address) return ''
   const rows = [
     phone ? `<div class="contact-item"><strong>Telefon</strong><br><a href="tel:${attr(phone.replace(/\s+/g, ''))}">${esc(phone)}</a></div>` : '',
     email ? `<div class="contact-item"><strong>E-post</strong><br><a href="mailto:${attr(email)}">${esc(email)}</a></div>` : '',
     address ? `<div class="contact-item"><strong>Adress</strong><br>${esc(address)}</div>` : '',
   ].filter(Boolean).join('')
-  const map = googleMapsUrl && /^https:\/\/www\.google\.[^\s"']+\/maps\/embed/i.test(googleMapsUrl)
-    ? `<iframe class="map" src="${attr(googleMapsUrl)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>`
-    : `<div class="card"><p>Kontaktuppgifterna ovan kan kompletteras med karta när en Google Maps embed-länk finns.</p></div>`
-  return `<section id="kontakt" class="section band"><div class="wrap contact"><div><div class="eyebrow">Kontakt</div><h2 class="h2">Ta nästa steg</h2><p class="lead">Boka service, fråga om felsökning eller beskriv vad bilen behöver hjälp med.</p><div class="contact-list">${rows || '<div class="contact-item">Kontaktuppgifter saknas i källdatan.</div>'}</div></div>${map}</div></section>`
+  const hasValidMap = googleMapsUrl && /^https:\/\/www\.google\.[^\s"']+\/maps\/embed/i.test(googleMapsUrl)
+  // No map, no fake placeholder — use a single-column layout so nothing looks empty.
+  const wrapClass = hasValidMap ? 'wrap contact' : 'wrap'
+  const map = hasValidMap
+    ? `<iframe class="map" src="${attr(googleMapsUrl!)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>`
+    : ''
+  return `<section id="kontakt" class="section band"><div class="${wrapClass}"><div><div class="eyebrow">Kontakt</div><h2 class="h2">Ta nästa steg</h2><p class="lead">Boka service, fråga om felsökning eller beskriv vad bilen behöver hjälp med.</p><div class="contact-list" style="margin-top:24px">${rows}</div></div>${map}</div></section>`
 }
 
 function footer(businessName: string, tagline: string | undefined, contact: { phone: string; email: string; address: string }): string {
-  const contactRows = [contact.phone, contact.email, contact.address].filter(Boolean).map(esc).join('<br>') || 'Kontaktuppgifter saknas'
-  return `<footer><div class="wrap"><div class="footer-grid"><div><div class="footer-title">${esc(businessName)}</div><p>${esc(tagline || 'Demo skapad för en modernare digital kundupplevelse.')}</p></div><div><div class="footer-title">Navigering</div><p><a href="index.html">Hem</a><br><a href="om-oss.html">Om oss</a><br><a href="tjanster.html">Tjänster</a><br><a href="index.html#kontakt">Kontakt</a></p></div><div><div class="footer-title">Kontakt</div><p>${contactRows}</p></div></div><p style="margin-top:42px;border-top:1px solid color-mix(in srgb,var(--text) 8%,transparent);padding-top:24px">© ${CURRENT_YEAR} ${esc(businessName)} — Demo skapad av Botlio</p></div></footer>`
+  const contactRows = [contact.phone, contact.email, contact.address].filter(Boolean).map(esc).join('<br>')
+  const hasContact = Boolean(contactRows)
+  const cols = hasContact ? '1.5fr 1fr 1fr' : '1.5fr 1fr'
+  const contactCol = hasContact ? `<div><div class="footer-title">Kontakt</div><p>${contactRows}</p></div>` : ''
+  const navContact = hasContact ? `<br><a href="index.html#kontakt">Kontakt</a>` : ''
+  return `<footer><div class="wrap"><div class="footer-grid" style="grid-template-columns:${cols}"><div><div class="footer-title">${esc(businessName)}</div><p>${esc(tagline || 'Demo skapad för en modernare digital kundupplevelse.')}</p></div><div><div class="footer-title">Navigering</div><p><a href="index.html">Hem</a><br><a href="om-oss.html">Om oss</a><br><a href="tjanster.html">Tjänster</a>${navContact}</p></div>${contactCol}</div><p style="margin-top:42px;border-top:1px solid color-mix(in srgb,var(--text) 8%,transparent);padding-top:24px">© ${CURRENT_YEAR} ${esc(businessName)} — Demo skapad av Botlio</p></div></footer>`
 }
 
 function cleanText(value: string): string {
