@@ -201,32 +201,63 @@ Deno.serve(async (req) => {
 
     const screenshotUrl: string | null = scraped.screenshot_url ?? null
 
-    const systemPrompt = `Du är en senior svensk copywriter och art director för premium bilverkstadssajter.
+    const systemPrompt = `Du är en senior svensk copywriter och art director för PREMIUM bilverkstadssajter i klass med de bästa nordiska SaaS- och bilmärkessajter. Ton: modernt, självsäkert, editoriellt. Bygg förtroende via TYDLIGHET och YRKESSTOLTHET — inte genom siffror eller påhittade certifikat.
 
-VIKTIGT: Du ska INTE skriva HTML. Svara bara med ett kompakt JSON-objekt med text- och designinnehåll. HTML byggs av systemet efteråt.
+VIKTIGT: Skriv INTE HTML. Returnera bara giltig JSON enligt schemat nedan. HTML byggs av systemet.
 
-RETURFORMAT — bara giltig JSON, ingen markdown:
+RETURFORMAT — endast JSON, ingen markdown, inga kommentarer:
 {
   "businessName": "...",
   "tagline": "kort premium tagline",
-  "heroHeadline": "max 9 ord",
-  "heroSubline": "1 mening",
-  "trustTagline": "kort rad om förtroende, bara baserat på källan",
-  "services": [{"name":"...","description":"..."}],
-  "aboutTitle": "...",
-  "aboutText": "2-4 meningar",
+  "heroEyebrow": "kort label, t.ex. 'Bilverkstad i {ort}' eller kategori",
+  "heroLine1": "första raden av rubriken (3–6 ord, editoriell känsla)",
+  "heroLine2": "andra raden (3–7 ord, kontrast/löfte, t.ex. 'Vi bygger trygghet, inte gissningar.')",
+  "heroSubline": "1–2 meningar som förklarar värdet konkret",
+  "trustBadges": ["Garanti på allt arbete", "Tydliga underlag", "Personlig service"],
+  "pathwaysIntro": "1 mening om att guida kunden rätt in",
+  "pathways": [
+    {"eyebrow":"PLANERAT BESÖK","title":"Starta med bilservice","description":"Kort scenario när det passar (1–2 meningar)","ctaLabel":"Starta med service"},
+    {"eyebrow":"OSÄKER FELBILD","title":"Boka felsökning","description":"...","ctaLabel":"Boka felsökning"},
+    {"eyebrow":"SÄKERHET FÖRST","title":"Boka bromskontroll","description":"...","ctaLabel":"Boka bromskontroll"},
+    {"eyebrow":"SÄSONG & KOMFORT","title":"Boka klimatsystem","description":"...","ctaLabel":"Boka klimat"}
+  ],
+  "services": [{"name":"...","description":"vad tjänsten är","when":"'När:' — kort rad om när kunden ska välja den"}],
+  "aboutTitle": "editoriell rubrik, gärna 2 rader",
+  "aboutIntro": "1 stark manifest-mening",
+  "aboutBefore": "stycke om FÖRE besöket (transparens, planering)",
+  "aboutDuring": "stycke om UNDER arbetet (expertis, träffsäkerhet)",
+  "aboutAfter": "stycke om EFTER (rak återkoppling, begripligt underlag)",
+  "differentiators": [
+    {"title":"Tydlig offert innan större beslut","text":"..."},
+    {"title":"All expertis samlad under ett tak","text":"..."},
+    {"title":"Smidig kontakt på dina villkor","text":"..."},
+    {"title":"Verklig kvalitet, inte bara ord","text":"..."}
+  ],
+  "scenarios": [
+    {"category":"Service","title":"Servicegenomgång inför längre körning","description":"Beskriv typiskt scenario (inte påhittad kund)","delivery":"Vad kunden får som resultat"},
+    {"category":"Diagnostik","title":"När varningslampan tänds men felet inte är självklart","description":"...","delivery":"..."},
+    {"category":"Bromsar","title":"Bromsar som känns ojämna eller låter","description":"...","delivery":"..."}
+  ],
+  "processSteps": [
+    {"title":"Beskriv behovet","description":"...","outcome":"Smidigare planering och inga missförstånd."},
+    {"title":"Vi ger dig en tydlig plan","description":"...","outcome":"Högsta kvalitet redan från första steget."},
+    {"title":"Raka rör, inga överraskningar","description":"...","outcome":"Trygghet och full transparens hela vägen."}
+  ],
   "values": [{"title":"...","text":"..."}],
   "faqs": [{"question":"...","answer":"..."}],
-  "ctaText": "kort CTA-rad"
+  "ctaTitle": "kort rubrik för sista CTA-bandet",
+  "ctaText": "1 mening som får kunden att ta nästa steg"
 }
 
 ABSOLUTA REGLER:
-1. Hitta aldrig på adresser, telefonnummer, priser, öppettider, årtal, certifieringar eller statistik.
-2. Om ett faktum saknas, utelämna det eller skriv generellt utan siffra.
-3. Om business_name saknas eller ser ut som HTTP-fel, returnera {"error":"invalid business name"}.
-4. Extrahera 4–7 verkliga tjänster från källdatan. Om tjänster är oklara får du använda vanliga bilverkstadskategorier utan pris eller falska löften.
-5. Texten ska låta som en modern svensk bilverkstad, inte generisk AI-marknadsföring.
-6. Håll svaret kort: max 3500 tokens.`
+1. Hitta ALDRIG på adresser, telefonnummer, priser, öppettider, årtal, statistik, certifieringar, kundnamn eller citat.
+2. "scenarios" är TYPISKA situationer verkstaden hanterar — inte påhittade referensuppdrag. Skriv aldrig kundnamn.
+3. Om ett fält saknar grund, utelämna det. Bättre kortare än fejkat.
+4. Om business_name saknas eller ser ut som HTTP-fel/domän utan namn, returnera {"error":"invalid business name"}.
+5. Extrahera 4–7 verkliga tjänster från källdatan. Vid oklarhet: standard bilverkstadskategorier utan pris eller falska löften.
+6. Language = svenska. Ton = editoriell, konkret, självsäker — inga "vi erbjuder marknadens bästa"-klichéer.
+7. heroLine1 + heroLine2 ska tillsammans kännas som en HEADLINE värdig en premium-sajt (t.ex. "Din bilverkstad i Lund. / Vi bygger trygghet, inte gissningar.").
+8. Max 4500 tokens totalt.`
 
     const userTextParts = [
       'Skapa en kompakt innehållsplan för en 3-sidig premium-sajt för denna bilverkstad. Skriv ENDAST JSON enligt schemat.',
