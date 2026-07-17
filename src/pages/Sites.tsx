@@ -337,9 +337,15 @@ const Sites = () => {
                           <Sparkles className="h-3 w-3" />
                           <span className="ml-1">Scrape</span>
                         </Button>
-                        <Button size="sm" variant="ghost" disabled={busyId === s.id || !["scraped","generated","failed"].includes(s.status)} onClick={() => runStep(s.id, "generate-site")}>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={busyId === s.id || !["scraped","generated","live","failed"].includes(s.status)}
+                          onClick={() => runStep(s.id, "generate-site")}
+                          title={s.status === "live" ? "Regenerera hemsidan med befintlig scraped data (drar inga scrape-credits)" : "Generera hemsida från scraped data"}
+                        >
                           <Wand2 className="h-3 w-3" />
-                          <span className="ml-1">Generate</span>
+                          <span className="ml-1">{["live","generated"].includes(s.status) ? "Regenerera" : "Generate"}</span>
                         </Button>
                         <Button size="sm" variant="ghost" disabled={busyId === s.id || !["generated","live","failed"].includes(s.status)} onClick={() => runStep(s.id, "deploy-site")}>
                           <Rocket className="h-3 w-3" />
