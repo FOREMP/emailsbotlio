@@ -16,20 +16,35 @@ const MAX_ATTEMPTS = 3
 const STUCK_MINUTES = 10
 const CURRENT_YEAR = new Date().getFullYear()
 
-interface ServiceItem { name: string; description: string }
+interface ServiceItem { name: string; description: string; when?: string }
 interface ValueItem { title: string; text: string }
 interface FaqItem { question: string; answer: string }
+interface PathwayItem { eyebrow: string; title: string; description: string; ctaLabel?: string }
+interface DifferentiatorItem { title: string; text: string }
+interface ScenarioItem { category: string; title: string; description: string; delivery: string }
+interface ProcessStep { title: string; description: string; outcome?: string }
 interface SitePlan {
   businessName?: string
   tagline?: string
-  heroHeadline?: string
+  heroEyebrow?: string
+  heroLine1?: string
+  heroLine2?: string
   heroSubline?: string
-  trustTagline?: string
+  trustBadges?: string[]
+  pathwaysIntro?: string
+  pathways?: PathwayItem[]
   services?: ServiceItem[]
   aboutTitle?: string
-  aboutText?: string
+  aboutIntro?: string
+  aboutBefore?: string
+  aboutDuring?: string
+  aboutAfter?: string
+  differentiators?: DifferentiatorItem[]
+  scenarios?: ScenarioItem[]
+  processSteps?: ProcessStep[]
   values?: ValueItem[]
   faqs?: FaqItem[]
+  ctaTitle?: string
   ctaText?: string
 }
 
