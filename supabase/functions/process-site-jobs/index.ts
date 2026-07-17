@@ -364,8 +364,9 @@ function buildSiteFiles({
   const faqs = normalizeFaqs(plan.faqs)
   const images = imagePool.filter((url) => /^https?:\/\//i.test(url)).slice(0, 8)
   const img = (i: number) => images[i % Math.max(images.length, 1)] || 'https://images.unsplash.com/photo-1487754180451-c456f719a1fc?w=1600&q=80'
-  const primaryHref = phone ? `tel:${phone.replace(/\s+/g, '')}` : 'index.html#kontakt'
-  const primaryLabel = phone ? 'Ring oss' : 'Kontakta oss'
+  const hasContact = Boolean(phone || email || address)
+  const primaryHref = phone ? `tel:${phone.replace(/\s+/g, '')}` : email ? `mailto:${email}` : null
+  const primaryLabel = phone ? 'Ring oss' : email ? 'Mejla oss' : null
   const displayFont = brandFonts[0] || 'Space Grotesk'
 
   const common = (active: 'home' | 'about' | 'services', title: string, body: string) => `<!DOCTYPE html>
