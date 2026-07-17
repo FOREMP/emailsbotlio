@@ -467,9 +467,13 @@ function normalizeFaqs(items?: FaqItem[]): FaqItem[] {
   return cleaned.length >= 3 ? cleaned : fallback
 }
 
-function nav(active: 'home' | 'about' | 'services', businessName: string, primaryHref: string, primaryLabel: string): string {
+function nav(active: 'home' | 'about' | 'services', businessName: string, primaryHref: string | null, primaryLabel: string | null, hasContact: boolean): string {
   const a = (key: string) => active === key ? ' active' : ''
-  return `<nav class="nav"><div class="nav-inner"><a class="brand" href="index.html">${esc(businessName)}</a><div class="links"><a class="${a('home')}" href="index.html">Hem</a><a class="${a('about')}" href="om-oss.html">Om oss</a><a class="${a('services')}" href="tjanster.html">Tjänster</a><a href="index.html#kontakt">Kontakt</a><a class="nav-cta" href="${attr(primaryHref)}">${esc(primaryLabel)}</a></div></div></nav>`
+  const contactLink = hasContact ? `<a href="index.html#kontakt">Kontakt</a>` : ''
+  const cta = primaryHref && primaryLabel
+    ? `<a class="nav-cta" href="${attr(primaryHref)}">${esc(primaryLabel)}</a>`
+    : ''
+  return `<nav class="nav"><div class="nav-inner"><a class="brand" href="index.html">${esc(businessName)}</a><div class="links"><a class="${a('home')}" href="index.html">Hem</a><a class="${a('about')}" href="om-oss.html">Om oss</a><a class="${a('services')}" href="tjanster.html">Tjänster</a>${contactLink}${cta}</div></div></nav>`
 }
 
 function pageHero(eyebrow: string, title: string, sub: string, image: string): string {
@@ -481,20 +485,29 @@ function serviceCard(s: ServiceItem): string {
 }
 
 function contactSection({ phone, email, address, googleMapsUrl }: { phone: string; email: string; address: string; googleMapsUrl: string | null }): string {
+  // Only render if there is real contact data — never fabricate a "kontakt saknas" placeholder.
+  if (!phone && !email && !address) return ''
   const rows = [
     phone ? `<div class="contact-item"><strong>Telefon</strong><br><a href="tel:${attr(phone.replace(/\s+/g, ''))}">${esc(phone)}</a></div>` : '',
     email ? `<div class="contact-item"><strong>E-post</strong><br><a href="mailto:${attr(email)}">${esc(email)}</a></div>` : '',
     address ? `<div class="contact-item"><strong>Adress</strong><br>${esc(address)}</div>` : '',
   ].filter(Boolean).join('')
-  const map = googleMapsUrl && /^https:\/\/www\.google\.[^\s"']+\/maps\/embed/i.test(googleMapsUrl)
-    ? `<iframe class="map" src="${attr(googleMapsUrl)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>`
-    : `<div class="card"><p>Kontaktuppgifterna ovan kan kompletteras med karta när en Google Maps embed-länk finns.</p></div>`
-  return `<section id="kontakt" class="section band"><div class="wrap contact"><div><div class="eyebrow">Kontakt</div><h2 class="h2">Ta nästa steg</h2><p class="lead">Boka service, fråga om felsökning eller beskriv vad bilen behöver hjälp med.</p><div class="contact-list">${rows || '<div class="contact-item">Kontaktuppgifter saknas i källdatan.</div>'}</div></div>${map}</div></section>`
+  const hasValidMap = googleMapsUrl && /^https:\/\/www\.google\.[^\s"']+\/maps\/embed/i.test(googleMapsUrl)
+  // No map, no fake placeholder — use a single-column layout so nothing looks empty.
+  const wrapClass = hasValidMap ? 'wrap contact' : 'wrap'
+  const map = hasValidMap
+    ? `<iframe class="map" src="${attr(googleMapsUrl!)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>`
+    : ''
+  return `<section id="kontakt" class="section band"><div class="${wrapClass}"><div><div class="eyebrow">Kontakt</div><h2 class="h2">Ta nästa steg</h2><p class="lead">Boka service, fråga om felsökning eller beskriv vad bilen behöver hjälp med.</p><div class="contact-list" style="margin-top:24px">${rows}</div></div>${map}</div></section>`
 }
 
 function footer(businessName: string, tagline: string | undefined, contact: { phone: string; email: string; address: string }): string {
-  const contactRows = [contact.phone, contact.email, contact.address].filter(Boolean).map(esc).join('<br>') || 'Kontaktuppgifter saknas'
-  return `<footer><div class="wrap"><div class="footer-grid"><div><div class="footer-title">${esc(businessName)}</div><p>${esc(tagline || 'Demo skapad för en modernare digital kundupplevelse.')}</p></div><div><div class="footer-title">Navigering</div><p><a href="index.html">Hem</a><br><a href="om-oss.html">Om oss</a><br><a href="tjanster.html">Tjänster</a><br><a href="index.html#kontakt">Kontakt</a></p></div><div><div class="footer-title">Kontakt</div><p>${contactRows}</p></div></div><p style="margin-top:42px;border-top:1px solid color-mix(in srgb,var(--text) 8%,transparent);padding-top:24px">© ${CURRENT_YEAR} ${esc(businessName)} — Demo skapad av Botlio</p></div></footer>`
+  const contactRows = [contact.phone, contact.email, contact.address].filter(Boolean).map(esc).join('<br>')
+  const hasContact = Boolean(contactRows)
+  const cols = hasContact ? '1.5fr 1fr 1fr' : '1.5fr 1fr'
+  const contactCol = hasContact ? `<div><div class="footer-title">Kontakt</div><p>${contactRows}</p></div>` : ''
+  const navContact = hasContact ? `<br><a href="index.html#kontakt">Kontakt</a>` : ''
+  return `<footer><div class="wrap"><div class="footer-grid" style="grid-template-columns:${cols}"><div><div class="footer-title">${esc(businessName)}</div><p>${esc(tagline || 'Demo skapad för en modernare digital kundupplevelse.')}</p></div><div><div class="footer-title">Navigering</div><p><a href="index.html">Hem</a><br><a href="om-oss.html">Om oss</a><br><a href="tjanster.html">Tjänster</a>${navContact}</p></div>${contactCol}</div><p style="margin-top:42px;border-top:1px solid color-mix(in srgb,var(--text) 8%,transparent);padding-top:24px">© ${CURRENT_YEAR} ${esc(businessName)} — Demo skapad av Botlio</p></div></footer>`
 }
 
 function cleanText(value: string): string {
