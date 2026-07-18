@@ -1,46 +1,129 @@
-## Vad Supabase-mailet betyder
 
-Nano-instansen har en **Disk IO Budget** (burst-krediter för läs/skriv). När vi använder mer än vår sekundliga tilldelning bränner vi krediter — när krediterna tar slut throttlar Postgres. Det är exakt vad som händer nu.
+# Site Outreach Pipeline — Plan
 
-## Rotorsak — vem drar IO:t
+Målet: ladda upp en Google-skrapad lista (500+ företag), systemet väljer vilka som får en demo-hemsida, du godkänner i UI, och godkända demos triggar en 4-mails sekvens från `foremp.email` — allt strypt till 20 mails/dag utan att spränga Supabase IO.
 
-Från `pg_stat_statements` (7 dagars fönster) står två saker för nästan all IO, och båda kommer från våra egna cron-jobb, inte från riktiga användare:
+---
 
-| # | Ursprung | Symptom |
-|---|---|---|
-| 1 | **`run-sequences`** poll-loop | 10 070 "hitta due enrollments"-queries, 22 702 "sortera efter last_sent_at", 48 207 single-row UPDATEs på `enrollments`, 48 377 SELECT på `sequence_nodes`/`sequence_edges` (**en läsning per enrollment, varje pass** — grafen läses från början varje gång) |
-| 2 | **`process-site-jobs`** cron | Schemalagd `* * * * *` (varje minut, 1 440 gånger/dag) även när kön är tom — bootar isolat + kör claim-queryn utan anledning |
-| 3 | `sent_emails` full scan | 17 anrop, 430 ms medel — en sida som gör `select *` utan filter/limit |
-| 4 | `email_unsubscribe_tokens` inserts + lookups | 2 000+ rader — vi skapar en NY token per skickat mail istället för att återanvända |
+## 1. Import & företagsfiltrering
 
-Kontakter/sender-tabellerna är inte problemet. Det är **skrivvolym på `enrollments` + onödiga cron-tickar** som äter budgeten.
+**Ny sida `/site-leads`** (eller flik under Contacts) med CSV/XLSX-upload.
 
-## Plan — sänk IO utan att röra utgåendemailen
+Deepseek V3.1 kör **en gång per fil** (batch-prompt, ~50 rader per anrop) och normaliserar kolumnerna till:
+`company_name, website, email, phone, address, rating, reviews_count, review_snippets, category`.
+Koordinater, plus_code, place_id osv. ignoreras. Detta gör mappningen billig och robust mot olika Google-exportformat.
 
-### 1. Sluta re-läsa hela sekvens-grafen varje pass (största vinsten)
-I `run-sequences/index.ts`: cacha `sequence_nodes` + `sequence_edges` per `sequence_id` i minnet för hela invocation:en. Idag laddas de om per enrollment → 48k läsningar blir ~10–20 per pass.
+**Två destinationer efter import:**
+- Har `website` + `email` (eller vi hittar email via scrape) → `site_leads` med `status = 'pending_audit'`.
+- Saknar website ELLER saknar email helt → `site_leads` med `status = 'skipped_no_contact'` (parkerad lista).
 
-### 2. Slå ihop enrollment-updates
-Idag: 2–3 separata `UPDATE enrollments` per enrollment per pass (updated_at bump, sedan next_send_at, sedan status). Slå ihop till **en enda UPDATE** i slutet av varje enrollment-steg. Sparar ~2/3 av skrivvolymen på den tyngsta tabellen.
+**Dedupe:** unik constraint på normaliserat `company_name + domain`. Vid ny import → befintliga rader uppdateras inte, nya skippas om de redan finns (oavsett status). Så en `skipped` firma dyker aldrig upp i en senare batch.
 
-### 3. Gör `process-site-jobs`-cron villkorlig
-Byt schema från `* * * * *` till `*/5 * * * *` **och** lägg till en `WHERE EXISTS (SELECT 1 FROM generated_sites WHERE status IN ('queued','processing') …)` guard i själva cron-SQL:n så vi inte ens kallar edge-funktionen när kön är tom. `generate-site` kickar redan workern direkt vid enqueue, så cron behövs bara som fallback.
+---
 
-### 4. Återanvänd `email_unsubscribe_tokens`
-Slå upp befintlig token per email först; skapa bara ny om den saknas. Tar bort ~2 000 inserts/vecka.
+## 2. Audit-loop (befintlig `audit-site`, återanvänds)
 
-### 5. Fixa `sent_emails select *`-scannen
-Hitta callsite (troligen Analytics eller Files-sidan) och lägg till `.limit()` + kolumn-projektion så vi inte drar hela tabellen till klienten.
+Cron `*/30 * * * *` plockar N rader där `status = 'pending_audit'` och N = **max(0, dagens sändningsbudget − antal `approved`-sites redo)**. Så vi auditar bara så många vi faktiskt behöver för att fylla morgondagens 20 sends. Ingen bulk-audit av 500 rader på en gång.
 
-### 6. Städa döda enrollments
-1 746 `completed` + 149 `failed` + 17 `unsubscribed` rader ligger kvar och deltar i varje status-filter/index-scan. Arkivera till en `enrollments_archive`-tabell (eller bara ta bort completed äldre än 30 dagar). Mindre tabell = mindre IO per poll.
+Audit-resultat sparas som idag (`audit_score`, `audit_reason`) + `audit_details` (kort JSON: 2-3 konkreta svagheter Deepseek nämner — används i mail 1). Betyg ≥ 7 → `status = 'site_good_enough'` (parkeras, ingen outreach). Betyg < 7 → `status = 'needs_site'`.
 
-### Ordning
-Steg 1 + 2 + 3 ger ~80 % av besparingen och är kod-ändringar i två filer + en cron-migration. Gör dem först, mät ett dygn, sedan 4–6 vid behov.
+Om `audit-site` inte hittar mail på lead:en, kör ett litet contact-page-scrape steg (Firecrawl `/kontakt`, `/contact`, `/om-oss`) för att fiska email. Fortfarande ingen mail → `status = 'skipped_no_contact'`.
 
-### Vad som INTE ändras
-- Cold email-utskicken (`send-cold-email`, sekvenslogik, follow-ups)
-- Daily send limits per sender
-- Open tracking, deploy-flödet, site generation-kvaliteten
+---
 
-Säg till om jag ska bygga det så kör jag steg 1–3 direkt.
+## 3. Site-generering (befintlig `generate-site`, återanvänds)
+
+Samma cron-tick: plocka `needs_site` rader upp till samma dagsbudget, enqueue till `process-site-jobs`. Ingen ändring i själva genereringen — den redan tvåstegs (Deepseek + Claude Haiku polish) och deterministisk.
+
+När sitan är klar och deploy:ad → `status = 'awaiting_approval'`, `demo_url` sparas.
+
+---
+
+## 4. Godkännande-UI
+
+**Ny sida `/site-approvals`**. En kortlista av alla `awaiting_approval`:
+
+Varje kort visar:
+- Firmanamn, email, telefon, kategori
+- **Iframe eller "Öppna gammal sida"-knapp** för original-URL:en
+- **Iframe för demo_url**
+- Audit-score + audit_reason
+- Tre knappar: **Godkänn** / **Regenerera** (öppnar textfält för feedback → skickas som extra instruktion till `generate-site`, status → `regenerating`) / **Behövs ej** (status → `site_good_enough`, parkerad).
+
+Godkänn → `status = 'approved'`, `approved_at = now()`, läggs i sändningskön.
+
+---
+
+## 5. Email-sekvens (4 mails, foremp.email)
+
+**Ny sequence-typ i din befintliga sequence-motor** — inte en helt ny pipeline. Vi lägger till en ny node-typ `Send Demo Email` som drar `demo_url` + `audit_details` från `site_leads` istället för generisk contact.
+
+Sekvens (identisk struktur för alla approved leads):
+
+| # | Timing | Innehåll | Ämnesradsstrategi |
+|---|---|---|---|
+| 1 | Direkt efter approval | 50-100 ord. Nämner **en konkret svaghet** från `audit_details`, säger "byggde en DEMO — allt kan ändras kostnadsfritt innan lansering", CTA: klicka länken. | AI-genererad per lead, testa personlig (firmanamn) vs kuriosa-hook. |
+| 2 | +3 dagar | "Hann du kika på demon? Om ja — vi kan lansera inom några dagar, fria ändringar ingår." | AI, kort follow-up-ton. |
+| 3 | +4 dagar | Social proof / annan vinkel, länk igen. | AI. |
+| 4 | +5 dagar | "Vill du ta ett kort möte så går vi igenom vad som behöver ändras?" | AI, mötes-CTA. |
+
+Alla mails: **50-100 ord, gpt-4.1-mini** (samma modell som cold-mailen), skickas via befintliga `send-cold-email` + senders på `foremp.email`. Länken till `demo_url` går in i varje mail (inte tråd-referens). Open tracking + unsubscribe fungerar redan via befintlig pipeline.
+
+Reply-detection: om leaden svarar → sekvens pausas automatiskt (finns redan).
+
+---
+
+## 6. Throughput & IO-budget
+
+**Nyckelregel: vi auditar/genererar bara det vi behöver skicka.**
+
+Daglig budget = summan av `sender_daily_remaining` för aktiva foremp-inboxes (idag ~20). Cron:
+1. Räknar hur många approved-leads som är redo att enroll:as för dag D.
+2. Om < 20 → auditar tills vi har 20 kandidater, sedan genererar sites tills vi har 20 `awaiting_approval` väntande på dig.
+3. Du godkänner → morgonens `run-sequences` enrollar dem, first mail går ut samma dag.
+
+Så pipeline:en pushar aldrig 500 rader genom Firecrawl/Deepseek på en gång. IO-tryck = ~20 audits + ~20 site-gens + ~80 mails/dag (20 × 4 steps utspritt över veckan).
+
+**Extra IO-skydd:**
+- `site_leads` får index på `(status, created_at)` så cron-plockningen är en index scan.
+- Cron `process-site-jobs` är redan `*/5 * * * *` med `EXISTS`-guard.
+- Approval-UI:t använder samma "estimated count"-mönster som Dashboard för listor > 100.
+
+---
+
+## Tekniska detaljer (för dig som vill veta)
+
+**Ny tabell `site_leads`:**
+```
+id, company_name, domain, email, phone, address, category,
+rating, reviews_count, review_snippets (jsonb),
+website (source url), demo_url, generated_site_id (fk),
+audit_score, audit_reason, audit_details (jsonb),
+status, approved_at, feedback (text för regen), 
+source_file_id, created_at, updated_at
+UNIQUE (company_name_normalized, domain_normalized)
+```
+RLS: owner-only. GRANTs enligt standardmall.
+
+**Ny edge function `import-site-leads`** — CSV → Deepseek batch-normalisering → insert med `ON CONFLICT DO NOTHING`.
+
+**Modifierad `generate-site`** — läser `feedback`-fältet vid regen.
+
+**Ny sequence template** seedas via migration: 4 noder + waits, alla `Send Demo Email` (ny node-typ som interpolerar `{{demo_url}}` och `{{audit_weakness}}`).
+
+**Approval-flöde:** knappklick → RPC/edge function som sätter status + (för Godkänn) enrollar leaden i demo-sekvensen via befintlig `enroll-contacts`-logik.
+
+---
+
+## Vad som INTE ändras
+- Nuvarande cold email-flödet, sekvensmotorn, sender-rotation, open tracking, GDPR-suppression.
+- Kostnaderna: audit + site-gen samma modeller som idag (Deepseek + Claude Haiku).
+
+## Föreslagen bygg-ordning
+1. `site_leads`-tabell + `import-site-leads` edge function + UI för upload.
+2. Cron som kopplar ihop audit → generate baserat på dagsbudget.
+3. Approval-UI (`/site-approvals`).
+4. Demo-email sekvens + ny `Send Demo Email` node-typ + seed migration.
+5. Slå på hela loopen med en 20-lead test-batch.
+
+Säg klart så bygger jag steg 1-2 först, sen får du testa importen innan vi går vidare.
