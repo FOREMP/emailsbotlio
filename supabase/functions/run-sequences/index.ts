@@ -157,6 +157,21 @@ Deno.serve(async (req) => {
     domainSentToday.set(domain, (domainSentToday.get(domain) ?? 0) + 1)
   }
 
+  // Per-invocation cache of sequence graphs — avoids re-reading nodes/edges
+  // for every enrollment in the same tick.
+  const graphCache = new Map<string, { nodes: any[]; edges: any[] }>()
+  async function getSequenceGraph(sequenceId: string) {
+    const hit = graphCache.get(sequenceId)
+    if (hit) return hit
+    const [nodesRes, edgesRes] = await Promise.all([
+      supabase.from('sequence_nodes').select('*').eq('sequence_id', sequenceId),
+      supabase.from('sequence_edges').select('*').eq('sequence_id', sequenceId),
+    ])
+    const g = { nodes: nodesRes.data ?? [], edges: edgesRes.data ?? [] }
+    graphCache.set(sequenceId, g)
+    return g
+  }
+
   for (const enr of due ?? []) {
     processed++
     try {
