@@ -174,11 +174,13 @@ Deno.serve(async (req) => {
         console.log(`[enr ${enr.id}] skipped — already claimed by another worker`)
         continue
       }
-      const [{ data: nodes }, { data: edges }, { data: contact }] = await Promise.all([
-        supabase.from('sequence_nodes').select('*').eq('sequence_id', enr.sequence_id),
-        supabase.from('sequence_edges').select('*').eq('sequence_id', enr.sequence_id),
-        supabase.from('contacts').select('*').eq('id', enr.contact_id).maybeSingle(),
-      ])
+      // Per-invocation cache: the same sequence is walked by many enrollments in
+      // one tick. Fetch nodes+edges once per sequence_id instead of per enrollment
+      // (was ~48k SELECTs/week on sequence_nodes+edges alone → main IO drain).
+      const graph = await getSequenceGraph(enr.sequence_id)
+      const nodes = graph.nodes
+      const edges = graph.edges
+      const { data: contact } = await supabase.from('contacts').select('*').eq('id', enr.contact_id).maybeSingle()
 
       if (!contact) {
         console.warn(`[enr ${enr.id}] contact missing → failed`)
