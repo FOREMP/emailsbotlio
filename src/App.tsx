@@ -17,6 +17,7 @@ import Sequences from "./pages/Sequences.tsx";
 import SequenceCanvas from "./pages/SequenceCanvas.tsx";
 import Analytics from "./pages/Analytics.tsx";
 import Sites from "./pages/Sites.tsx";
+import SiteLeads from "./pages/SiteLeads.tsx";
 import Auth from "./pages/Auth.tsx";
 import Unsubscribe from "./pages/Unsubscribe.tsx";
 import NotFound from "./pages/NotFound.tsx";
