@@ -50,6 +50,7 @@ const App = () => (
             <Route path="/sequences/:id" element={protect(<SequenceCanvas />, true)} />
             <Route path="/analytics" element={protect(<Analytics />)} />
             <Route path="/sites" element={protect(<Sites />)} />
+            <Route path="/site-leads" element={protect(<SiteLeads />)} />
             <Route path="/unsubscribe" element={<Unsubscribe />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
