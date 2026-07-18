@@ -954,6 +954,104 @@ export type Database = {
         }
         Relationships: []
       }
+      site_leads: {
+        Row: {
+          address: string | null
+          approved_at: string | null
+          audit_details: Json | null
+          audit_reason: string | null
+          audit_score: number | null
+          category: string | null
+          company_name: string
+          company_name_normalized: string
+          created_at: string
+          demo_url: string | null
+          domain: string | null
+          domain_normalized: string | null
+          email: string | null
+          extra: Json | null
+          feedback: string | null
+          generated_site_id: string | null
+          id: string
+          last_email_sent_at: string | null
+          phone: string | null
+          rating: number | null
+          review_snippets: Json | null
+          reviews_count: number | null
+          source_file_id: string | null
+          status: string
+          updated_at: string
+          user_id: string
+          website: string | null
+        }
+        Insert: {
+          address?: string | null
+          approved_at?: string | null
+          audit_details?: Json | null
+          audit_reason?: string | null
+          audit_score?: number | null
+          category?: string | null
+          company_name: string
+          company_name_normalized: string
+          created_at?: string
+          demo_url?: string | null
+          domain?: string | null
+          domain_normalized?: string | null
+          email?: string | null
+          extra?: Json | null
+          feedback?: string | null
+          generated_site_id?: string | null
+          id?: string
+          last_email_sent_at?: string | null
+          phone?: string | null
+          rating?: number | null
+          review_snippets?: Json | null
+          reviews_count?: number | null
+          source_file_id?: string | null
+          status?: string
+          updated_at?: string
+          user_id: string
+          website?: string | null
+        }
+        Update: {
+          address?: string | null
+          approved_at?: string | null
+          audit_details?: Json | null
+          audit_reason?: string | null
+          audit_score?: number | null
+          category?: string | null
+          company_name?: string
+          company_name_normalized?: string
+          created_at?: string
+          demo_url?: string | null
+          domain?: string | null
+          domain_normalized?: string | null
+          email?: string | null
+          extra?: Json | null
+          feedback?: string | null
+          generated_site_id?: string | null
+          id?: string
+          last_email_sent_at?: string | null
+          phone?: string | null
+          rating?: number | null
+          review_snippets?: Json | null
+          reviews_count?: number | null
+          source_file_id?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+          website?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "site_leads_generated_site_id_fkey"
+            columns: ["generated_site_id"]
+            isOneToOne: false
+            referencedRelation: "generated_sites"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       suppressed_emails: {
         Row: {
           created_at: string
