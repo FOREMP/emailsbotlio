@@ -1,0 +1,188 @@
+// Import Google-scraped company lists (CSV).
+// Deepseek normalizes each batch of rows into a standard shape, then we
+// dedupe-insert into site_leads. Rows without both a website AND an email
+// go in as status='skipped_no_contact' so we never re-touch them.
+import { createClient } from 'npm:@supabase/supabase-js@2'
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
+const MODEL = 'deepseek/deepseek-chat-v3.1'
+const BATCH_SIZE = 40
+
+interface NormalizedLead {
+  company_name?: string
+  website?: string
+  email?: string
+  phone?: string
+  address?: string
+  category?: string
+  rating?: number | null
+  reviews_count?: number | null
+  review_snippets?: string[]
+}
+
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+  try {
+    const authHeader = req.headers.get('Authorization') ?? ''
+    const jwt = authHeader.replace(/^Bearer\s+/i, '')
+    if (!jwt) return json({ error: 'missing auth' }, 401)
+
+    const supabase = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+    )
+    const { data: userRes } = await supabase.auth.getUser(jwt)
+    const userId = userRes?.user?.id
+    if (!userId) return json({ error: 'invalid auth' }, 401)
+
+    const { csv, source_file_id } = await req.json()
+    if (typeof csv !== 'string' || !csv.trim()) return json({ error: 'csv required' }, 400)
+
+    const rows = parseCsv(csv)
+    if (rows.length < 2) return json({ error: 'need header + at least one row' }, 400)
+    const dataRows = rows.slice(1)
+
+    const openrouter = Deno.env.get('OPENROUTER_API_KEY')
+    if (!openrouter) return json({ error: 'OPENROUTER_API_KEY missing' }, 500)
+
+    const normalized: NormalizedLead[] = []
+    for (let i = 0; i < dataRows.length; i += BATCH_SIZE) {
+      const chunk = [rows[0], ...dataRows.slice(i, i + BATCH_SIZE)]
+      const csvChunk = chunk.map((r) => r.map(csvEscape).join(',')).join('\n')
+      const batch = await normalizeBatch(csvChunk, openrouter)
+      normalized.push(...batch)
+    }
+
+    // Dedupe-insert
+    let inserted = 0, skipped_no_contact = 0, duplicates = 0, invalid = 0
+    for (const n of normalized) {
+      const name = (n.company_name ?? '').trim()
+      if (!name) { invalid++; continue }
+      const domain = extractDomain(n.website) || (n.email ? n.email.split('@')[1] : null)
+      const hasWebsite = !!n.website
+      const hasEmail = !!n.email && /.+@.+\..+/.test(n.email)
+      const status = (hasWebsite && hasEmail) ? 'pending_audit'
+        : (hasWebsite ? 'pending_audit' : 'skipped_no_contact')
+      if (!hasWebsite && !hasEmail) skipped_no_contact++
+      const { error } = await supabase.from('site_leads').insert({
+        user_id: userId,
+        company_name: name,
+        company_name_normalized: normalizeName(name),
+        domain,
+        domain_normalized: domain ? domain.toLowerCase() : null,
+        website: n.website ?? null,
+        email: n.email ?? null,
+        phone: n.phone ?? null,
+        address: n.address ?? null,
+        category: n.category ?? null,
+        rating: n.rating ?? null,
+        reviews_count: n.reviews_count ?? null,
+        review_snippets: n.review_snippets ?? null,
+        status,
+        source_file_id: source_file_id ?? null,
+      })
+      if (error) {
+        if (error.code === '23505') duplicates++
+        else console.error('insert err', error)
+      } else {
+        inserted++
+      }
+    }
+
+    return json({ ok: true, total: normalized.length, inserted, duplicates, invalid, skipped_no_contact })
+  } catch (err) {
+    console.error('import-site-leads', err)
+    return json({ error: (err as Error).message }, 500)
+  }
+})
+
+async function normalizeBatch(csvChunk: string, apiKey: string): Promise<NormalizedLead[]> {
+  const resp = await fetch(OPENROUTER_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: MODEL,
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: [
+          'You normalize Google-scraped business listing CSVs into a strict JSON shape.',
+          'Return ONLY: {"leads":[{"company_name","website","email","phone","address","category","rating","reviews_count","review_snippets"}]}',
+          'Rules:',
+          '- Ignore coordinates, plus_code, place_id, cid, kml, hours, opening times, image URLs.',
+          '- rating: number 0-5 or null. reviews_count: integer or null.',
+          '- review_snippets: array of up to 3 short review text strings if present, else [].',
+          '- website: full https URL if any, else null. Strip tracking params.',
+          '- email: first valid email if any, else null.',
+          '- Preserve one row per input row in the same order. Empty fields become null.',
+          '- No commentary. JSON only.',
+        ].join('\n') },
+        { role: 'user', content: csvChunk },
+      ],
+    }),
+  })
+  if (!resp.ok) {
+    const t = await resp.text()
+    throw new Error(`deepseek ${resp.status}: ${t.slice(0, 300)}`)
+  }
+  const j = await resp.json()
+  const content = j.choices?.[0]?.message?.content ?? '{}'
+  try {
+    const parsed = JSON.parse(content)
+    return Array.isArray(parsed.leads) ? parsed.leads : []
+  } catch {
+    return []
+  }
+}
+
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = []
+  let cur: string[] = []
+  let field = ''
+  let inQ = false
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (inQ) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++ } else { inQ = false }
+      } else field += c
+    } else {
+      if (c === '"') inQ = true
+      else if (c === ',') { cur.push(field); field = '' }
+      else if (c === '\n') { cur.push(field); rows.push(cur); cur = []; field = '' }
+      else if (c === '\r') { /* skip */ }
+      else field += c
+    }
+  }
+  if (field.length || cur.length) { cur.push(field); rows.push(cur) }
+  return rows.filter((r) => r.some((v) => v.trim().length > 0))
+}
+
+function csvEscape(s: string): string {
+  if (s == null) return ''
+  const needs = /[",\n\r]/.test(s)
+  return needs ? `"${s.replace(/"/g, '""')}"` : s
+}
+
+function normalizeName(n: string): string {
+  return n.toLowerCase().replace(/\s+/g, ' ').replace(/[^\p{L}\p{N} ]+/gu, '').trim()
+}
+
+function extractDomain(url?: string | null): string | null {
+  if (!url) return null
+  try {
+    const u = new URL(/^https?:\/\//.test(url) ? url : `https://${url}`)
+    return u.hostname.replace(/^www\./, '').toLowerCase()
+  } catch { return null }
+}
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  })
+}
