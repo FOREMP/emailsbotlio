@@ -11,7 +11,28 @@ const corsHeaders = {
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const MODEL = 'deepseek/deepseek-chat-v3.1'
-const BATCH_SIZE = 40
+const BATCH_SIZE = 20
+
+// Columns we care about. Everything else (coordinates, plus_code, place_id,
+// image URLs, hours, etc.) is dropped BEFORE we send anything to Deepseek so
+// we don't waste tokens on data we're going to ignore anyway.
+const KEEP_COLUMN_PATTERNS = [
+  /name|title|company/i,
+  /website|url|site|domain/i,
+  /email|mail/i,
+  /phone|tel|mobile/i,
+  /address|street|city|postal|zip|region|country/i,
+  /category|type|industry/i,
+  /rating|score|stars/i,
+  /review/i,
+]
+const DROP_COLUMN_PATTERNS = [
+  /lat|lng|lon|coord|plus_code|place_id|cid|kml|fid|panorama/i,
+  /hour|open|close|time|schedule/i,
+  /image|photo|thumb|logo|icon|favicon/i,
+  /^id$|_id$|uuid/i,
+  /url_.*photo|profile_url|google_url|maps_url/i,
+]
 
 interface NormalizedLead {
   company_name?: string
@@ -43,20 +64,42 @@ Deno.serve(async (req) => {
     const { csv, source_file_id } = await req.json()
     if (typeof csv !== 'string' || !csv.trim()) return json({ error: 'csv required' }, 400)
 
-    const rows = parseCsv(csv)
-    if (rows.length < 2) return json({ error: 'need header + at least one row' }, 400)
-    const dataRows = rows.slice(1)
+    const rawRows = parseCsv(csv)
+    if (rawRows.length < 2) return json({ error: 'need header + at least one row' }, 400)
+
+    // Pre-filter columns so Deepseek only sees relevant fields.
+    const header = rawRows[0]
+    const keepIdx: number[] = []
+    header.forEach((col, idx) => {
+      const c = (col ?? '').trim()
+      if (!c) return
+      if (DROP_COLUMN_PATTERNS.some((r) => r.test(c))) return
+      if (KEEP_COLUMN_PATTERNS.some((r) => r.test(c))) keepIdx.push(idx)
+    })
+    // Fallback: if no columns matched keep-patterns, keep everything not dropped.
+    const finalKeepIdx = keepIdx.length > 0
+      ? keepIdx
+      : header.map((_, i) => i).filter((i) => !DROP_COLUMN_PATTERNS.some((r) => r.test(header[i] ?? '')))
+
+    const slim = rawRows.map((r) => finalKeepIdx.map((i) => (r[i] ?? '').slice(0, 500)))
+    const dataRows = slim.slice(1)
 
     const openrouter = Deno.env.get('OPENROUTER_API_KEY')
     if (!openrouter) return json({ error: 'OPENROUTER_API_KEY missing' }, 500)
 
     const normalized: NormalizedLead[] = []
     for (let i = 0; i < dataRows.length; i += BATCH_SIZE) {
-      const chunk = [rows[0], ...dataRows.slice(i, i + BATCH_SIZE)]
+      const chunk = [slim[0], ...dataRows.slice(i, i + BATCH_SIZE)]
       const csvChunk = chunk.map((r) => r.map(csvEscape).join(',')).join('\n')
-      const batch = await normalizeBatch(csvChunk, openrouter)
-      normalized.push(...batch)
+      try {
+        const batch = await normalizeBatch(csvChunk, openrouter)
+        normalized.push(...batch)
+      } catch (err) {
+        console.error(`batch ${i} failed`, err)
+        // Continue with next batch instead of aborting the whole import.
+      }
     }
+
 
     // Dedupe-insert
     let inserted = 0, skipped_no_contact = 0, duplicates = 0, invalid = 0
@@ -108,6 +151,7 @@ async function normalizeBatch(csvChunk: string, apiKey: string): Promise<Normali
     body: JSON.stringify({
       model: MODEL,
       temperature: 0,
+      max_tokens: 8000,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: [
