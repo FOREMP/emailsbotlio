@@ -11,7 +11,28 @@ const corsHeaders = {
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const MODEL = 'deepseek/deepseek-chat-v3.1'
-const BATCH_SIZE = 40
+const BATCH_SIZE = 20
+
+// Columns we care about. Everything else (coordinates, plus_code, place_id,
+// image URLs, hours, etc.) is dropped BEFORE we send anything to Deepseek so
+// we don't waste tokens on data we're going to ignore anyway.
+const KEEP_COLUMN_PATTERNS = [
+  /name|title|company/i,
+  /website|url|site|domain/i,
+  /email|mail/i,
+  /phone|tel|mobile/i,
+  /address|street|city|postal|zip|region|country/i,
+  /category|type|industry/i,
+  /rating|score|stars/i,
+  /review/i,
+]
+const DROP_COLUMN_PATTERNS = [
+  /lat|lng|lon|coord|plus_code|place_id|cid|kml|fid|panorama/i,
+  /hour|open|close|time|schedule/i,
+  /image|photo|thumb|logo|icon|favicon/i,
+  /^id$|_id$|uuid/i,
+  /url_.*photo|profile_url|google_url|maps_url/i,
+]
 
 interface NormalizedLead {
   company_name?: string
