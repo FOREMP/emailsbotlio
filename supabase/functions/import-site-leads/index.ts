@@ -17,12 +17,12 @@ const MAX_REVIEW_CANDIDATES_PER_ROW = 10
 const MAX_REVIEW_CHARS = 260
 
 interface NormalizedLead {
-  company_name?: string
-  website?: string
-  email?: string
-  phone?: string
-  address?: string
-  category?: string
+  company_name?: string | null
+  website?: string | null
+  email?: string | null
+  phone?: string | null
+  address?: string | null
+  category?: string | null
   rating?: number | null
   reviews_count?: number | null
   review_snippets?: string[]
