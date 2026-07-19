@@ -78,7 +78,12 @@ Deno.serve(async (req) => {
         const picked = await pickReviewSnippets(reviewInput, openrouter)
         for (const [idx, snippets] of Object.entries(picked)) {
           const n = Number(idx)
-          if (Number.isInteger(n) && normalized[n]) normalized[n].review_snippets = snippets
+          if (Number.isInteger(n) && normalized[n] && Array.isArray(snippets)) {
+            normalized[n].review_snippets = snippets
+              .map((s) => cleanCell(s).slice(0, 220))
+              .filter(usefulReviewCandidate)
+              .slice(0, 3)
+          }
         }
       } catch (err) {
         console.error('review picker failed', err)
@@ -95,16 +100,17 @@ Deno.serve(async (req) => {
       const domain = extractDomain(n.website) || (n.email ? n.email.split('@')[1] : null)
       const website = normalizeUrl(n.website)
       const email = normalizeEmail(n.email)
+      const finalDomain = extractDomain(website) || (email ? email.split('@')[1] : domain)
       const hasWebsite = !!website
-      const hasEmail = !!n.email && /.+@.+\..+/.test(n.email)
+      const hasEmail = !!email
       const status = (hasWebsite && hasEmail) ? 'pending_audit' : 'skipped_no_contact'
       if (status === 'skipped_no_contact') skipped_no_contact++
       const { error } = await supabase.from('site_leads').insert({
         user_id: userId,
         company_name: name,
         company_name_normalized: normalizeName(name),
-        domain: extractDomain(website) || (email ? email.split('@')[1] : domain),
-        domain_normalized: domain ? domain.toLowerCase() : null,
+        domain: finalDomain,
+        domain_normalized: finalDomain ? finalDomain.toLowerCase() : null,
         website,
         email,
         phone: n.phone ?? null,
