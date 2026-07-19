@@ -64,20 +64,42 @@ Deno.serve(async (req) => {
     const { csv, source_file_id } = await req.json()
     if (typeof csv !== 'string' || !csv.trim()) return json({ error: 'csv required' }, 400)
 
-    const rows = parseCsv(csv)
-    if (rows.length < 2) return json({ error: 'need header + at least one row' }, 400)
-    const dataRows = rows.slice(1)
+    const rawRows = parseCsv(csv)
+    if (rawRows.length < 2) return json({ error: 'need header + at least one row' }, 400)
+
+    // Pre-filter columns so Deepseek only sees relevant fields.
+    const header = rawRows[0]
+    const keepIdx: number[] = []
+    header.forEach((col, idx) => {
+      const c = (col ?? '').trim()
+      if (!c) return
+      if (DROP_COLUMN_PATTERNS.some((r) => r.test(c))) return
+      if (KEEP_COLUMN_PATTERNS.some((r) => r.test(c))) keepIdx.push(idx)
+    })
+    // Fallback: if no columns matched keep-patterns, keep everything not dropped.
+    const finalKeepIdx = keepIdx.length > 0
+      ? keepIdx
+      : header.map((_, i) => i).filter((i) => !DROP_COLUMN_PATTERNS.some((r) => r.test(header[i] ?? '')))
+
+    const slim = rawRows.map((r) => finalKeepIdx.map((i) => (r[i] ?? '').slice(0, 500)))
+    const dataRows = slim.slice(1)
 
     const openrouter = Deno.env.get('OPENROUTER_API_KEY')
     if (!openrouter) return json({ error: 'OPENROUTER_API_KEY missing' }, 500)
 
     const normalized: NormalizedLead[] = []
     for (let i = 0; i < dataRows.length; i += BATCH_SIZE) {
-      const chunk = [rows[0], ...dataRows.slice(i, i + BATCH_SIZE)]
+      const chunk = [slim[0], ...dataRows.slice(i, i + BATCH_SIZE)]
       const csvChunk = chunk.map((r) => r.map(csvEscape).join(',')).join('\n')
-      const batch = await normalizeBatch(csvChunk, openrouter)
-      normalized.push(...batch)
+      try {
+        const batch = await normalizeBatch(csvChunk, openrouter)
+        normalized.push(...batch)
+      } catch (err) {
+        console.error(`batch ${i} failed`, err)
+        // Continue with next batch instead of aborting the whole import.
+      }
     }
+
 
     // Dedupe-insert
     let inserted = 0, skipped_no_contact = 0, duplicates = 0, invalid = 0
