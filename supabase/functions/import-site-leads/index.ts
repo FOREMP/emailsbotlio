@@ -151,6 +151,7 @@ async function normalizeBatch(csvChunk: string, apiKey: string): Promise<Normali
     body: JSON.stringify({
       model: MODEL,
       temperature: 0,
+      max_tokens: 8000,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: [
