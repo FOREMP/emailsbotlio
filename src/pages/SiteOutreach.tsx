@@ -64,7 +64,7 @@ export default function SiteOutreach() {
     if (!s?.id) { setLoading(false); return; }
     setSeq(s as Seq);
 
-    const [{ data: ns }, { data: enrs }, { data: sent }] = await Promise.all([
+    const [{ data: ns }, { data: enrs }] = await Promise.all([
       supabase.from("sequence_nodes").select("id, node_type, position_y, config").eq("sequence_id", s.id).order("position_y"),
       supabase
         .from("enrollments")
@@ -72,13 +72,16 @@ export default function SiteOutreach() {
         .eq("sequence_id", s.id)
         .order("updated_at", { ascending: false })
         .limit(200),
-      supabase
-        .from("sent_emails")
-        .select("id, sent_at, subject, body, recipient_email, status, open_count, opened_at, contact_id")
-        .eq("sequence_id", s.id)
-        .order("sent_at", { ascending: false })
-        .limit(5),
     ]);
+    const enrIds = (enrs ?? []).map((e: any) => e.id);
+    const { data: sent } = enrIds.length
+      ? await supabase
+          .from("sent_emails")
+          .select("id, sent_at, subject, body, recipient_email, status, open_count, opened_at, contact_id")
+          .in("enrollment_id", enrIds)
+          .order("sent_at", { ascending: false })
+          .limit(5)
+      : { data: [] as SentRow[] };
 
     setNodes((ns ?? []) as Node[]);
     setEnrollments((enrs ?? []) as any);
