@@ -285,6 +285,7 @@ export type Database = {
           queued_at: string | null
           scraped_content: Json | null
           sequence_id: string | null
+          site_lead_id: string | null
           source_url: string | null
           status: string
           template: string
@@ -310,6 +311,7 @@ export type Database = {
           queued_at?: string | null
           scraped_content?: Json | null
           sequence_id?: string | null
+          site_lead_id?: string | null
           source_url?: string | null
           status?: string
           template?: string
@@ -335,6 +337,7 @@ export type Database = {
           queued_at?: string | null
           scraped_content?: Json | null
           sequence_id?: string | null
+          site_lead_id?: string | null
           source_url?: string | null
           status?: string
           template?: string
@@ -356,6 +359,13 @@ export type Database = {
             columns: ["sequence_id"]
             isOneToOne: false
             referencedRelation: "sequences"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "generated_sites_site_lead_id_fkey"
+            columns: ["site_lead_id"]
+            isOneToOne: false
+            referencedRelation: "site_leads"
             referencedColumns: ["id"]
           },
         ]
