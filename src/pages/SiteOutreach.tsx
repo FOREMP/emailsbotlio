@@ -163,7 +163,8 @@ export default function SiteOutreach() {
       <div>
         <h1 className="text-2xl font-bold">Demo Outreach</h1>
         <p className="text-sm text-muted-foreground">
-          4-mails svensk sekvens som körs från @foremp.email (16 mail/dag). Fylls på automatiskt när du godkänner demos i Approvals.
+          4-mails svensk sekvens från @foremp.email — <strong>skickas endast måndag–fredag 09:00 Stockholm-tid</strong>, max 16 mail/dag.
+          Fylls på automatiskt när du godkänner demos i Approvals (kontakt, hemsidelänk och audit-info följer med).
         </p>
       </div>
 
