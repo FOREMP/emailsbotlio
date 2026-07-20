@@ -1,129 +1,136 @@
 
-# Site Outreach Pipeline — Plan
+# Site Outreach Email Sequence — Plan
 
-Målet: ladda upp en Google-skrapad lista (500+ företag), systemet väljer vilka som får en demo-hemsida, du godkänner i UI, och godkända demos triggar en 4-mails sekvens från `foremp.email` — allt strypt till 20 mails/dag utan att spränga Supabase IO.
-
----
-
-## 1. Import & företagsfiltrering
-
-**Ny sida `/site-leads`** (eller flik under Contacts) med CSV/XLSX-upload.
-
-Deepseek V3.1 kör **en gång per fil** (batch-prompt, ~50 rader per anrop) och normaliserar kolumnerna till:
-`company_name, website, email, phone, address, rating, reviews_count, review_snippets, category`.
-Koordinater, plus_code, place_id osv. ignoreras. Detta gör mappningen billig och robust mot olika Google-exportformat.
-
-**Två destinationer efter import:**
-- Har `website` + `email` (eller vi hittar email via scrape) → `site_leads` med `status = 'pending_audit'`.
-- Saknar website ELLER saknar email helt → `site_leads` med `status = 'skipped_no_contact'` (parkerad lista).
-
-**Dedupe:** unik constraint på normaliserat `company_name + domain`. Vid ny import → befintliga rader uppdateras inte, nya skippas om de redan finns (oavsett status). Så en `skipped` firma dyker aldrig upp i en senare batch.
+Målet: när du godkänner en demo i `/site-approvals`, ska leaden automatiskt enrollas i en dedikerad **Site Demo-sekvens** som skickar 4 skräddarsydda svenska mail från `foremp.email`-inboxes (2 st × 8/dag = **16 sends/dag totalt**), alla med `demo_url` inbäddad, alla genererade av `gpt-4.1-mini`.
 
 ---
 
-## 2. Audit-loop (befintlig `audit-site`, återanvänds)
+## 1. Navigation: samla under "Websites"
 
-Cron `*/30 * * * *` plockar N rader där `status = 'pending_audit'` och N = **max(0, dagens sändningsbudget − antal `approved`-sites redo)**. Så vi auditar bara så många vi faktiskt behöver för att fylla morgondagens 20 sends. Ingen bulk-audit av 500 rader på en gång.
+Nuvarande tre tabbar (`Sites`, `Site Leads`, `Approvals`) tar för mycket plats. Ny struktur i `AppLayout`:
 
-Audit-resultat sparas som idag (`audit_score`, `audit_reason`) + `audit_details` (kort JSON: 2-3 konkreta svagheter Deepseek nämner — används i mail 1). Betyg ≥ 7 → `status = 'site_good_enough'` (parkeras, ingen outreach). Betyg < 7 → `status = 'needs_site'`.
-
-Om `audit-site` inte hittar mail på lead:en, kör ett litet contact-page-scrape steg (Firecrawl `/kontakt`, `/contact`, `/om-oss`) för att fiska email. Fortfarande ingen mail → `status = 'skipped_no_contact'`.
-
----
-
-## 3. Site-generering (befintlig `generate-site`, återanvänds)
-
-Samma cron-tick: plocka `needs_site` rader upp till samma dagsbudget, enqueue till `process-site-jobs`. Ingen ändring i själva genereringen — den redan tvåstegs (Deepseek + Claude Haiku polish) och deterministisk.
-
-När sitan är klar och deploy:ad → `status = 'awaiting_approval'`, `demo_url` sparas.
-
----
-
-## 4. Godkännande-UI
-
-**Ny sida `/site-approvals`**. En kortlista av alla `awaiting_approval`:
-
-Varje kort visar:
-- Firmanamn, email, telefon, kategori
-- **Iframe eller "Öppna gammal sida"-knapp** för original-URL:en
-- **Iframe för demo_url**
-- Audit-score + audit_reason
-- Tre knappar: **Godkänn** / **Regenerera** (öppnar textfält för feedback → skickas som extra instruktion till `generate-site`, status → `regenerating`) / **Behövs ej** (status → `site_good_enough`, parkerad).
-
-Godkänn → `status = 'approved'`, `approved_at = now()`, läggs i sändningskön.
-
----
-
-## 5. Email-sekvens (4 mails, foremp.email)
-
-**Ny sequence-typ i din befintliga sequence-motor** — inte en helt ny pipeline. Vi lägger till en ny node-typ `Send Demo Email` som drar `demo_url` + `audit_details` från `site_leads` istället för generisk contact.
-
-Sekvens (identisk struktur för alla approved leads):
-
-| # | Timing | Innehåll | Ämnesradsstrategi |
-|---|---|---|---|
-| 1 | Direkt efter approval | 50-100 ord. Nämner **en konkret svaghet** från `audit_details`, säger "byggde en DEMO — allt kan ändras kostnadsfritt innan lansering", CTA: klicka länken. | AI-genererad per lead, testa personlig (firmanamn) vs kuriosa-hook. |
-| 2 | +3 dagar | "Hann du kika på demon? Om ja — vi kan lansera inom några dagar, fria ändringar ingår." | AI, kort follow-up-ton. |
-| 3 | +4 dagar | Social proof / annan vinkel, länk igen. | AI. |
-| 4 | +5 dagar | "Vill du ta ett kort möte så går vi igenom vad som behöver ändras?" | AI, mötes-CTA. |
-
-Alla mails: **50-100 ord, gpt-4.1-mini** (samma modell som cold-mailen), skickas via befintliga `send-cold-email` + senders på `foremp.email`. Länken till `demo_url` går in i varje mail (inte tråd-referens). Open tracking + unsubscribe fungerar redan via befintlig pipeline.
-
-Reply-detection: om leaden svarar → sekvens pausas automatiskt (finns redan).
-
----
-
-## 6. Throughput & IO-budget
-
-**Nyckelregel: vi auditar/genererar bara det vi behöver skicka.**
-
-Daglig budget = summan av `sender_daily_remaining` för aktiva foremp-inboxes (idag ~20). Cron:
-1. Räknar hur många approved-leads som är redo att enroll:as för dag D.
-2. Om < 20 → auditar tills vi har 20 kandidater, sedan genererar sites tills vi har 20 `awaiting_approval` väntande på dig.
-3. Du godkänner → morgonens `run-sequences` enrollar dem, first mail går ut samma dag.
-
-Så pipeline:en pushar aldrig 500 rader genom Firecrawl/Deepseek på en gång. IO-tryck = ~20 audits + ~20 site-gens + ~80 mails/dag (20 × 4 steps utspritt över veckan).
-
-**Extra IO-skydd:**
-- `site_leads` får index på `(status, created_at)` så cron-plockningen är en index scan.
-- Cron `process-site-jobs` är redan `*/5 * * * *` med `EXISTS`-guard.
-- Approval-UI:t använder samma "estimated count"-mönster som Dashboard för listor > 100.
-
----
-
-## Tekniska detaljer (för dig som vill veta)
-
-**Ny tabell `site_leads`:**
 ```
-id, company_name, domain, email, phone, address, category,
-rating, reviews_count, review_snippets (jsonb),
-website (source url), demo_url, generated_site_id (fk),
-audit_score, audit_reason, audit_details (jsonb),
-status, approved_at, feedback (text för regen), 
-source_file_id, created_at, updated_at
-UNIQUE (company_name_normalized, domain_normalized)
+Dashboard · Sequences · Analytics · Contacts · Websites ▾ · Senders · Domains · Files
+                                                │
+                                                ├─ Leads          (/site-leads)
+                                                ├─ Approvals      (/site-approvals)
+                                                ├─ Generator      (/sites)          ← nuvarande "Sites"
+                                                └─ Demo Outreach  (/site-outreach)  ← NY
 ```
-RLS: owner-only. GRANTs enligt standardmall.
 
-**Ny edge function `import-site-leads`** — CSV → Deepseek batch-normalisering → insert med `ON CONFLICT DO NOTHING`.
-
-**Modifierad `generate-site`** — läser `feedback`-fältet vid regen.
-
-**Ny sequence template** seedas via migration: 4 noder + waits, alla `Send Demo Email` (ny node-typ som interpolerar `{{demo_url}}` och `{{audit_weakness}}`).
-
-**Approval-flöde:** knappklick → RPC/edge function som sätter status + (för Godkänn) enrollar leaden i demo-sekvensen via befintlig `enroll-contacts`-logik.
+En hover/klick-dropdown i `AppLayout.tsx`. Sub-tabbaren är aktiv för alla `/site*`- och `/sites`-rutter.
 
 ---
 
-## Vad som INTE ändras
-- Nuvarande cold email-flödet, sekvensmotorn, sender-rotation, open tracking, GDPR-suppression.
-- Kostnaderna: audit + site-gen samma modeller som idag (Deepseek + Claude Haiku).
+## 2. Ny sida `/site-outreach`
 
-## Föreslagen bygg-ordning
-1. `site_leads`-tabell + `import-site-leads` edge function + UI för upload.
-2. Cron som kopplar ihop audit → generate baserat på dagsbudget.
-3. Approval-UI (`/site-approvals`).
-4. Demo-email sekvens + ny `Send Demo Email` node-typ + seed migration.
-5. Slå på hela loopen med en 20-lead test-batch.
+En sida — inte en full sequence-canvas — som styr hela demo-utskicket. Tre paneler:
 
-Säg klart så bygger jag steg 1-2 först, sen får du testa importen innan vi går vidare.
+**A. Kön & status** (topp)
+- Kort: "Godkända idag", "I sekvens", "Skickat idag / 16", "Svarat / Positiva".
+- Lista över alla leads i sekvensen med kolumner: företag, mail, senaste steg (1–4), nästa sändning, senast öppnad, svarstatus.
+- **Per rad: knapp "Ta ut ur sekvens"** (svarade positivt / vill inte / stängde deal). Sätter `enrollment.status = 'stopped'` + loggar reason.
+
+**B. Senaste 5 skickade mail** (mitten)
+- Läser `sent_emails` (join `site_leads`) för sekvensen, senaste 5. Visar mottagare, ämne, body-preview, skickat-tid, open-status. För stickprov.
+
+**C. Prompt-editor** (botten, collapsed)
+- 4 kort (steg 1–4). Varje kort visar `subject_prompt` + `body_prompt` + `wait_days`, redigerbart. Sparas till `sequence_nodes.config`. Du kan finjustera copy utan att röra koden.
+- "Återställ till standard" per steg.
+
+---
+
+## 3. Sekvens-struktur (4 mail, foremp.email)
+
+Seed:as via migration som en `sequences`-rad + noder + edges, samma schema som befintliga sekvenser (återanvänder `run-sequences`, `send-cold-email`, `generate-email`, open-tracking, unsubscribe, reply-detection).
+
+Utskicksbudget: **16/dag** via en `throttle`-nod (`max_per_day: 16`) direkt efter trigger. Kompletterar sender-kvoter (2 senders × 8 = 16), så ingen inbox överskrids.
+
+| Steg | Wait | Ämne (prompt) | Body (prompt-kärna) | Pris nämnt? |
+|---|---|---|---|---|
+| 1 | 0 (direkt vid enroll) | "Skriv en SVENSK ämnesrad, max 55 tecken. Kärna: 'Vi har redan byggt en DEMO-hemsida åt {{company_name}} — kika här'. Ska kännas som att sitan finns nu, inte som ett förslag. Ingen clickbait, inga emojis." | ~70–90 ord. Öppning kopplar till **en konkret svaghet från `{{audit_weakness}}`**. Säger att vi **byggt en demo** för {{company_name}}, länk: {{demo_url}}. Betonar "detta är bara en DEMO — allt (färg, text, bilder, sektioner) kan ändras kostnadsfritt innan lansering". CTA: "Klicka och säg vad du vill ändra". | Nej |
+| 2 | +2 dagar | "SVENSK ämnesrad, max 55 tecken. Kort follow-up. Antyd att demon fortfarande ligger uppe." | ~60 ord. "Hann du kika?" + länk igen. **Nämner värdet**: en bra hemsida = fler bokningar/kunder, 1–2 meningar om varför moderna hemsidor konverterar bättre. Fortfarande inget pris. | Nej |
+| 3 | +3 dagar | "SVENSK ämnesrad, max 55 tecken. Antyd konkret erbjudande utan att sälja hårt." | ~80 ord. **Priset kommer här**: "5 000 kr engångskostnad + 1 000 kr/år för drift & hosting. Lanserad inom några dagar. Vill du ha något mer avancerat bygger vi det inom en vecka." Länk till demo. Kort värde-mening ("investering som betalar sig på första nya kunden"). | **Ja (5000 + 1000/år)** |
+| 4 | +4 dagar | "SVENSK ämnesrad, max 55 tecken. Möte/beslut-ton, mjuk. Ex: 'Sista pushen — {{company_name}}'." | ~60 ord. Sista touch. "Vill du att vi lanserar demon som den är, justerar den, eller lägger ner?" Enkel ja/nej/mer-info-ask. Länk sista gången. | Ja (kort påminnelse) |
+
+Totalt fönster: **9 dagar**. Efter steg 4 → `end`-nod, enrollment `completed`.
+
+**Prisresearch:** svenska AI-genererade småföretags-hemsidor ligger typiskt 4 900–9 900 kr engångs + 99–299 kr/mån hosting. **5000 + 1000/år är i underkant men rimligt** och lätt att stänga på — bra för volym. Vi behåller det som standard i prompten.
+
+**Reply-detection**: befintlig logik pausar sekvensen automatiskt vid svar (redan implementerat). Din manuella "Ta ut ur sekvens"-knapp är backup för svar via telefon.
+
+---
+
+## 4. Variabler tillgängliga i alla prompts
+
+När `run-sequences` bygger `contact`-objektet för en site-lead-enrollment, ska den *också* hämta `site_leads`-raden och slå ihop dessa fält till `custom_fields` så prompten kan referera:
+
+- `{{company_name}}` — firmanamn
+- `{{demo_url}}` — Vercel-länken (bäddas in i mail-body som riktig `<a>` i send-cold-email, samma som befintliga länkar)
+- `{{website}}` — deras gamla sida (för referens i copy)
+- `{{audit_weakness}}` — första strängen från `audit_details.weaknesses` (t.ex. "hemsidan är från 2011 och inte mobilanpassad")
+- `{{audit_score}}` — betyg, för nyansering
+- `{{category}}` — bransch (bilverkstad, frisör, etc.)
+- `{{first_name}}` — parsas från email lokal-del om saknas
+
+---
+
+## 5. Enrollment-flöde
+
+När du klickar "Godkänn" i `/site-approvals`:
+
+1. Site-lead sätts `status='approved'`.
+2. **Ny steg**: skapa/uppdatera en `contacts`-rad (list: "Site Demo Outreach") med email + custom_fields innehållande site-lead-datat ovan.
+3. Enrollera kontakten i den seedade Site Demo-sekvensen (befintlig `enroll-contacts`-logik).
+4. `run-sequences` plockar upp den vid nästa tick, skickar mail 1 direkt.
+
+Om leaden regenereras eller nekas efter approval → `enrollment.status='stopped'` sätts automatiskt.
+
+---
+
+## 6. Sender-hygien
+
+- Verifiera att **exakt 2 aktiva senders finns på `@foremp.email`** (t.ex. `eric@foremp.email`, `isak@foremp.email`), var med `daily_limit=8`, warmup av.
+- Botlio-senders ska INTE plocka demo-mail. Lösning: sekvensen får ett fält `sender_brand='foremp'` i `sequences.config`, och `send-cold-email` filtrerar poolen på brand (finns redan i koden — bara att sätta värdet vid seed).
+
+---
+
+## 7. Förväntat resultat på 100 kontakter
+
+Realistiska svenska cold-email-benchmark för välriktade demos + gratis-arbete-hook:
+
+| Metric | Range | Kommentar |
+|---|---|---|
+| Delivery | 96–99% | foremp.email är varmt, låg spamrisk |
+| Open rate (steg 1) | 55–70% | Ämnesrad "vi har byggt en demo åt dig" är hög-nyfikenhet |
+| Klick på demo-länk | 25–40% | Ovanligt högt — personlig demo triggar klick |
+| Svar (alla steg) | 8–15% | 8–15 av 100 svarar något |
+| Positiva svar / bokningar | 4–8% | 4–8 seriösa intresserade |
+| **Betalande kunder** | **2–5%** | **2–5 av 100 = 10–25k intäkt på 9 dagar** |
+
+Att förvänta sig: **~3 kunder** som bas-case från 100 kontakter, upside ~5 om demos är genuint bättre än deras nuvarande sidor (vilket audit-filtret säkerställer eftersom vi bara mailar folk med `audit_score < 7`).
+
+---
+
+## 8. Byggordning (efter godkännande)
+
+1. Migration: seeda `sequences` + 6 `sequence_nodes` (trigger → throttle → send1 → wait → send2 → wait → send3 → wait → send4 → end) + edges + "Site Demo Outreach"-contact-list. Prompts som JSON i `node.config`.
+2. `AppLayout.tsx`: gruppera 4 tabbar under "Websites"-dropdown.
+3. Uppdatera `/site-approvals` approve-handler: skapa/uppdatera contact + enrollera.
+4. Uppdatera `run-sequences` context-bygge: om enrollment-kontakten har `custom_fields.site_lead_id`, hydrera `demo_url`, `audit_weakness` etc. från `site_leads`.
+5. Bygg `/site-outreach`-sidan (kö + senaste 5 + prompt-editor + stop-knapp).
+6. Bekräfta 2 foremp-senders + brand-filter, testkör en enrollment mot dig själv.
+
+---
+
+## Teknik-appendix
+
+- **Sender-filter:** `sequences.config.sender_brand = 'foremp'` läses i `send-cold-email` (finns redan i `brand`-logik, rad ~143).
+- **Länkar:** `send-cold-email` konverterar `{{demo_url}}` till klickbar `<a>` — verifiera att URL:er inte redan wrappas av link-tracking (om ja, whitelista Vercel-domäner för att inte skada CTR-mätning).
+- **Prompt-editor persistens:** samma pattern som `SequenceCanvas` — `sequence_nodes.config` JSONB.
+- **Stop-knapp:** UPDATE `enrollments SET status='stopped', stopped_reason='manual'` där `id=?`.
+- **"Senaste 5":** `select from sent_emails where sequence_id=? order by sent_at desc limit 5`.
+- **Ingen ny AI-modell:** allt kör `gpt-4.1-mini` via befintlig `generate-email` (subject_prompt + prompt).
+- **Ingen ny throughput-risk:** 16 mail/dag = försumbar IO vs nuvarande cold-flöde.
+
+Säg klart så bygger jag i ordningen ovan.
