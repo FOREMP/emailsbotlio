@@ -42,14 +42,15 @@ export default function SiteApprovals() {
   const [feedback, setFeedback] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [ticking, setTicking] = useState(false);
+  const [filter, setFilter] = useState<string>("awaiting_approval");
 
   const load = async () => {
     const { data } = await supabase
       .from("site_leads")
       .select("id, company_name, email, website, phone, category, status, audit_score, audit_reason, audit_details, demo_url, generated_site_id, feedback, updated_at")
-      .in("status", ["awaiting_approval", "generating", "failed", "approved"])
+      .in("status", ["awaiting_approval", "generating", "failed", "approved", "site_good_enough"])
       .order("updated_at", { ascending: false })
-      .limit(200);
+      .limit(400);
     setRows((data ?? []) as LeadRow[]);
     setLoading(false);
   };
@@ -178,25 +179,36 @@ export default function SiteApprovals() {
         </Button>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {["awaiting_approval", "generating", "approved", "failed"].map((s) => (
-          <Card key={s} className="p-4">
-            <div className="text-xs uppercase text-muted-foreground">{s}</div>
-            <div className="text-2xl font-bold">{counts[s] ?? 0}</div>
-          </Card>
+      <div className="flex flex-wrap gap-2">
+        {[
+          { key: "awaiting_approval", label: "Väntar godkännande" },
+          { key: "approved", label: "Godkända" },
+          { key: "site_good_enough", label: "Nekade / behövs ej" },
+          { key: "generating", label: "Genererar / regenereras" },
+          { key: "failed", label: "Misslyckade" },
+          { key: "all", label: "Alla" },
+        ].map((f) => (
+          <Button
+            key={f.key}
+            size="sm"
+            variant={filter === f.key ? "default" : "outline"}
+            onClick={() => setFilter(f.key)}
+          >
+            {f.label} ({f.key === "all" ? rows.length : counts[f.key] ?? 0})
+          </Button>
         ))}
       </div>
 
       {loading && <div className="text-sm text-muted-foreground">Laddar…</div>}
 
-      {!loading && rows.length === 0 && (
+      {!loading && rows.filter((r) => filter === "all" || r.status === filter).length === 0 && (
         <Card className="p-8 text-center text-muted-foreground">
-          Inga demo-sajter väntar på granskning. Cron auditar och genererar upp till 20 nya per dag automatiskt.
+          Inga leads i denna vy just nu.
         </Card>
       )}
 
       <div className="grid gap-6">
-        {rows.map((row) => (
+        {rows.filter((r) => filter === "all" || r.status === filter).map((row) => (
           <Card key={row.id} className="p-5 space-y-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
