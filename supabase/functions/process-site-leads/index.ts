@@ -335,31 +335,31 @@ async function startGeneration(
     .single()
   if (gsErr) throw new Error(`generated_sites: ${gsErr.message}`)
 
+  // Always refresh custom_fields so latest feedback is available to
+  // process-site-jobs on this generation attempt.
+  await supabase
+    .from('contacts')
+    .update({
+      custom_fields: {
+        __site_lead_id: lead.id,
+        company: lead.company_name,
+        phone: lead.phone ?? null,
+        address: lead.address ?? null,
+        website: lead.website,
+        category: lead.category ?? null,
+        rating: lead.rating ?? null,
+        reviews: (lead.review_snippets ?? []).slice(0, 3),
+        audit_reason: lead.audit_reason ?? null,
+        audit_details: lead.audit_details ?? null,
+        regen_feedback: lead.feedback ?? null,
+      },
+    })
+    .eq('id', contactId)
+
   await supabase.from('site_leads').update({
     status: 'generating',
     generated_site_id: gs.id,
   }).eq('id', lead.id)
-
-  // If regen feedback exists, mirror to contact custom_fields so
-  // process-site-jobs can inject it into the prompt on the next run.
-  if (lead.feedback) {
-    await supabase.rpc('sender_daily_remaining', { _sender_id: '00000000-0000-0000-0000-000000000000' }).catch(() => {})
-    await supabase
-      .from('contacts')
-      .update({
-        custom_fields: {
-          __site_lead_id: lead.id,
-          company: lead.company_name,
-          phone: lead.phone ?? null,
-          address: lead.address ?? null,
-          website: lead.website,
-          regen_feedback: lead.feedback,
-          audit_reason: lead.audit_reason ?? null,
-          audit_details: lead.audit_details ?? null,
-        },
-      })
-      .eq('id', contactId)
-  }
 
   // Fire-and-forget scrape; reconciler will push it through the pipeline.
   invokeFn(supabaseUrl, serviceKey, 'scrape-lead-data', { generated_site_id: gs.id })
