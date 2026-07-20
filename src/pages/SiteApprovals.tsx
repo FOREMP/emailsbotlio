@@ -1,0 +1,306 @@
+// Approve, regenerate or park generated demo sites for site leads.
+// Only leads with status = 'awaiting_approval' block outreach; also shows
+// 'generating' and 'failed' so we can see what's in flight.
+import { useEffect, useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { toast } from "@/hooks/use-toast";
+import { ExternalLink, Check, RefreshCw, XCircle, RotateCw, Loader2 } from "lucide-react";
+
+type LeadRow = {
+  id: string;
+  company_name: string;
+  email: string | null;
+  website: string | null;
+  phone: string | null;
+  category: string | null;
+  status: string;
+  audit_score: number | null;
+  audit_reason: string | null;
+  audit_details: { weaknesses?: string[] } | null;
+  demo_url: string | null;
+  generated_site_id: string | null;
+  feedback: string | null;
+  updated_at: string;
+};
+
+const STATUS_BADGE: Record<string, string> = {
+  awaiting_approval: "bg-indigo-500",
+  generating: "bg-purple-500",
+  failed: "bg-red-500",
+  approved: "bg-emerald-500",
+};
+
+export default function SiteApprovals() {
+  const [rows, setRows] = useState<LeadRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [regen, setRegen] = useState<LeadRow | null>(null);
+  const [feedback, setFeedback] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [ticking, setTicking] = useState(false);
+
+  const load = async () => {
+    const { data } = await supabase
+      .from("site_leads")
+      .select("id, company_name, email, website, phone, category, status, audit_score, audit_reason, audit_details, demo_url, generated_site_id, feedback, updated_at")
+      .in("status", ["awaiting_approval", "generating", "failed", "approved"])
+      .order("updated_at", { ascending: false })
+      .limit(200);
+    setRows((data ?? []) as LeadRow[]);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    load();
+    // Poll every 30s so newly-live demos + status changes show up automatically
+    const t = setInterval(load, 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  const runTick = async () => {
+    setTicking(true);
+    try {
+      const { error } = await supabase.functions.invoke("process-site-leads", { body: {} });
+      if (error) throw error;
+      toast({ title: "Kör orchestrator", description: "Audit + generering triggad manuellt." });
+      await load();
+    } catch (e) {
+      toast({ title: "Fel", description: (e as Error).message, variant: "destructive" });
+    } finally {
+      setTicking(false);
+    }
+  };
+
+  const approve = async (row: LeadRow) => {
+    setBusyId(row.id);
+    const { error } = await supabase
+      .from("site_leads")
+      .update({ status: "approved", approved_at: new Date().toISOString() })
+      .eq("id", row.id);
+    setBusyId(null);
+    if (error) return toast({ title: "Kunde inte godkänna", description: error.message, variant: "destructive" });
+    toast({ title: "Godkänd", description: `${row.company_name} är redo för sekvens.` });
+    load();
+  };
+
+  const notNeeded = async (row: LeadRow) => {
+    if (!confirm(`Markera ${row.company_name} som "behövs ej" och parkera?`)) return;
+    setBusyId(row.id);
+    const { error } = await supabase
+      .from("site_leads")
+      .update({ status: "site_good_enough" })
+      .eq("id", row.id);
+    setBusyId(null);
+    if (error) return toast({ title: "Fel", description: error.message, variant: "destructive" });
+    toast({ title: "Parkerad" });
+    load();
+  };
+
+  const submitRegen = async () => {
+    if (!regen) return;
+    if (!feedback.trim()) {
+      toast({ title: "Feedback krävs", description: "Skriv vad som ska ändras innan regenerering.", variant: "destructive" });
+      return;
+    }
+    setBusyId(regen.id);
+    try {
+      // 1. Save feedback on the lead + flip status back to generating.
+      await supabase
+        .from("site_leads")
+        .update({ status: "generating", feedback: feedback.trim() })
+        .eq("id", regen.id);
+
+      // 2. Mirror feedback into the linked ghost contact so process-site-jobs
+      //    picks it up in the next generation pass.
+      if (regen.generated_site_id) {
+        const { data: gs } = await supabase
+          .from("generated_sites")
+          .select("contact_id")
+          .eq("id", regen.generated_site_id)
+          .single();
+        if (gs?.contact_id) {
+          const { data: contact } = await supabase
+            .from("contacts")
+            .select("custom_fields")
+            .eq("id", gs.contact_id)
+            .single();
+          const cf = (contact?.custom_fields ?? {}) as Record<string, unknown>;
+          await supabase
+            .from("contacts")
+            .update({ custom_fields: { ...cf, regen_feedback: feedback.trim() } })
+            .eq("id", gs.contact_id);
+        }
+
+        // 3. Re-queue the site so the worker picks it up on the next tick.
+        await supabase
+          .from("generated_sites")
+          .update({
+            status: "queued",
+            queued_at: new Date().toISOString(),
+            error_message: null,
+            attempts: 0,
+          })
+          .eq("id", regen.generated_site_id);
+      }
+
+      toast({ title: "Regenererar", description: "Ny version byggs, kolla igen om några minuter." });
+      setRegen(null);
+      setFeedback("");
+      load();
+    } catch (e) {
+      toast({ title: "Fel", description: (e as Error).message, variant: "destructive" });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const counts = rows.reduce<Record<string, number>>((acc, r) => {
+    acc[r.status] = (acc[r.status] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Site Approvals</h1>
+          <p className="text-sm text-muted-foreground">
+            Godkänn eller ge feedback på autogenererade demo-sajter innan de går ut i email.
+          </p>
+        </div>
+        <Button variant="outline" onClick={runTick} disabled={ticking} className="gap-2">
+          {ticking ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCw className="h-4 w-4" />}
+          Kör orchestrator nu
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {["awaiting_approval", "generating", "approved", "failed"].map((s) => (
+          <Card key={s} className="p-4">
+            <div className="text-xs uppercase text-muted-foreground">{s}</div>
+            <div className="text-2xl font-bold">{counts[s] ?? 0}</div>
+          </Card>
+        ))}
+      </div>
+
+      {loading && <div className="text-sm text-muted-foreground">Laddar…</div>}
+
+      {!loading && rows.length === 0 && (
+        <Card className="p-8 text-center text-muted-foreground">
+          Inga demo-sajter väntar på granskning. Cron auditar och genererar upp till 20 nya per dag automatiskt.
+        </Card>
+      )}
+
+      <div className="grid gap-6">
+        {rows.map((row) => (
+          <Card key={row.id} className="p-5 space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-lg font-semibold">{row.company_name}</h2>
+                  <Badge className={STATUS_BADGE[row.status] ?? "bg-slate-500"}>{row.status}</Badge>
+                  {row.audit_score != null && (
+                    <Badge variant="outline">Audit {row.audit_score}/10</Badge>
+                  )}
+                </div>
+                <div className="text-xs text-muted-foreground flex flex-wrap gap-x-3 mt-1">
+                  {row.email && <span>{row.email}</span>}
+                  {row.phone && <span>{row.phone}</span>}
+                  {row.category && <span>{row.category}</span>}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {row.status === "awaiting_approval" && (
+                  <>
+                    <Button size="sm" onClick={() => approve(row)} disabled={busyId === row.id} className="gap-2">
+                      <Check className="h-4 w-4" /> Godkänn
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => { setRegen(row); setFeedback(row.feedback ?? ""); }} disabled={busyId === row.id} className="gap-2">
+                      <RefreshCw className="h-4 w-4" /> Regenerera
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => notNeeded(row)} disabled={busyId === row.id} className="gap-2">
+                      <XCircle className="h-4 w-4" /> Behövs ej
+                    </Button>
+                  </>
+                )}
+                {row.status === "generating" && (
+                  <div className="text-xs text-muted-foreground flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" /> Bygger…
+                  </div>
+                )}
+                {row.status === "failed" && (
+                  <Button size="sm" variant="outline" onClick={() => { setRegen(row); setFeedback(row.feedback ?? ""); }} className="gap-2">
+                    <RefreshCw className="h-4 w-4" /> Försök igen
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            {(row.audit_reason || row.audit_details?.weaknesses?.length) && (
+              <div className="text-sm bg-muted/50 rounded-md p-3">
+                <div className="font-medium mb-1">Audit</div>
+                {row.audit_reason && <div className="text-muted-foreground">{row.audit_reason}</div>}
+                {row.audit_details?.weaknesses?.length && (
+                  <ul className="mt-2 list-disc list-inside text-muted-foreground space-y-0.5">
+                    {row.audit_details.weaknesses.map((w, i) => <li key={i}>{w}</li>)}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            <div className="grid md:grid-cols-2 gap-4">
+              <PreviewFrame title="Nuvarande hemsida" url={row.website} />
+              <PreviewFrame title="Ny demo" url={row.demo_url} highlight />
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      <Dialog open={!!regen} onOpenChange={(o) => !o && setRegen(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Regenerera hemsida</DialogTitle>
+            <DialogDescription>
+              Skriv vad AI:n ska ändra i nästa version. T.ex. "ta bort priser", "ändra hero-rubriken till XYZ", "byt färger till mörkgrönt", "tona ner brommbudskapet".
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea rows={6} value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="Feedback till AI:n…" />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRegen(null)} disabled={busyId === regen?.id}>Avbryt</Button>
+            <Button onClick={submitRegen} disabled={busyId === regen?.id} className="gap-2">
+              <RefreshCw className="h-4 w-4" /> Regenerera
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function PreviewFrame({ title, url, highlight }: { title: string; url: string | null; highlight?: boolean }) {
+  return (
+    <div className={`rounded-md border overflow-hidden ${highlight ? "ring-2 ring-primary/40" : ""}`}>
+      <div className="flex items-center justify-between px-3 py-2 bg-muted/50 text-xs">
+        <span className="font-medium">{title}</span>
+        {url ? (
+          <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline">
+            Öppna <ExternalLink className="h-3 w-3" />
+          </a>
+        ) : (
+          <span className="text-muted-foreground">Ingen URL</span>
+        )}
+      </div>
+      {url ? (
+        <iframe src={url} title={title} className="w-full h-[480px] bg-white" sandbox="allow-scripts allow-same-origin allow-forms" />
+      ) : (
+        <div className="h-[480px] flex items-center justify-center text-sm text-muted-foreground">
+          {title === "Ny demo" ? "Demo bygger fortfarande…" : "Ingen befintlig hemsida"}
+        </div>
+      )}
+    </div>
+  );
+}

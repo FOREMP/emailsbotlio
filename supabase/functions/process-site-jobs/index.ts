@@ -259,9 +259,19 @@ ABSOLUTA REGLER:
 7. heroLine1 + heroLine2 ska tillsammans kännas som en HEADLINE värdig en premium-sajt (t.ex. "Din bilverkstad i Lund. / Vi bygger trygghet, inte gissningar.").
 8. Max 4500 tokens totalt.`
 
+    // Regen feedback: when the user clicks "Regenerera" on /site-approvals
+    // we stash the feedback in custom_fields.regen_feedback. Inject it here
+    // so the plan is rewritten around the user's notes.
+    const regenFeedback = typeof cf.regen_feedback === 'string' && cf.regen_feedback.trim()
+      ? String(cf.regen_feedback).trim()
+      : null
+
     const userTextParts = [
       'Skapa en kompakt innehållsplan för en 3-sidig premium-sajt för denna bilverkstad. Skriv ENDAST JSON enligt schemat.',
       '',
+      regenFeedback
+        ? `--- ANVÄNDARENS FEEDBACK FÖR REGENERERING (HÖGSTA PRIORITET, applicera dessa ändringar) ---\n${regenFeedback}\n`
+        : '',
       'FAKTA (endast detta — hitta aldrig på siffror, adresser eller årtal):',
       JSON.stringify(facts, null, 2),
       '',
@@ -287,7 +297,7 @@ ABSOLUTA REGLER:
         : '[Ingen skärmdump av nuvarande sajt tillgänglig.]',
       '',
       'Returnera BARA JSON-objektet med innehållsplanen, inte HTML.',
-    ].join('\n')
+    ].filter(Boolean).join('\n')
 
     // Multimodal content — only include the screenshot on models that support vision.
     // DeepSeek V3.1 is text-only; sending an image_url would 400.
