@@ -19,6 +19,7 @@ import Analytics from "./pages/Analytics.tsx";
 import Sites from "./pages/Sites.tsx";
 import SiteLeads from "./pages/SiteLeads.tsx";
 import SiteApprovals from "./pages/SiteApprovals.tsx";
+import SiteOutreach from "./pages/SiteOutreach.tsx";
 import Auth from "./pages/Auth.tsx";
 import Unsubscribe from "./pages/Unsubscribe.tsx";
 import NotFound from "./pages/NotFound.tsx";
@@ -53,6 +54,7 @@ const App = () => (
             <Route path="/sites" element={protect(<Sites />)} />
             <Route path="/site-leads" element={protect(<SiteLeads />)} />
             <Route path="/site-approvals" element={protect(<SiteApprovals />)} />
+            <Route path="/site-outreach" element={protect(<SiteOutreach />)} />
             <Route path="/unsubscribe" element={<Unsubscribe />} />
             <Route path="*" element={<NotFound />} />
           </Routes>

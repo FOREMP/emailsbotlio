@@ -77,16 +77,127 @@ export default function SiteApprovals() {
   };
 
   const approve = async (row: LeadRow) => {
+    if (!row.email) {
+      return toast({ title: "Saknar email", description: "Kan inte enrolla utan email på leaden.", variant: "destructive" });
+    }
+    if (!row.demo_url) {
+      return toast({ title: "Ingen demo", description: "Vänta tills demon är byggd innan godkännande.", variant: "destructive" });
+    }
     setBusyId(row.id);
-    const { error } = await supabase
-      .from("site_leads")
-      .update({ status: "approved", approved_at: new Date().toISOString() })
-      .eq("id", row.id);
-    setBusyId(null);
-    if (error) return toast({ title: "Kunde inte godkänna", description: error.message, variant: "destructive" });
-    toast({ title: "Godkänd", description: `${row.company_name} är redo för sekvens.` });
-    load();
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const uid = userData?.user?.id;
+      if (!uid) throw new Error("Ej inloggad");
+
+      // 1. Look up the Site Demo Outreach sequence + its contact list + trigger node
+      const { data: seq, error: seqErr } = await supabase
+        .from("sequences")
+        .select("id, contact_list_id")
+        .eq("user_id", uid)
+        .eq("name", "Site Demo Outreach")
+        .maybeSingle();
+      if (seqErr) throw seqErr;
+      if (!seq?.id || !seq.contact_list_id) throw new Error("Site Demo Outreach-sekvensen saknas — kör seed-migrationen.");
+
+      const { data: triggerNode } = await supabase
+        .from("sequence_nodes")
+        .select("id")
+        .eq("sequence_id", seq.id)
+        .eq("node_type", "trigger")
+        .maybeSingle();
+      if (!triggerNode?.id) throw new Error("Trigger-nod saknas i Site Demo Outreach.");
+
+      // 2. Upsert the contact into that list with all site-lead vars in custom_fields
+      const emailLower = row.email.toLowerCase().trim();
+      const weakness = row.audit_details?.weaknesses?.[0] ?? row.audit_reason ?? "";
+      const firstName = emailLower.split("@")[0].split(/[._-]/)[0].replace(/^\w/, (c) => c.toUpperCase());
+      const custom_fields = {
+        site_lead_id: row.id,
+        company_name: row.company_name,
+        demo_url: row.demo_url,
+        website: row.website ?? "",
+        audit_weakness: weakness,
+        audit_score: row.audit_score ?? "",
+        category: row.category ?? "",
+      };
+
+      const { data: existing } = await supabase
+        .from("contacts")
+        .select("id, custom_fields")
+        .eq("user_id", uid)
+        .eq("list_id", seq.contact_list_id)
+        .eq("email", emailLower)
+        .maybeSingle();
+
+      let contactId: string;
+      if (existing?.id) {
+        const merged = { ...(existing.custom_fields as any ?? {}), ...custom_fields };
+        await supabase.from("contacts").update({ custom_fields: merged, first_name: firstName }).eq("id", existing.id);
+        contactId = existing.id;
+      } else {
+        const { data: inserted, error: insErr } = await supabase
+          .from("contacts")
+          .insert({
+            user_id: uid,
+            list_id: seq.contact_list_id,
+            email: emailLower,
+            first_name: firstName,
+            phone: row.phone,
+            custom_fields,
+            tags: ["site-demo"],
+          })
+          .select("id")
+          .single();
+        if (insErr) throw insErr;
+        contactId = inserted.id;
+      }
+
+      // 3. Ensure exactly one active enrollment. If one already exists (approved before)
+      //    just re-activate it at the trigger.
+      const { data: existingEnr } = await supabase
+        .from("enrollments")
+        .select("id, status")
+        .eq("user_id", uid)
+        .eq("sequence_id", seq.id)
+        .eq("contact_id", contactId)
+        .maybeSingle();
+      if (existingEnr?.id) {
+        await supabase.from("enrollments").update({
+          status: "active",
+          current_node_id: triggerNode.id,
+          current_step: 0,
+          next_send_at: new Date().toISOString(),
+          last_error: null,
+          error_at: null,
+        }).eq("id", existingEnr.id);
+      } else {
+        const { error: enrErr } = await supabase.from("enrollments").insert({
+          user_id: uid,
+          sequence_id: seq.id,
+          contact_id: contactId,
+          status: "active",
+          current_node_id: triggerNode.id,
+          current_step: 0,
+          next_send_at: new Date().toISOString(),
+        });
+        if (enrErr) throw enrErr;
+      }
+
+      // 4. Flip lead status
+      await supabase
+        .from("site_leads")
+        .update({ status: "approved", approved_at: new Date().toISOString() })
+        .eq("id", row.id);
+
+      toast({ title: "Godkänd & enrollad", description: `${row.company_name} börjar få mail inom några minuter.` });
+      load();
+    } catch (e) {
+      toast({ title: "Kunde inte godkänna", description: (e as Error).message, variant: "destructive" });
+    } finally {
+      setBusyId(null);
+    }
   };
+
 
   const notNeeded = async (row: LeadRow) => {
     if (!confirm(`Markera ${row.company_name} som "behövs ej" och parkera?`)) return;
