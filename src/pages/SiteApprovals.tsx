@@ -42,6 +42,7 @@ export default function SiteApprovals() {
   const [feedback, setFeedback] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [ticking, setTicking] = useState(false);
+  const [filter, setFilter] = useState<string>("awaiting_approval");
 
   const load = async () => {
     const { data } = await supabase
