@@ -54,6 +54,7 @@ const App = () => (
             <Route path="/sites" element={protect(<Sites />)} />
             <Route path="/site-leads" element={protect(<SiteLeads />)} />
             <Route path="/site-approvals" element={protect(<SiteApprovals />)} />
+            <Route path="/site-outreach" element={protect(<SiteOutreach />)} />
             <Route path="/unsubscribe" element={<Unsubscribe />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
