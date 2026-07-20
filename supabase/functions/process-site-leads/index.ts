@@ -68,25 +68,38 @@ Deno.serve(async (req) => {
     report.capacity = capacity
 
     if (capacity > 0) {
-      const take = Math.min(GEN_PER_TICK, capacity)
-      const { data: needsSite } = await supabase
+      // Serial pipeline: only start a new lead if none are currently in flight.
+      // A lead is "in flight" while its status='generating' (scrape → generate
+      // → deploy has not yet reached awaiting_approval / failed).
+      const { count: inFlight } = await supabase
         .from('site_leads')
-        .select('id, user_id, company_name, website, email, phone, address, category, rating, review_snippets, audit_reason, audit_details, feedback')
-        .eq('status', 'needs_site')
-        .not('website', 'is', null)
-        .not('email', 'is', null)
-        .order('audit_score', { ascending: true, nullsFirst: false })
-        .limit(take)
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'generating')
 
-      for (const lead of needsSite ?? []) {
-        try {
-          await startGeneration(supabase, supabaseUrl, serviceKey, lead as any)
-          report.generated++
-        } catch (e) {
-          report.errors.push(`gen ${lead.id}: ${(e as Error).message}`)
+      if ((inFlight ?? 0) > 0) {
+        report.errors.push(`skip generate: ${inFlight} lead(s) still in flight`)
+      } else {
+        const take = Math.min(GEN_PER_TICK, capacity)
+        const { data: needsSite } = await supabase
+          .from('site_leads')
+          .select('id, user_id, company_name, website, email, phone, address, category, rating, review_snippets, audit_reason, audit_details, feedback')
+          .eq('status', 'needs_site')
+          .not('website', 'is', null)
+          .not('email', 'is', null)
+          .order('audit_score', { ascending: true, nullsFirst: false })
+          .limit(take)
+
+        for (const lead of needsSite ?? []) {
+          try {
+            await startGeneration(supabase, supabaseUrl, serviceKey, lead as any)
+            report.generated++
+          } catch (e) {
+            report.errors.push(`gen ${lead.id}: ${(e as Error).message}`)
+          }
         }
       }
     }
+
 
     return json({ ok: true, ...report })
   } catch (err) {
