@@ -48,9 +48,9 @@ export default function SiteApprovals() {
     const { data } = await supabase
       .from("site_leads")
       .select("id, company_name, email, website, phone, category, status, audit_score, audit_reason, audit_details, demo_url, generated_site_id, feedback, updated_at")
-      .in("status", ["awaiting_approval", "generating", "failed", "approved"])
+      .in("status", ["awaiting_approval", "generating", "failed", "approved", "site_good_enough"])
       .order("updated_at", { ascending: false })
-      .limit(200);
+      .limit(400);
     setRows((data ?? []) as LeadRow[]);
     setLoading(false);
   };
