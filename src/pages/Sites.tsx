@@ -276,17 +276,6 @@ const Sites = () => {
       </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Enroll a list</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-3">
-          <Select value={selectedList} onValueChange={setSelectedList}>
-            <SelectTrigger className="w-64"><SelectValue placeholder="Pick a contact list…" /></SelectTrigger>
-            <SelectContent>
-              {lists.map((l: any) => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
-      <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center justify-between">
             <span>Automation</span>
