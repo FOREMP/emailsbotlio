@@ -216,7 +216,8 @@ export default function SiteOutreach() {
         <div className="space-y-1">
           <h2 className="text-lg font-semibold flex items-center gap-2"><Gauge className="h-4 w-4" /> Daglig utskicksgräns</h2>
           <p className="text-xs text-muted-foreground">
-            Räknar alla mail i sekvensen: nya första mail och follow-ups. Nuvarande @foremp.email-mål: 8 per sender, 16 totalt.
+            Räknar endast <strong>nya första mail</strong> per dag. Follow-ups skickas alltid ovanpå detta.
+            Totalen delas jämnt mellan aktiva @foremp.email-sender (t.ex. 10 = 5 per sender).
           </p>
         </div>
         <div className="flex items-end gap-2">
