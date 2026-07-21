@@ -343,18 +343,17 @@ Deno.serve(async (req) => {
           .select('id', { count: 'exact', head: true })
           .eq('sequence_id', enr.sequence_id)
           .eq('activity_type', 'email_sent')
+          .eq('step_number', 1)
           .gte('created_at', startOfDay.toISOString())
-        // This is intentionally a sequence-wide daily cap, not just this one
-        // throttle node. The Site Demo number is the total daily outreach volume,
-        // and the user already includes follow-ups in that calculation.
+        // Cap counts NEW first-mail sends only. Follow-ups bypass this and always run.
         if ((count ?? 0) >= max) {
           const tomorrow = nextStockholmMidnightUtc()
           await supabase.from('enrollments').update({
             next_send_at: tomorrow.toISOString(),
             status: 'waiting_capacity',
-            last_error: `daily sequence limit reached (${count}/${max}) — resumes next Stockholm day`,
+            last_error: `daily new-mail limit reached (${count}/${max}) — resumes next Stockholm day`,
           }).eq('id', enr.id)
-          console.log(`[enr ${enr.id}] sequence cap full (${count}/${max}) → waiting_capacity until ${tomorrow.toISOString()}`)
+          console.log(`[enr ${enr.id}] new-mail cap full (${count}/${max}) → waiting_capacity until ${tomorrow.toISOString()}`)
           continue
         }
         // Capacity available — advance and remember which throttle gated the next send.
