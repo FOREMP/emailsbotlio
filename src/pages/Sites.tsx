@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Loader2, Sparkles, Search, ExternalLink, RefreshCw, Plus, Wand2, Rocket, Info } from "lucide-react";
+import { Loader2, Sparkles, Search, ExternalLink, RefreshCw, Plus, Wand2, Rocket, Info, Play, Pause, StopCircle } from "lucide-react";
 import { toast } from "sonner";
 
 type SiteRow = {
@@ -113,6 +113,34 @@ const Sites = () => {
       if (error) throw error;
       return data ?? [];
     },
+  });
+
+  // Automation on/off switch (site_generation_state in app_settings).
+  const { data: autoState = "running" } = useQuery({
+    queryKey: ["site_generation_state"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("app_settings")
+        .select("value")
+        .eq("key", "site_generation_state")
+        .maybeSingle();
+      return ((data?.value as any)?.state ?? "running") as "running" | "paused" | "stopped";
+    },
+    refetchInterval: 15_000,
+  });
+  const setAutoState = useMutation({
+    mutationFn: async (state: "running" | "paused" | "stopped") => {
+      const { error } = await supabase
+        .from("app_settings")
+        .upsert({ key: "site_generation_state", value: { state } as any, updated_at: new Date().toISOString() });
+      if (error) throw error;
+    },
+    onSuccess: (_r, state) => {
+      const label = state === "running" ? "Igång" : state === "paused" ? "Pausad" : "Stoppad";
+      toast.success(`Automation: ${label}`);
+      qc.invalidateQueries({ queryKey: ["site_generation_state"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
   });
 
   const enrollList = useMutation({
@@ -246,6 +274,51 @@ const Sites = () => {
         <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Skipped (good site)</CardTitle></CardHeader><CardContent className="text-2xl font-bold">{stats.skipped}</CardContent></Card>
         <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Failed</CardTitle></CardHeader><CardContent className="text-2xl font-bold text-destructive">{stats.failed}</CardContent></Card>
       </div>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center justify-between">
+            <span>Automation</span>
+            <Badge variant="outline" className={
+              autoState === "running" ? "text-emerald-600 border-emerald-600" :
+              autoState === "paused" ? "text-amber-600 border-amber-600" :
+              "text-destructive border-destructive"
+            }>
+              {autoState === "running" ? "Igång" : autoState === "paused" ? "Pausad" : "Stoppad"}
+            </Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant={autoState === "running" ? "default" : "outline"}
+            disabled={autoState === "running" || setAutoState.isPending}
+            onClick={() => setAutoState.mutate("running")}
+          >
+            <Play className="h-4 w-4 mr-1" /> Starta
+          </Button>
+          <Button
+            size="sm"
+            variant={autoState === "paused" ? "default" : "outline"}
+            disabled={autoState === "paused" || setAutoState.isPending}
+            onClick={() => setAutoState.mutate("paused")}
+          >
+            <Pause className="h-4 w-4 mr-1" /> Pausa
+          </Button>
+          <Button
+            size="sm"
+            variant={autoState === "stopped" ? "destructive" : "outline"}
+            disabled={autoState === "stopped" || setAutoState.isPending}
+            onClick={() => setAutoState.mutate("stopped")}
+          >
+            <StopCircle className="h-4 w-4 mr-1" /> Stoppa
+          </Button>
+          <p className="text-xs text-muted-foreground ml-2">
+            Styr om <code>process-site-leads</code> får starta nya hemsido-generationer.
+            Redan pågående jobb slutförs. Manuella knappar nedan fungerar alltid.
+          </p>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

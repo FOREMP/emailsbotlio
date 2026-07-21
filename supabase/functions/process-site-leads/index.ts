@@ -58,6 +58,18 @@ Deno.serve(async (req) => {
     }
 
     // ---------------- 3. GENERATE -----------------
+    // Respect the operator on/off switch stored in app_settings.
+    const { data: autoRow } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'site_generation_state')
+      .maybeSingle()
+    const autoState = ((autoRow as any)?.value?.state ?? 'running') as string
+    if (autoState !== 'running') {
+      report.errors.push(`skip generate: automation is ${autoState}`)
+      return json({ ok: true, ...report })
+    }
+
     const today = new Date().toISOString().slice(0, 10)
     const { count: doneToday } = await supabase
       .from('site_leads')
