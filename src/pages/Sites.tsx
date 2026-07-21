@@ -115,6 +115,34 @@ const Sites = () => {
     },
   });
 
+  // Automation on/off switch (site_generation_state in app_settings).
+  const { data: autoState = "running" } = useQuery({
+    queryKey: ["site_generation_state"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("app_settings")
+        .select("value")
+        .eq("key", "site_generation_state")
+        .maybeSingle();
+      return ((data?.value as any)?.state ?? "running") as "running" | "paused" | "stopped";
+    },
+    refetchInterval: 15_000,
+  });
+  const setAutoState = useMutation({
+    mutationFn: async (state: "running" | "paused" | "stopped") => {
+      const { error } = await supabase
+        .from("app_settings")
+        .upsert({ key: "site_generation_state", value: { state } as any, updated_at: new Date().toISOString() });
+      if (error) throw error;
+    },
+    onSuccess: (_r, state) => {
+      const label = state === "running" ? "Igång" : state === "paused" ? "Pausad" : "Stoppad";
+      toast.success(`Automation: ${label}`);
+      qc.invalidateQueries({ queryKey: ["site_generation_state"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const enrollList = useMutation({
     mutationFn: async (listId: string) => {
       if (!user) throw new Error("not signed in");
