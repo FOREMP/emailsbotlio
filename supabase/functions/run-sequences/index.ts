@@ -371,15 +371,17 @@ Deno.serve(async (req) => {
       }
 
       if (currentNode.node_type === 'send_email') {
-        // Global sequence daily limit: applies to first emails AND follow-ups.
+        // Global sequence daily limit: counts NEW first-mail sends only.
+        // Follow-ups (current_step > 1) bypass the cap so long threads always finish.
         const cap = sequenceDailyCap(nodes ?? [])
-        if (cap) {
+        if (cap && (enr.current_step ?? 1) <= 1) {
           const startOfDay = startOfStockholmDayUtc()
           const { count } = await supabase
             .from('contact_activity')
             .select('id', { count: 'exact', head: true })
             .eq('sequence_id', enr.sequence_id)
             .eq('activity_type', 'email_sent')
+            .eq('step_number', 1)
             .gte('created_at', startOfDay.toISOString())
           if ((count ?? 0) >= cap) {
             const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
@@ -389,10 +391,10 @@ Deno.serve(async (req) => {
               next_send_at: tomorrow.toISOString(),
               deferred_at: nowIso,
               status: 'waiting_capacity',
-              last_error: `daily sequence limit reached (${count}/${cap}) — resumes next scheduled slot`,
+              last_error: `daily new-mail limit reached (${count}/${cap}) — resumes next scheduled slot`,
               error_at: nowIso,
             }).eq('id', enr.id)
-            console.log(`[enr ${enr.id}] global daily cap full (${count}/${cap}) → waiting_capacity (schedule=${upstreamSched ?? 'none'})`)
+            console.log(`[enr ${enr.id}] daily new-mail cap full (${count}/${cap}) → waiting_capacity`)
             continue
           }
         }
