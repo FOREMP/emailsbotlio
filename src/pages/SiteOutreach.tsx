@@ -11,7 +11,7 @@ import { toast } from "@/hooks/use-toast";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
-import { Loader2, StopCircle, Mail, Save, Eye } from "lucide-react";
+import { Loader2, StopCircle, Mail, Save, Eye, Gauge } from "lucide-react";
 
 type Seq = { id: string; contact_list_id: string | null };
 type Node = { id: string; node_type: string; position_y: number; config: any };
@@ -49,6 +49,7 @@ export default function SiteOutreach() {
   const [preview, setPreview] = useState<SentRow | null>(null);
   const [dirty, setDirty] = useState<Record<string, any>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [savingLimit, setSavingLimit] = useState(false);
 
   const load = useCallback(async () => {
     const { data: userData } = await supabase.auth.getUser();
@@ -103,6 +104,13 @@ export default function SiteOutreach() {
     () => nodes.filter((n) => n.node_type === "wait").sort((a, b) => a.position_y - b.position_y),
     [nodes],
   );
+  const cfgVal = (node: Node, key: string) => (dirty[node.id]?.[key] ?? node.config?.[key] ?? "");
+  const throttleNodes = useMemo(
+    () => nodes.filter((n) => n.node_type === "throttle").sort((a, b) => a.position_y - b.position_y),
+    [nodes],
+  );
+  const dailyLimitNode = throttleNodes[0] ?? null;
+  const dailyLimit = Number(dailyLimitNode ? cfgVal(dailyLimitNode, "max_per_day") : 16) || 16;
 
   const counts = useMemo(() => {
     const today = new Date(); today.setUTCHours(0, 0, 0, 0);
@@ -140,10 +148,50 @@ export default function SiteOutreach() {
     load();
   };
 
+  const saveDailyLimit = async () => {
+    if (!seq || !dailyLimitNode) return;
+    const nextLimit = Math.max(1, Math.floor(dailyLimit));
+    setSavingLimit(true);
+    try {
+      for (const n of throttleNodes) {
+        const cfg = { ...(n.config ?? {}), max_per_day: nextLimit };
+        const { error } = await supabase.from("sequence_nodes").update({ config: cfg }).eq("id", n.id);
+        if (error) throw error;
+      }
+
+      const { data: userData } = await supabase.auth.getUser();
+      const uid = userData?.user?.id;
+      if (uid) {
+        const { data: forempSenders } = await supabase
+          .from("senders")
+          .select("id")
+          .eq("user_id", uid)
+          .eq("is_active", true)
+          .ilike("from_email", "%@foremp.email");
+        const perSender = Math.max(1, Math.ceil(nextLimit / Math.max((forempSenders ?? []).length, 1)));
+        for (const s of forempSenders ?? []) {
+          const { error } = await supabase.from("senders").update({ daily_limit: perSender }).eq("id", s.id);
+          if (error) throw error;
+        }
+      }
+
+      setDirty((d) => {
+        const c = { ...d };
+        for (const n of throttleNodes) delete c[n.id];
+        return c;
+      });
+      toast({ title: "Daglig gräns sparad", description: `${nextLimit} mail/dag totalt, inklusive follow-ups.` });
+      load();
+    } catch (e) {
+      toast({ title: "Kunde inte spara gräns", description: (e as Error).message, variant: "destructive" });
+    } finally {
+      setSavingLimit(false);
+    }
+  };
+
   const updateDirty = (nodeId: string, key: string, value: any) => {
     setDirty((d) => ({ ...d, [nodeId]: { ...(d[nodeId] ?? {}), [key]: value } }));
   };
-  const cfgVal = (node: Node, key: string) => (dirty[node.id]?.[key] ?? node.config?.[key] ?? "");
 
   const contactById = (id: string | null) => enrollments.find((e) => e.contact?.id === id)?.contact ?? null;
 
@@ -163,10 +211,35 @@ export default function SiteOutreach() {
       <div>
         <h1 className="text-2xl font-bold">Demo Outreach</h1>
         <p className="text-sm text-muted-foreground">
-          4-mails svensk sekvens från @foremp.email — <strong>skickas endast måndag–fredag 09:00 Stockholm-tid</strong>, max 16 mail/dag.
+          4-mails svensk sekvens från @foremp.email — <strong>skickas endast måndag–fredag 09:00 Stockholm-tid</strong>.
           Fylls på automatiskt när du godkänner demos i Approvals (kontakt, hemsidelänk och audit-info följer med).
         </p>
       </div>
+
+      <Card className="p-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div className="space-y-1">
+          <h2 className="text-lg font-semibold flex items-center gap-2"><Gauge className="h-4 w-4" /> Daglig utskicksgräns</h2>
+          <p className="text-xs text-muted-foreground">
+            Räknar alla mail i sekvensen: nya första mail och follow-ups. Nuvarande @foremp.email-mål: 8 per sender, 16 totalt.
+          </p>
+        </div>
+        <div className="flex items-end gap-2">
+          <div className="space-y-1">
+            <label className="text-xs font-medium">Max mail per dag</label>
+            <Input
+              type="number"
+              min={1}
+              className="w-32"
+              value={dailyLimit}
+              onChange={(e) => dailyLimitNode && updateDirty(dailyLimitNode.id, "max_per_day", Number(e.target.value))}
+            />
+          </div>
+          <Button onClick={saveDailyLimit} disabled={!dailyLimitNode || savingLimit || !dirty[dailyLimitNode.id]} className="gap-1">
+            {savingLimit ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            Spara gräns
+          </Button>
+        </div>
+      </Card>
 
       {/* KPI cards */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -281,7 +354,7 @@ export default function SiteOutreach() {
                 <div>
                   <div className="font-medium">Mail {i + 1}</div>
                   <div className="text-xs text-muted-foreground">
-                    Modell: {n.config?.model ?? "gpt-4.1-mini"} · Sender-brand: {n.config?.brand ?? "foremp"}
+                    Modell: {n.config?.model ?? "gpt-4.1-mini"} · Sender-domain: {n.config?.sender_domain ?? "foremp.email"}
                     {wait && ` · väntar ${wait.config?.duration ?? "?"} ${wait.config?.unit ?? "days"} innan nästa`}
                   </div>
                 </div>

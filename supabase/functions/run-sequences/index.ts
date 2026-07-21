@@ -7,6 +7,7 @@ const corsHeaders = {
 
 const MAX_PER_RUN = 200
 const PER_DOMAIN_DAILY_CAP = 80
+const STOCKHOLM_TZ = 'Europe/Stockholm'
 
 function msFromUnit(n: number, unit: string): number {
   switch (unit) {
@@ -47,6 +48,60 @@ function findUpstreamScheduleId(nodes: any[], edges: any[], fromNodeId: string):
     frontier = next
   }
   return null
+}
+
+function nextEdgeFrom(nodes: any[], edges: any[], sourceNodeId: string) {
+  const candidates = (edges ?? []).filter((e: any) => e.source_node_id === sourceNodeId)
+  if (candidates.length <= 1) return candidates[0] ?? null
+  // Prefer the currently saved canvas edge over older duplicate "out" edges.
+  const byHandle = candidates.find((e: any) => e.source_handle === 'default')
+    ?? candidates.find((e: any) => e.source_handle === 'out')
+  if (byHandle) return byHandle
+  // If a schedule exists directly after this node, prefer it so business-hour gates
+  // cannot be bypassed by stale direct edges left from older graph rewires.
+  return candidates.find((e: any) => nodes.some((n: any) => n.id === e.target_node_id && n.node_type === 'schedule'))
+    ?? candidates[0]
+}
+
+function sequenceDailyCap(nodes: any[]): number | null {
+  const caps = (nodes ?? [])
+    .filter((n: any) => n.node_type === 'throttle')
+    .map((n: any) => Number(n.config?.max_per_day))
+    .filter((n: number) => Number.isFinite(n) && n > 0)
+  return caps.length ? Math.min(...caps) : null
+}
+
+function startOfStockholmDayUtc(now = new Date()): Date {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: STOCKHOLM_TZ, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now).map((p) => [p.type, p.value])) as any
+  return stockholmWallToUTC(Number(parts.year), Number(parts.month), Number(parts.day), 0, 0)
+}
+
+function stockholmWallToUTC(y: number, mo: number, d: number, h: number, mi: number): Date {
+  const guess = new Date(Date.UTC(y, mo - 1, d, h, mi, 0))
+  const sParts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: STOCKHOLM_TZ, hour12: false,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    }).formatToParts(guess).map((p) => [p.type, p.value])
+  ) as any
+  const asStockholm = Date.UTC(
+    Number(sParts.year), Number(sParts.month) - 1, Number(sParts.day),
+    Number(sParts.hour), Number(sParts.minute), Number(sParts.second)
+  )
+  return new Date(guess.getTime() - (asStockholm - guess.getTime()))
+}
+
+function nextStockholmMidnightUtc(now = new Date()): Date {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: STOCKHOLM_TZ, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now).map((p) => [p.type, p.value])) as any
+  const next = new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day) + 1))
+  return stockholmWallToUTC(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate(), 0, 0)
 }
 
 Deno.serve(async (req) => {
@@ -282,26 +337,28 @@ Deno.serve(async (req) => {
       // through a throttle, and count by that tag here.
       if (currentNode.node_type === 'throttle') {
         const max = Number(cfg.max_per_day ?? 50)
-        const startOfDay = new Date(); startOfDay.setUTCHours(0, 0, 0, 0)
+        const startOfDay = startOfStockholmDayUtc()
         const { count } = await supabase
           .from('contact_activity')
           .select('id', { count: 'exact', head: true })
           .eq('sequence_id', enr.sequence_id)
           .eq('activity_type', 'email_sent')
           .gte('created_at', startOfDay.toISOString())
-          .filter('metadata->>throttle_node_id', 'eq', currentNode.id)
+        // This is intentionally a sequence-wide daily cap, not just this one
+        // throttle node. The Site Demo number is the total daily outreach volume,
+        // and the user already includes follow-ups in that calculation.
         if ((count ?? 0) >= max) {
-          const tomorrow = new Date(startOfDay.getTime() + 24 * 3600_000)
+          const tomorrow = nextStockholmMidnightUtc()
           await supabase.from('enrollments').update({
             next_send_at: tomorrow.toISOString(),
             status: 'waiting_capacity',
-            last_error: `daily limit reached for this throttle node (${count}/${max}) — resumes ${tomorrow.toISOString().slice(0, 10)}`,
+            last_error: `daily sequence limit reached (${count}/${max}) — resumes next Stockholm day`,
           }).eq('id', enr.id)
-          console.log(`[enr ${enr.id}] throttle ${currentNode.id} full (${count}/${max}) → waiting_capacity until ${tomorrow.toISOString()}`)
+          console.log(`[enr ${enr.id}] sequence cap full (${count}/${max}) → waiting_capacity until ${tomorrow.toISOString()}`)
           continue
         }
         // Capacity available — advance and remember which throttle gated the next send.
-        const next = (edges ?? []).find((e: any) => e.source_node_id === currentNode.id)
+        const next = nextEdgeFrom(nodes ?? [], edges ?? [], currentNode.id)
         if (!next) { await supabase.from('enrollments').update({ status: 'completed' }).eq('id', enr.id); continue }
         await supabase.from('enrollments').update({
           current_node_id: next.target_node_id,
@@ -314,10 +371,36 @@ Deno.serve(async (req) => {
       }
 
       if (currentNode.node_type === 'send_email') {
+        // Global sequence daily limit: applies to first emails AND follow-ups.
+        const cap = sequenceDailyCap(nodes ?? [])
+        if (cap) {
+          const startOfDay = startOfStockholmDayUtc()
+          const { count } = await supabase
+            .from('contact_activity')
+            .select('id', { count: 'exact', head: true })
+            .eq('sequence_id', enr.sequence_id)
+            .eq('activity_type', 'email_sent')
+            .gte('created_at', startOfDay.toISOString())
+          if ((count ?? 0) >= cap) {
+            const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
+            const tomorrow = nextStockholmMidnightUtc()
+            await supabase.from('enrollments').update({
+              current_node_id: upstreamSched ?? currentNode.id,
+              next_send_at: tomorrow.toISOString(),
+              deferred_at: nowIso,
+              status: 'waiting_capacity',
+              last_error: `daily sequence limit reached (${count}/${cap}) — resumes next scheduled slot`,
+              error_at: nowIso,
+            }).eq('id', enr.id)
+            console.log(`[enr ${enr.id}] global daily cap full (${count}/${cap}) → waiting_capacity (schedule=${upstreamSched ?? 'none'})`)
+            continue
+          }
+        }
+
         // SAME-DAY GUARD: never send to the same contact twice on the same UTC day.
         // Defers this enrollment to next UTC midnight if a send already exists today.
         {
-          const startOfDay = new Date(); startOfDay.setUTCHours(0, 0, 0, 0)
+          const startOfDay = startOfStockholmDayUtc()
           const { data: alreadyToday } = await supabase
             .from('sent_emails')
             .select('id')
@@ -327,7 +410,7 @@ Deno.serve(async (req) => {
             .gte('sent_at', startOfDay.toISOString())
             .limit(1)
           if (alreadyToday && alreadyToday.length > 0) {
-            const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
+            const tomorrow = nextStockholmMidnightUtc()
             const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
             await supabase.from('enrollments').update({
               current_node_id: upstreamSched ?? enr.current_node_id,
@@ -376,9 +459,10 @@ Deno.serve(async (req) => {
         const isSenderEligible = async (sid: string): Promise<{ ok: boolean; reason?: string }> => {
           const match = verifiedActive.find((s: any) => s.id === sid)
           if (!match) return { ok: false, reason: 'sender no longer active or domain unverified' }
+          const dom = (match.from_email as string).split('@')[1]
+          if (cfg.sender_domain && dom !== cfg.sender_domain) return { ok: false, reason: `assigned sender is not on ${cfg.sender_domain}` }
           const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: sid })
           if ((rem ?? 0) <= 0) return { ok: false, reason: 'assigned sender at daily cap' }
-          const dom = (match.from_email as string).split('@')[1]
           const domRem = await getDomainRemaining(dom)
           if (domRem <= 0) return { ok: false, reason: `domain ${dom} at daily cap (${PER_DOMAIN_DAILY_CAP})` }
           return { ok: true }
@@ -407,6 +491,14 @@ Deno.serve(async (req) => {
               failed++; continue
             }
             const dom = (specific.from_email as string).split('@')[1]
+            if (cfg.sender_domain && dom !== cfg.sender_domain) {
+              await supabase.from('enrollments').update({
+                status: 'failed',
+                last_error: `configured sender must use ${cfg.sender_domain}`,
+                error_at: nowIso,
+              }).eq('id', enr.id)
+              failed++; continue
+            }
             if (!verifiedDomains.has(dom)) {
               await supabase.from('enrollments').update({
                 status: 'failed',
@@ -418,6 +510,18 @@ Deno.serve(async (req) => {
             preSenderId = cfg.sender_id
           } else {
             let candidates = verifiedActive
+            if (cfg.sender_domain) {
+              candidates = candidates.filter((s: any) => (s.from_email as string).split('@')[1] === cfg.sender_domain)
+              if (candidates.length === 0) {
+                console.warn(`[enr ${enr.id}] no verified senders on domain "${cfg.sender_domain}" → failed`)
+                await supabase.from('enrollments').update({
+                  status: 'failed',
+                  last_error: `no verified active senders on ${cfg.sender_domain}`,
+                  error_at: nowIso,
+                }).eq('id', enr.id)
+                failed++; continue
+              }
+            }
             if (cfg.sender_strategy === 'brand' && cfg.brand) {
               const filtered = candidates.filter((s: any) => {
                 const dom = (s.from_email as string).split('@')[1] ?? ''
@@ -447,7 +551,7 @@ Deno.serve(async (req) => {
         if (!preSenderId) {
           // All eligible senders at daily cap — defer to next UTC midnight and surface
           // it as a visible "waiting_capacity" status so the UI can show it.
-          const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
+          const tomorrow = nextStockholmMidnightUtc()
           const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
           await supabase.from('enrollments').update({
             current_node_id: upstreamSched ?? enr.current_node_id,
@@ -463,7 +567,7 @@ Deno.serve(async (req) => {
         if (cfg.sender_strategy === 'specific' && !enr.assigned_sender_id) {
           const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: preSenderId })
           if ((rem ?? 0) <= 0) {
-            const tomorrow = new Date(); tomorrow.setUTCHours(24, 0, 0, 0)
+            const tomorrow = nextStockholmMidnightUtc()
             const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
             await supabase.from('enrollments').update({
               current_node_id: upstreamSched ?? enr.current_node_id,
@@ -577,7 +681,7 @@ Deno.serve(async (req) => {
           stickyUpdate.assigned_sender_id = preSenderId
         }
 
-        const next = (edges ?? []).find((e: any) => e.source_node_id === currentNode.id)
+        const next = nextEdgeFrom(nodes ?? [], edges ?? [], currentNode.id)
         if (!next) {
           await supabase.from('enrollments').update({
             status: 'completed', last_sent_at: nowIso, deferred_at: null,
@@ -602,13 +706,13 @@ Deno.serve(async (req) => {
       }
 
       if (currentNode.node_type === 'schedule') {
-        const next = (edges ?? []).find((e: any) => e.source_node_id === currentNode.id)
+        const next = nextEdgeFrom(nodes ?? [], edges ?? [], currentNode.id)
         if (!next) { await supabase.from('enrollments').update({ status: 'completed' }).eq('id', enr.id); continue }
         const tod = String(cfg.time_of_day ?? '09:00')
         const [hh, mm] = tod.split(':').map((x: string) => Number(x))
         const allowedDays: string[] = Array.isArray(cfg.days) ? cfg.days : []
         const dayMap = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
-        const TZ = 'Europe/Stockholm'
+        const TZ = STOCKHOLM_TZ
 
         // Get current time as Stockholm wall-clock components
         const fmt = new Intl.DateTimeFormat('en-US', {
@@ -619,25 +723,6 @@ Deno.serve(async (req) => {
         const parts = Object.fromEntries(fmt.formatToParts(new Date()).map((p) => [p.type, p.value])) as any
 
         // Build a UTC instant for a given Stockholm wall-clock date+time (handles DST via offset diff)
-        const stockholmWallToUTC = (y: number, mo: number, d: number, h: number, mi: number): Date => {
-          // Initial guess: treat the wall-clock as if it were UTC
-          const guess = new Date(Date.UTC(y, mo - 1, d, h, mi, 0))
-          // What Stockholm thinks the guess instant is
-          const sParts = Object.fromEntries(
-            new Intl.DateTimeFormat('en-US', {
-              timeZone: TZ, hour12: false,
-              year: 'numeric', month: '2-digit', day: '2-digit',
-              hour: '2-digit', minute: '2-digit', second: '2-digit',
-            }).formatToParts(guess).map((p) => [p.type, p.value])
-          ) as any
-          const asStockholm = Date.UTC(
-            Number(sParts.year), Number(sParts.month) - 1, Number(sParts.day),
-            Number(sParts.hour), Number(sParts.minute), Number(sParts.second)
-          )
-          const offsetMs = asStockholm - guess.getTime() // Stockholm is ahead of UTC
-          return new Date(guess.getTime() - offsetMs)
-        }
-
         const todayY = Number(parts.year), todayMo = Number(parts.month), todayD = Number(parts.day)
         const nowStockholmMins = Number(parts.hour) * 60 + Number(parts.minute)
         const slotMins = (hh || 0) * 60 + (mm || 0)
@@ -695,7 +780,7 @@ Deno.serve(async (req) => {
       }
 
       if (currentNode.node_type === 'wait') {
-        const next = (edges ?? []).find((e: any) => e.source_node_id === currentNode.id)
+        const next = nextEdgeFrom(nodes ?? [], edges ?? [], currentNode.id)
         if (!next) { await supabase.from('enrollments').update({ status: 'completed' }).eq('id', enr.id); continue }
         const waitMs = msFromUnit(Number(cfg.duration ?? 1), cfg.unit ?? 'days')
         const nextAt = new Date(Date.now() + waitMs).toISOString()
@@ -717,7 +802,7 @@ Deno.serve(async (req) => {
           activity_type: cfg.activity_type || 'custom',
           metadata: { note: cfg.note ?? null },
         })
-        const next = (edges ?? []).find((e: any) => e.source_node_id === currentNode.id)
+        const next = nextEdgeFrom(nodes ?? [], edges ?? [], currentNode.id)
         if (!next) { await supabase.from('enrollments').update({ status: 'completed' }).eq('id', enr.id); continue }
         await supabase.from('enrollments').update({
           current_node_id: next.target_node_id,
