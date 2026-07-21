@@ -52,14 +52,10 @@ export default function SiteOutreach() {
   const [savingLimit, setSavingLimit] = useState(false);
 
   const load = useCallback(async () => {
-    const { data: userData } = await supabase.auth.getUser();
-    const uid = userData?.user?.id;
-    if (!uid) return;
-
+    // Internal tool — sequence is shared across all logged-in operators.
     const { data: s } = await supabase
       .from("sequences")
       .select("id, contact_list_id")
-      .eq("user_id", uid)
       .eq("name", "Site Demo Outreach")
       .maybeSingle();
     if (!s?.id) { setLoading(false); return; }
