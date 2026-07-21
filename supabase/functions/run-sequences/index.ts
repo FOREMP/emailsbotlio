@@ -459,9 +459,10 @@ Deno.serve(async (req) => {
         const isSenderEligible = async (sid: string): Promise<{ ok: boolean; reason?: string }> => {
           const match = verifiedActive.find((s: any) => s.id === sid)
           if (!match) return { ok: false, reason: 'sender no longer active or domain unverified' }
+          const dom = (match.from_email as string).split('@')[1]
+          if (cfg.sender_domain && dom !== cfg.sender_domain) return { ok: false, reason: `assigned sender is not on ${cfg.sender_domain}` }
           const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: sid })
           if ((rem ?? 0) <= 0) return { ok: false, reason: 'assigned sender at daily cap' }
-          const dom = (match.from_email as string).split('@')[1]
           const domRem = await getDomainRemaining(dom)
           if (domRem <= 0) return { ok: false, reason: `domain ${dom} at daily cap (${PER_DOMAIN_DAILY_CAP})` }
           return { ok: true }
