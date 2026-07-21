@@ -61,16 +61,24 @@ export default function SiteOutreach() {
     if (!s?.id) { setLoading(false); return; }
     setSeq(s as Seq);
 
-    const [{ data: ns }, { data: enrs }] = await Promise.all([
+    const [{ data: ns }, { data: enrsRaw }] = await Promise.all([
       supabase.from("sequence_nodes").select("id, node_type, position_y, config").eq("sequence_id", s.id).order("position_y"),
       supabase
         .from("enrollments")
-        .select("id, status, current_step, current_node_id, next_send_at, last_sent_at, contact:contacts(id, email, first_name, custom_fields)")
+        .select("id, status, current_step, current_node_id, next_send_at, last_sent_at, contact_id")
         .eq("sequence_id", s.id)
         .order("updated_at", { ascending: false })
         .limit(200),
     ]);
-    const enrIds = (enrs ?? []).map((e: any) => e.id);
+    const enrs = enrsRaw ?? [];
+    const contactIds = Array.from(new Set(enrs.map((e: any) => e.contact_id).filter(Boolean)));
+    const { data: contactRows } = contactIds.length
+      ? await supabase.from("contacts").select("id, email, first_name, custom_fields").in("id", contactIds)
+      : { data: [] as any[] };
+    const contactMap = new Map((contactRows ?? []).map((c: any) => [c.id, c]));
+    const enrsWithContact = enrs.map((e: any) => ({ ...e, contact: contactMap.get(e.contact_id) ?? null }));
+
+    const enrIds = enrs.map((e: any) => e.id);
     const { data: sent } = enrIds.length
       ? await supabase
           .from("sent_emails")
@@ -81,7 +89,7 @@ export default function SiteOutreach() {
       : { data: [] as SentRow[] };
 
     setNodes((ns ?? []) as Node[]);
-    setEnrollments((enrs ?? []) as any);
+    setEnrollments(enrsWithContact as any);
     setRecent((sent ?? []) as SentRow[]);
     setLoading(false);
   }, []);
