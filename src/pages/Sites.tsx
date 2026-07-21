@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Loader2, Sparkles, Search, ExternalLink, RefreshCw, Plus, Wand2, Rocket, Info } from "lucide-react";
+import { Loader2, Sparkles, Search, ExternalLink, RefreshCw, Plus, Wand2, Rocket, Info, Play, Pause, StopCircle } from "lucide-react";
 import { toast } from "sonner";
 
 type SiteRow = {
