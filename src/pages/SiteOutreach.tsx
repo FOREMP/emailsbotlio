@@ -104,6 +104,7 @@ export default function SiteOutreach() {
     () => nodes.filter((n) => n.node_type === "wait").sort((a, b) => a.position_y - b.position_y),
     [nodes],
   );
+  const cfgVal = (node: Node, key: string) => (dirty[node.id]?.[key] ?? node.config?.[key] ?? "");
   const throttleNodes = useMemo(
     () => nodes.filter((n) => n.node_type === "throttle").sort((a, b) => a.position_y - b.position_y),
     [nodes],
@@ -191,7 +192,6 @@ export default function SiteOutreach() {
   const updateDirty = (nodeId: string, key: string, value: any) => {
     setDirty((d) => ({ ...d, [nodeId]: { ...(d[nodeId] ?? {}), [key]: value } }));
   };
-  const cfgVal = (node: Node, key: string) => (dirty[node.id]?.[key] ?? node.config?.[key] ?? "");
 
   const contactById = (id: string | null) => enrollments.find((e) => e.contact?.id === id)?.contact ?? null;
 
