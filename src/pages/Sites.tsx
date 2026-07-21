@@ -286,6 +286,62 @@ const Sites = () => {
               {lists.map((l: any) => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
             </SelectContent>
           </Select>
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center justify-between">
+            <span>Automation</span>
+            <Badge variant="outline" className={
+              autoState === "running" ? "text-emerald-600 border-emerald-600" :
+              autoState === "paused" ? "text-amber-600 border-amber-600" :
+              "text-destructive border-destructive"
+            }>
+              {autoState === "running" ? "Igång" : autoState === "paused" ? "Pausad" : "Stoppad"}
+            </Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant={autoState === "running" ? "default" : "outline"}
+            disabled={autoState === "running" || setAutoState.isPending}
+            onClick={() => setAutoState.mutate("running")}
+          >
+            <Play className="h-4 w-4 mr-1" /> Starta
+          </Button>
+          <Button
+            size="sm"
+            variant={autoState === "paused" ? "default" : "outline"}
+            disabled={autoState === "paused" || setAutoState.isPending}
+            onClick={() => setAutoState.mutate("paused")}
+          >
+            <Pause className="h-4 w-4 mr-1" /> Pausa
+          </Button>
+          <Button
+            size="sm"
+            variant={autoState === "stopped" ? "destructive" : "outline"}
+            disabled={autoState === "stopped" || setAutoState.isPending}
+            onClick={() => setAutoState.mutate("stopped")}
+          >
+            <StopCircle className="h-4 w-4 mr-1" /> Stoppa
+          </Button>
+          <p className="text-xs text-muted-foreground ml-2">
+            Styr om <code>process-site-leads</code> får starta nya hemsido-generationer.
+            Redan pågående jobb slutförs. Manuella knappar nedan fungerar alltid.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Enroll a list</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center gap-3">
+          <Select value={selectedList} onValueChange={setSelectedList}>
+            <SelectTrigger className="w-64"><SelectValue placeholder="Pick a contact list…" /></SelectTrigger>
+            <SelectContent>
+              {lists.map((l: any) => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
           <Button
             onClick={() => selectedList && enrollList.mutate(selectedList)}
             disabled={!selectedList || enrollList.isPending}
