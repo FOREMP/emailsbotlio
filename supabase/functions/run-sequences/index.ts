@@ -379,12 +379,13 @@ Deno.serve(async (req) => {
         const cap = sequenceDailyCap(nodes ?? [])
         if (cap && (enr.current_step ?? 1) <= 1) {
           const startOfDay = startOfStockholmDayUtc()
+          // Count sends that already passed through ANY throttle in this sequence today.
           const { count } = await supabase
             .from('contact_activity')
             .select('id', { count: 'exact', head: true })
             .eq('sequence_id', enr.sequence_id)
             .eq('activity_type', 'email_sent')
-            .eq('step_number', 1)
+            .not('metadata->>throttle_node_id', 'is', null)
             .gte('created_at', startOfDay.toISOString())
           if ((count ?? 0) >= cap) {
             const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
