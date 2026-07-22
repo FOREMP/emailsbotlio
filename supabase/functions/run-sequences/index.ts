@@ -338,12 +338,16 @@ Deno.serve(async (req) => {
       if (currentNode.node_type === 'throttle') {
         const max = Number(cfg.max_per_day ?? 50)
         const startOfDay = startOfStockholmDayUtc()
+        // Count only sends gated by THIS throttle today. send-cold-email stamps
+        // metadata.throttle_node_id on the activity when the send passed through
+        // a throttle. (Previously filtered on non-existent step_number column,
+        // which errored and effectively disabled the cap.)
         const { count } = await supabase
           .from('contact_activity')
           .select('id', { count: 'exact', head: true })
           .eq('sequence_id', enr.sequence_id)
           .eq('activity_type', 'email_sent')
-          .eq('step_number', 1)
+          .filter('metadata->>throttle_node_id', 'eq', currentNode.id)
           .gte('created_at', startOfDay.toISOString())
         // Cap counts NEW first-mail sends only. Follow-ups bypass this and always run.
         if ((count ?? 0) >= max) {
@@ -375,12 +379,13 @@ Deno.serve(async (req) => {
         const cap = sequenceDailyCap(nodes ?? [])
         if (cap && (enr.current_step ?? 1) <= 1) {
           const startOfDay = startOfStockholmDayUtc()
+          // Count sends that already passed through ANY throttle in this sequence today.
           const { count } = await supabase
             .from('contact_activity')
             .select('id', { count: 'exact', head: true })
             .eq('sequence_id', enr.sequence_id)
             .eq('activity_type', 'email_sent')
-            .eq('step_number', 1)
+            .not('metadata->>throttle_node_id', 'is', null)
             .gte('created_at', startOfDay.toISOString())
           if ((count ?? 0) >= cap) {
             const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
