@@ -11,7 +11,9 @@ import { toast } from "@/hooks/use-toast";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
-import { Loader2, StopCircle, Mail, Save, Eye, Gauge } from "lucide-react";
+import { Loader2, StopCircle, Mail, Save, Eye, Gauge, BarChart3 } from "lucide-react";
+import { VolumeTrendChart } from "@/components/analytics/VolumeTrendChart";
+import { computeDailySeries, computeKpis, type SentEmailRow } from "@/hooks/useAnalytics";
 
 type Seq = { id: string; contact_list_id: string | null };
 type Node = { id: string; node_type: string; position_y: number; config: any };
@@ -45,6 +47,7 @@ export default function SiteOutreach() {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [enrollments, setEnrollments] = useState<EnrollRow[]>([]);
   const [recent, setRecent] = useState<SentRow[]>([]);
+  const [statsRows, setStatsRows] = useState<SentEmailRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [preview, setPreview] = useState<SentRow | null>(null);
   const [dirty, setDirty] = useState<Record<string, any>>({});
@@ -88,9 +91,28 @@ export default function SiteOutreach() {
           .limit(5)
       : { data: [] as SentRow[] };
 
+    // Statistik: hämta ALLA enrollment-ids för sekvensen (lätt query) och sedan
+    // sent_emails senaste 30 dagarna, chunkat för att undvika 414-URL-längd.
+    const { data: allEnrIdsRaw } = await supabase
+      .from("enrollments").select("id").eq("sequence_id", s.id);
+    const allEnrIds = (allEnrIdsRaw ?? []).map((r: any) => r.id);
+    const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const stats: SentEmailRow[] = [];
+    for (let i = 0; i < allEnrIds.length; i += 200) {
+      const chunk = allEnrIds.slice(i, i + 200);
+      const { data } = await supabase
+        .from("sent_emails")
+        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject")
+        .in("enrollment_id", chunk)
+        .gte("sent_at", since30)
+        .limit(2000);
+      if (data) stats.push(...(data as SentEmailRow[]));
+    }
+
     setNodes((ns ?? []) as Node[]);
     setEnrollments(enrsWithContact as any);
     setRecent((sent ?? []) as SentRow[]);
+    setStatsRows(stats);
     setLoading(false);
   }, []);
 
@@ -254,6 +276,29 @@ export default function SiteOutreach() {
         <StatCard label="Stoppade" value={counts.stopped} />
         <StatCard label="Skickade (senaste 5)" value={recent.length} />
       </div>
+
+      {/* Statistik — samma graf som Analytics, men filtrerad på denna sekvens */}
+      <Card className="p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="text-lg font-semibold flex items-center gap-2"><BarChart3 className="h-4 w-4" /> Statistik (senaste 30 dagar)</h2>
+            <p className="text-xs text-muted-foreground">Skickade, öppnade och besvarade mail per dag för Site Demo Outreach.</p>
+          </div>
+          {(() => {
+            const k = computeKpis(statsRows);
+            return (
+              <div className="flex gap-4 text-xs">
+                <div><div className="text-muted-foreground">Skickade</div><div className="text-base font-semibold">{k.sent}</div></div>
+                <div><div className="text-muted-foreground">Öppnade</div><div className="text-base font-semibold">{k.opened} ({Math.round(k.openRate * 100)}%)</div></div>
+                <div><div className="text-muted-foreground">Besvarade</div><div className="text-base font-semibold">{k.replied}</div></div>
+                <div><div className="text-muted-foreground">Bounces</div><div className="text-base font-semibold">{k.bounced}</div></div>
+              </div>
+            );
+          })()}
+        </div>
+        <VolumeTrendChart data={computeDailySeries(statsRows, 30)} />
+      </Card>
+
 
       {/* Enrollment queue */}
       <Card className="p-4">
