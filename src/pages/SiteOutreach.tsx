@@ -11,7 +11,9 @@ import { toast } from "@/hooks/use-toast";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
-import { Loader2, StopCircle, Mail, Save, Eye, Gauge } from "lucide-react";
+import { Loader2, StopCircle, Mail, Save, Eye, Gauge, BarChart3 } from "lucide-react";
+import { VolumeTrendChart } from "@/components/analytics/VolumeTrendChart";
+import { computeDailySeries, computeKpis, type SentEmailRow } from "@/hooks/useAnalytics";
 
 type Seq = { id: string; contact_list_id: string | null };
 type Node = { id: string; node_type: string; position_y: number; config: any };
