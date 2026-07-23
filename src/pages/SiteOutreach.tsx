@@ -91,9 +91,28 @@ export default function SiteOutreach() {
           .limit(5)
       : { data: [] as SentRow[] };
 
+    // Statistik: hämta ALLA enrollment-ids för sekvensen (lätt query) och sedan
+    // sent_emails senaste 30 dagarna, chunkat för att undvika 414-URL-längd.
+    const { data: allEnrIdsRaw } = await supabase
+      .from("enrollments").select("id").eq("sequence_id", s.id);
+    const allEnrIds = (allEnrIdsRaw ?? []).map((r: any) => r.id);
+    const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const stats: SentEmailRow[] = [];
+    for (let i = 0; i < allEnrIds.length; i += 200) {
+      const chunk = allEnrIds.slice(i, i + 200);
+      const { data } = await supabase
+        .from("sent_emails")
+        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject")
+        .in("enrollment_id", chunk)
+        .gte("sent_at", since30)
+        .limit(2000);
+      if (data) stats.push(...(data as SentEmailRow[]));
+    }
+
     setNodes((ns ?? []) as Node[]);
     setEnrollments(enrsWithContact as any);
     setRecent((sent ?? []) as SentRow[]);
+    setStatsRows(stats);
     setLoading(false);
   }, []);
 
