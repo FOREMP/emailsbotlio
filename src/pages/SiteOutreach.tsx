@@ -47,6 +47,7 @@ export default function SiteOutreach() {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [enrollments, setEnrollments] = useState<EnrollRow[]>([]);
   const [recent, setRecent] = useState<SentRow[]>([]);
+  const [statsRows, setStatsRows] = useState<SentEmailRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [preview, setPreview] = useState<SentRow | null>(null);
   const [dirty, setDirty] = useState<Record<string, any>>({});
