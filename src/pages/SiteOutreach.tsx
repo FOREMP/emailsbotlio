@@ -277,6 +277,29 @@ export default function SiteOutreach() {
         <StatCard label="Skickade (senaste 5)" value={recent.length} />
       </div>
 
+      {/* Statistik — samma graf som Analytics, men filtrerad på denna sekvens */}
+      <Card className="p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="text-lg font-semibold flex items-center gap-2"><BarChart3 className="h-4 w-4" /> Statistik (senaste 30 dagar)</h2>
+            <p className="text-xs text-muted-foreground">Skickade, öppnade och besvarade mail per dag för Site Demo Outreach.</p>
+          </div>
+          {(() => {
+            const k = computeKpis(statsRows);
+            return (
+              <div className="flex gap-4 text-xs">
+                <div><div className="text-muted-foreground">Skickade</div><div className="text-base font-semibold">{k.sent}</div></div>
+                <div><div className="text-muted-foreground">Öppnade</div><div className="text-base font-semibold">{k.opened} ({Math.round(k.openRate * 100)}%)</div></div>
+                <div><div className="text-muted-foreground">Besvarade</div><div className="text-base font-semibold">{k.replied}</div></div>
+                <div><div className="text-muted-foreground">Bounces</div><div className="text-base font-semibold">{k.bounced}</div></div>
+              </div>
+            );
+          })()}
+        </div>
+        <VolumeTrendChart data={computeDailySeries(statsRows, 30)} />
+      </Card>
+
+
       {/* Enrollment queue */}
       <Card className="p-4">
         <h2 className="text-lg font-semibold mb-3">Kö</h2>
