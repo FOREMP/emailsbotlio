@@ -463,7 +463,7 @@ Returnera samma JSON med förbättrad svensk copy.`
         'X-Title': 'Botlio Site Copy Polish',
       },
       body: JSON.stringify({
-        model: 'anthropic/claude-haiku-4.5',
+        model: 'openai/gpt-4.1-mini',
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: user },
