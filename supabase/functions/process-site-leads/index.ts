@@ -492,9 +492,18 @@ async function startGeneration(
     generated_site_id: gs.id,
   }).eq('id', lead.id)
 
-  // Fire-and-forget scrape; reconciler will push it through the pipeline.
-  invokeFn(supabaseUrl, serviceKey, 'scrape-lead-data', { generated_site_id: gs.id })
-    .catch((e) => console.error(`scrape kick ${gs.id} failed`, e))
+  // Start scrape reliably. This used to be fire-and-forget, which meant the
+  // parent worker could finish before the HTTP request was actually delivered,
+  // leaving rows stuck in `pending`/`generating` and blocking the serial queue.
+  const scrapeResp = await invokeFn(supabaseUrl, serviceKey, 'scrape-lead-data', { generated_site_id: gs.id })
+  if (!scrapeResp.ok) {
+    const body = await scrapeResp.text().catch(() => '')
+    await supabase.from('site_leads').update({
+      status: 'failed',
+      feedback: `Scrape failed: ${body.slice(0, 400)}`,
+    }).eq('id', lead.id)
+    throw new Error(`scrape failed (${scrapeResp.status}): ${body.slice(0, 200)}`)
+  }
 }
 
 // ---------------------------------------------------------------------------
