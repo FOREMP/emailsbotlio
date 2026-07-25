@@ -24,7 +24,8 @@ const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
 
 const AUDIT_PER_TICK = 3    // Firecrawl+Gemini per invocation — keep memory low
 const GEN_PER_TICK = 1      // start one full generation pipeline per tick
-const DAILY_GEN_CAP = 20    // hard cap on new sites per day
+const DAILY_GEN_CAP_FALLBACK = 16  // used only if we can't read sender limits
+const OUTREACH_DOMAIN = 'foremp.email'  // sites/day tracks daily send capacity on this domain
 const GHOST_LIST_NAME = 'Site Leads (auto)'
 
 Deno.serve(async (req) => {
