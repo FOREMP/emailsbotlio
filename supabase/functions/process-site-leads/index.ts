@@ -27,6 +27,7 @@ const GEN_PER_TICK = 1      // start one full generation pipeline per tick
 const DAILY_GEN_CAP_FALLBACK = 16  // used only if we can't read sender limits
 const OUTREACH_DOMAIN = 'foremp.email'  // sites/day tracks daily send capacity on this domain
 const GHOST_LIST_NAME = 'Site Leads (auto)'
+const STALE_PIPELINE_MINUTES = 30 // never let one dead scrape/generate/deploy block the whole queue
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
@@ -34,11 +35,12 @@ Deno.serve(async (req) => {
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   const supabase = createClient(supabaseUrl, serviceKey)
 
-  const report = { reconciled: 0, audited: 0, generated: 0, capacity: 0, errors: [] as string[] }
+  const report = { reconciled: 0, recovered: 0, audited: 0, generated: 0, capacity: 0, errors: [] as string[] }
 
   try {
     // ---------------- 1. RECONCILE ----------------
     report.reconciled = await reconcile(supabase, supabaseUrl, serviceKey, report)
+    report.recovered = await recoverStuckGenerations(supabase, supabaseUrl, serviceKey, report)
 
     // ---------------- 2. AUDIT --------------------
     const { data: auditRows } = await supabase
@@ -131,6 +133,98 @@ Deno.serve(async (req) => {
     return json({ error: (err as Error).message, ...report }, 500)
   }
 })
+
+// ---------------------------------------------------------------------------
+// RECOVER — site generation is intentionally serial, so one old row stuck in
+// scraping/processing/deploying can block every new lead. This watchdog moves
+// deterministic states forward and resets dead transient states for retry.
+// ---------------------------------------------------------------------------
+async function recoverStuckGenerations(
+  supabase: ReturnType<typeof createClient>,
+  supabaseUrl: string,
+  serviceKey: string,
+  report: { errors: string[] },
+): Promise<number> {
+  const cutoffMs = Date.now() - STALE_PIPELINE_MINUTES * 60_000
+
+  const { data: leads, error: leadErr } = await supabase
+    .from('site_leads')
+    .select('id, generated_site_id')
+    .eq('status', 'generating')
+    .not('generated_site_id', 'is', null)
+    .limit(50)
+  if (leadErr) {
+    report.errors.push(`recover lead read: ${leadErr.message}`)
+    return 0
+  }
+  if (!leads?.length) return 0
+
+  const ids = leads.map((l: any) => l.generated_site_id).filter(Boolean)
+  if (!ids.length) return 0
+
+  const { data: sites, error: siteErr } = await supabase
+    .from('generated_sites')
+    .select('id, status, updated_at, error_message')
+    .in('id', ids)
+  if (siteErr) {
+    report.errors.push(`recover site read: ${siteErr.message}`)
+    return 0
+  }
+
+  const byId = new Map((sites ?? []).map((s: any) => [s.id, s]))
+  let recovered = 0
+
+  for (const lead of leads as any[]) {
+    const gs = byId.get(lead.generated_site_id)
+    if (!gs) {
+      await supabase.from('site_leads').update({ status: 'needs_site', generated_site_id: null }).eq('id', lead.id)
+      recovered++
+      continue
+    }
+
+    const updatedAt = Date.parse(gs.updated_at ?? '')
+    const isStale = Number.isFinite(updatedAt) && updatedAt < cutoffMs
+    if (!isStale) continue
+
+    if (gs.status === 'scraped') {
+      await supabase.from('generated_sites').update({ updated_at: new Date().toISOString() }).eq('id', gs.id)
+      await invokeFn(supabaseUrl, serviceKey, 'generate-site', { generated_site_id: gs.id })
+        .catch((e) => report.errors.push(`recover generate ${gs.id}: ${e.message}`))
+      recovered++
+      continue
+    }
+
+    if (gs.status === 'generated') {
+      await supabase.from('generated_sites').update({ updated_at: new Date().toISOString() }).eq('id', gs.id)
+      await invokeFn(supabaseUrl, serviceKey, 'deploy-site', { generated_site_id: gs.id })
+        .catch((e) => report.errors.push(`recover deploy ${gs.id}: ${e.message}`))
+      recovered++
+      continue
+    }
+
+    if (gs.status === 'failed') {
+      await supabase.from('site_leads').update({
+        status: 'failed',
+        feedback: `Site pipeline failed: ${(gs.error_message ?? '').slice(0, 400)}`,
+      }).eq('id', lead.id)
+      recovered++
+      continue
+    }
+
+    await supabase.from('generated_sites').update({
+      status: 'failed',
+      error_message: `Stale ${gs.status} job was reset after ${STALE_PIPELINE_MINUTES} minutes so the queue can continue.`,
+    }).eq('id', gs.id)
+
+    await supabase.from('site_leads').update({
+      status: 'needs_site',
+      generated_site_id: null,
+    }).eq('id', lead.id)
+    recovered++
+  }
+
+  return recovered
+}
 
 // ---------------------------------------------------------------------------
 // RECONCILE — mirror generated_sites status onto linked site_leads, and
@@ -398,9 +492,18 @@ async function startGeneration(
     generated_site_id: gs.id,
   }).eq('id', lead.id)
 
-  // Fire-and-forget scrape; reconciler will push it through the pipeline.
-  invokeFn(supabaseUrl, serviceKey, 'scrape-lead-data', { generated_site_id: gs.id })
-    .catch((e) => console.error(`scrape kick ${gs.id} failed`, e))
+  // Start scrape reliably. This used to be fire-and-forget, which meant the
+  // parent worker could finish before the HTTP request was actually delivered,
+  // leaving rows stuck in `pending`/`generating` and blocking the serial queue.
+  const scrapeResp = await invokeFn(supabaseUrl, serviceKey, 'scrape-lead-data', { generated_site_id: gs.id })
+  if (!scrapeResp.ok) {
+    const body = await scrapeResp.text().catch(() => '')
+    await supabase.from('site_leads').update({
+      status: 'failed',
+      feedback: `Scrape failed: ${body.slice(0, 400)}`,
+    }).eq('id', lead.id)
+    throw new Error(`scrape failed (${scrapeResp.status}): ${body.slice(0, 200)}`)
+  }
 }
 
 // ---------------------------------------------------------------------------

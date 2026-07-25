@@ -309,9 +309,11 @@ ABSOLUTA REGLER:
     }
 
 
-    // Kick off AI work in the background so this HTTP invocation returns fast
-    // and isn't recycled by the platform mid-generation.
-    const bgTask = (async () => {
+    // Run AI work synchronously. Background waitUntil has proven unreliable for
+    // this long-running job in Supabase Edge: the HTTP call can return 202 while
+    // the worker is recycled before persisting `generated`, leaving the serial
+    // outreach queue blocked forever.
+    const runGeneration = async () => {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 60_000)
       try {
@@ -398,15 +400,9 @@ ABSOLUTA REGLER:
         console.error('generate error', err)
         await failOrRetry(supabase, generated_site_id, nextAttempts, msg)
       }
-    })()
-
-    // @ts-ignore — EdgeRuntime is provided by Supabase
-    if (typeof EdgeRuntime !== 'undefined' && typeof EdgeRuntime.waitUntil === 'function') {
-      // @ts-ignore
-      EdgeRuntime.waitUntil(bgTask)
-      return json({ ok: true, status: 'processing', model: chosenModel }, 202)
     }
-    await bgTask
+
+    await runGeneration()
     return json({ ok: true, status: 'generated', model: chosenModel })
 
   } catch (err) {
