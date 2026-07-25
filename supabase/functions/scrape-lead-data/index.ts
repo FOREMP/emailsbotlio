@@ -140,10 +140,13 @@ Deno.serve(async (req) => {
       scraped_at: new Date().toISOString(),
     }
 
+    // Only advance if this invocation still owns the scrape step. Older/duplicate
+    // scrape invocations must not overwrite a row that already moved on to
+    // queued/processing/generated/live.
     await supabase.from('generated_sites').update({
       status: 'scraped',
       scraped_content: scraped,
-    }).eq('id', generated_site_id)
+    }).eq('id', generated_site_id).eq('status', 'scraping')
 
     return json({
       ok: true,
