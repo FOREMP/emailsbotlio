@@ -71,13 +71,24 @@ Deno.serve(async (req) => {
       return json({ ok: true, ...report })
     }
 
+    // Daily generation cap = today's outreach send capacity (sum of active
+    // sender daily_limits on the outreach domain). Keeps sites-created/day in
+    // lockstep with contacts-emailed/day so we never build stock we can't send.
+    const { data: dailySenders } = await supabase
+      .from('senders')
+      .select('daily_limit')
+      .eq('is_active', true)
+      .ilike('from_email', `%@${OUTREACH_DOMAIN}`)
+    const dailyCap = (dailySenders ?? []).reduce((s: number, r: any) => s + (r.daily_limit ?? 0), 0)
+      || DAILY_GEN_CAP_FALLBACK
+
     const today = new Date().toISOString().slice(0, 10)
     const { count: doneToday } = await supabase
       .from('site_leads')
       .select('id', { count: 'exact', head: true })
       .in('status', ['generating', 'awaiting_approval', 'approved'])
       .gte('updated_at', `${today}T00:00:00Z`)
-    const capacity = Math.max(0, DAILY_GEN_CAP - (doneToday ?? 0))
+    const capacity = Math.max(0, dailyCap - (doneToday ?? 0))
     report.capacity = capacity
 
     if (capacity > 0) {
