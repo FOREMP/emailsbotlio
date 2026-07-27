@@ -122,6 +122,7 @@ Deno.serve(async (req) => {
         reviews_count: n.reviews_count ?? null,
         review_snippets: n.review_snippets ?? null,
         status,
+        niche,
         source_file_id: source_file_id ?? null,
       })
       if (error) {
