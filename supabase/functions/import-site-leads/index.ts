@@ -61,6 +61,8 @@ Deno.serve(async (req) => {
     const rows = Array.isArray(body.rows) ? body.rows.slice(0, MAX_ROWS_PER_CALL) as ImportRow[] : []
     const mapping = isPlainObject(body.mapping) ? body.mapping as Record<string, ImportRole> : {}
     const source_file_id = typeof body.source_file_id === 'string' ? body.source_file_id : null
+    const ALLOWED_NICHES = new Set(['auto_workshop', 'hair_salon'])
+    const niche = typeof body.niche === 'string' && ALLOWED_NICHES.has(body.niche) ? body.niche : 'auto_workshop'
 
     if (rows.length === 0) return json({ error: 'rows required' }, 400)
     if (Object.keys(mapping).length === 0) return json({ error: 'mapping required' }, 400)
