@@ -88,12 +88,18 @@ const STATUS_COLORS: Record<string, string> = {
   failed: "bg-red-500",
 };
 
+const NICHE_OPTIONS: { value: string; label: string }[] = [
+  { value: "auto_workshop", label: "Bilverkstad / mekaniker" },
+  { value: "hair_salon", label: "Frisörsalong" },
+];
+
 export default function SiteLeads() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [uploading, setUploading] = useState(false);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [parsed, setParsed] = useState<ParsedData | null>(null);
   const [mapping, setMapping] = useState<Record<string, ImportRole>>({});
+  const [niche, setNiche] = useState<string>("auto_workshop");
   const [progress, setProgress] = useState(0);
   const [editing, setEditing] = useState<Lead | null>(null);
   const [saving, setSaving] = useState(false);
