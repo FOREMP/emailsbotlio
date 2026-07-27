@@ -145,7 +145,7 @@ export default function SiteLeads() {
       for (let i = 0; i < parsed.rows.length; i += BATCH_SIZE) {
         const rows = parsed.rows.slice(i, i + BATCH_SIZE).map((row) => slimRow(row, mapping));
         const { data, error } = await supabase.functions.invoke("import-site-leads", {
-          body: { rows, mapping },
+          body: { rows, mapping, niche },
         });
         if (error) {
           totals.failed_batches += 1;
