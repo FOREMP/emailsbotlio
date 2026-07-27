@@ -265,6 +265,23 @@ export default function SiteLeads() {
             <Button variant="ghost" size="sm" className="ml-auto" disabled={uploading} onClick={() => setParsed(null)}>Avbryt</Button>
           </div>
 
+          <div className="grid gap-1 max-w-sm">
+            <Label className="text-xs uppercase text-muted-foreground">Bransch / mall</Label>
+            <Select value={niche} onValueChange={setNiche} disabled={uploading}>
+              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {NICHE_OPTIONS.map((n) => (
+                  <SelectItem key={n.value} value={n.value}>{n.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Alla leads i denna fil taggas med denna bransch. AI:n använder taggen för att välja rätt hemsidemall.
+            </p>
+          </div>
+
+
+
           <div className="grid gap-3 md:grid-cols-2">
             {parsed.headers.map((header) => (
               <div key={header} className="grid gap-1">
