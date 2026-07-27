@@ -3,6 +3,9 @@
 // after enqueue. Conditional UPDATE claims a row atomically — safe against
 // concurrent invocations. Retries capped at MAX_ATTEMPTS via `attempts`.
 // Stuck-row reaper: also flips 'processing' rows older than 10 min back to 'failed'.
+//
+// Niche-aware: `generated_sites.template` decides which industry copy/labels/
+// stock images/fallbacks are used. Adding a niche = extend NICHE_CONFIG.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const corsHeaders = {
@@ -46,6 +49,315 @@ interface SitePlan {
   faqs?: FaqItem[]
   ctaTitle?: string
   ctaText?: string
+}
+
+// ---------------------------------------------------------------------------
+// Niche config: switches copy, labels, fallbacks and image source per template.
+// Add a new niche by adding another key here and mapping its template in
+// nicheFromTemplate() below.
+// ---------------------------------------------------------------------------
+interface NicheConfig {
+  key: 'auto_workshop' | 'hair_salon'
+  label: string                        // "Bilverkstad" | "Frisörsalong"
+  aboutPageTitle: string               // "Om verkstaden" | "Om salongen"
+  aboutShort: string                   // "verkstaden" | "salongen"
+  metaDescSuffix: string
+  systemPromptTopic: string
+  serviceLabel: string                 // "Tjänst" | "Behandling"
+  useLeadImages: boolean               // false → only curated Unsplash
+  stockImages: string[]
+  heroLine1Default: (city: string) => string
+  heroLine2Default: string
+  heroEyebrowDefault: (city: string) => string
+  heroSublineDefault: string
+  aboutTitleDefault: string
+  aboutEyebrow: string
+  pathwaysHeading: string
+  scenariosHeading: string
+  scenariosIntro: string
+  processHeading: string
+  diffHeading: string
+  ctaTitleDefault: string
+  ctaTextDefault: string
+  contactHeadline: string
+  contactSubline: string
+  servicesPageSub: string
+  footerTagline: string
+  fallbackServices: ServiceItem[]
+  fallbackValues: ValueItem[]
+  fallbackFaqs: FaqItem[]
+  fallbackPathways: PathwayItem[]
+  systemPrompt: string
+  polishSystemPrompt: string
+}
+
+const NICHE_CONFIG: Record<'auto_workshop' | 'hair_salon', NicheConfig> = {
+  auto_workshop: {
+    key: 'auto_workshop',
+    label: 'Bilverkstad',
+    aboutPageTitle: 'Om verkstaden',
+    aboutShort: 'verkstaden',
+    metaDescSuffix: 'bilverkstad',
+    systemPromptTopic: 'bilverkstadssajter',
+    serviceLabel: 'Tjänst',
+    useLeadImages: true,
+    stockImages: [
+      'https://images.unsplash.com/photo-1487754180451-c456f719a1fc?w=1600&q=80',
+      'https://images.unsplash.com/photo-1625047509168-a7026f36de04?w=1600&q=80',
+      'https://images.unsplash.com/photo-1632823471565-1ecdf5c6d7f4?w=1200&q=80',
+      'https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=1600&q=80',
+      'https://images.unsplash.com/photo-1580273916550-e323be2ae537?w=1200&q=80',
+      'https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?w=1200&q=80',
+      'https://images.unsplash.com/photo-1493031440916-e69b7a91be16?w=1200&q=80',
+      'https://images.unsplash.com/photo-1552930294-3af53b58f61c?w=1200&q=80',
+    ],
+    heroLine1Default: (city) => `Din bilverkstad${city ? ' i ' + city : ''}.`,
+    heroLine2Default: 'Vi bygger trygghet, inte gissningar.',
+    heroEyebrowDefault: (city) => city ? `Bilverkstad i ${city}` : 'Bilverkstad',
+    heroSublineDefault: 'Auktoriserad kunskap kring service, felsökning, bromsar och däck. Raka beslutsunderlag och en smidig upplevelse från första kontakt till färdig bil.',
+    aboutTitleDefault: 'Förtroende byggs i verkstaden — inte med en checklista',
+    aboutEyebrow: 'Yrkesstolthet',
+    pathwaysHeading: 'Rätt hjälp från start — så att du slipper gissa',
+    scenariosHeading: 'Verkliga exempel på hur vi löser problem',
+    scenariosIntro: 'Så här jobbar vi bakom kulisserna. Se vad vi granskar, hur vi resonerar och varför yrkesstolthet lönar sig.',
+    processHeading: 'Tre steg mot ett tryggare bilägande',
+    diffHeading: 'Fyra saker du känner innan bilen ens rullar in',
+    ctaTitleDefault: 'Välj rätt väg för din bil — boka direkt eller läs mer',
+    ctaTextDefault: 'Oavsett vad din bil behöver guidar vi dig till rätt tjänst och säkerställer ett professionellt omhändertagande.',
+    contactHeadline: 'Ta nästa steg',
+    contactSubline: 'Boka service, fråga om felsökning eller beskriv vad bilen behöver hjälp med.',
+    servicesPageSub: 'Varje tjänst är tydligt beskriven för att hjälpa dig förstå när den passar och vad som ingår.',
+    footerTagline: 'Demo skapad för en modernare digital kundupplevelse.',
+    fallbackServices: [
+      { name: 'Service och underhåll', description: 'Regelbunden service och kontroll för att bilen ska kännas trygg i vardagen.' },
+      { name: 'Felsökning', description: 'Systematisk genomgång när bilen varnar, låter annorlunda eller inte fungerar som den ska.' },
+      { name: 'Reparationer', description: 'Åtgärder och reparationer med fokus på tydlig kommunikation genom hela arbetet.' },
+      { name: 'Bromsar och säkerhet', description: 'Kontroll och åtgärd av viktiga slitdelar för säkrare körning.' },
+    ],
+    fallbackValues: [
+      { title: 'Tydlighet', text: 'Kunden ska förstå vad som görs och varför.' },
+      { title: 'Noggrannhet', text: 'Varje uppdrag behandlas metodiskt och professionellt.' },
+      { title: 'Trygg service', text: 'Målet är en enklare verkstadsupplevelse från första kontakt.' },
+    ],
+    fallbackFaqs: [
+      { question: 'Hur bokar jag tid?', answer: 'Kontakta verkstaden via telefon eller kontaktuppgifterna på sidan.' },
+      { question: 'Kan ni felsöka bilen först?', answer: 'Ja, felsökning är ofta första steget när problemet inte är helt tydligt.' },
+      { question: 'Får jag veta vad som behöver göras?', answer: 'En bra verkstadsupplevelse bygger på tydlig information innan arbetet går vidare.' },
+      { question: 'Arbetar ni med vanliga servicejobb?', answer: 'Ja, sidan presenterar både service, felsökning och reparationer utan att ange påhittade priser.' },
+    ],
+    fallbackPathways: [
+      { eyebrow: 'PLANERAT BESÖK', title: 'Starta med bilservice', description: 'När det är dags för ordinarie service eller kontroll inför en längre resa.', ctaLabel: 'Starta med service' },
+      { eyebrow: 'OSÄKER FELBILD', title: 'Boka felsökning', description: 'När bilen varnar, låter annorlunda eller beter sig konstigt utan att du vet varför.', ctaLabel: 'Boka felsökning' },
+      { eyebrow: 'SÄKERHET FÖRST', title: 'Boka bromskontroll', description: 'När bromsarna känns ojämna, låter eller helt enkelt behöver en säkerhetsgenomgång.', ctaLabel: 'Boka bromskontroll' },
+      { eyebrow: 'SÄSONG & KOMFORT', title: 'Boka klimatsystem', description: 'När AC:n tappat effekt eller inför säsongsbyte då komfort och sikt blir avgörande.', ctaLabel: 'Boka klimat' },
+    ],
+    systemPrompt: `Du är en senior svensk copywriter och art director för PREMIUM bilverkstadssajter i klass med de bästa nordiska SaaS- och bilmärkessajter. Ton: modernt, självsäkert, editoriellt. Bygg förtroende via TYDLIGHET och YRKESSTOLTHET — inte genom siffror eller påhittade certifikat.
+
+VIKTIGT: Skriv INTE HTML. Returnera bara giltig JSON enligt schemat nedan. HTML byggs av systemet.
+
+RETURFORMAT — endast JSON, ingen markdown, inga kommentarer:
+{
+  "businessName": "...",
+  "tagline": "kort premium tagline",
+  "heroEyebrow": "kort label, t.ex. 'Bilverkstad i {ort}' eller kategori",
+  "heroLine1": "första raden av rubriken (3–6 ord, editoriell känsla)",
+  "heroLine2": "andra raden (3–7 ord, kontrast/löfte, t.ex. 'Vi bygger trygghet, inte gissningar.')",
+  "heroSubline": "1–2 meningar som förklarar värdet konkret",
+  "trustBadges": ["Garanti på allt arbete", "Tydliga underlag", "Personlig service"],
+  "pathwaysIntro": "1 mening om att guida kunden rätt in",
+  "pathways": [
+    {"eyebrow":"PLANERAT BESÖK","title":"Starta med bilservice","description":"...","ctaLabel":"Starta med service"},
+    {"eyebrow":"OSÄKER FELBILD","title":"Boka felsökning","description":"...","ctaLabel":"Boka felsökning"},
+    {"eyebrow":"SÄKERHET FÖRST","title":"Boka bromskontroll","description":"...","ctaLabel":"Boka bromskontroll"},
+    {"eyebrow":"SÄSONG & KOMFORT","title":"Boka klimatsystem","description":"...","ctaLabel":"Boka klimat"}
+  ],
+  "services": [{"name":"...","description":"...","when":"'När:' — kort rad om när kunden ska välja den"}],
+  "aboutTitle": "editoriell rubrik, gärna 2 rader",
+  "aboutIntro": "1 stark manifest-mening",
+  "aboutBefore": "stycke om FÖRE besöket",
+  "aboutDuring": "stycke om UNDER arbetet",
+  "aboutAfter": "stycke om EFTER",
+  "differentiators": [
+    {"title":"Tydlig offert innan större beslut","text":"..."},
+    {"title":"All expertis samlad under ett tak","text":"..."},
+    {"title":"Smidig kontakt på dina villkor","text":"..."},
+    {"title":"Verklig kvalitet, inte bara ord","text":"..."}
+  ],
+  "scenarios": [
+    {"category":"Service","title":"Servicegenomgång inför längre körning","description":"...","delivery":"..."},
+    {"category":"Diagnostik","title":"När varningslampan tänds men felet inte är självklart","description":"...","delivery":"..."},
+    {"category":"Bromsar","title":"Bromsar som känns ojämna eller låter","description":"...","delivery":"..."}
+  ],
+  "processSteps": [
+    {"title":"Beskriv behovet","description":"...","outcome":"..."},
+    {"title":"Vi ger dig en tydlig plan","description":"...","outcome":"..."},
+    {"title":"Raka rör, inga överraskningar","description":"...","outcome":"..."}
+  ],
+  "values": [{"title":"...","text":"..."}],
+  "faqs": [{"question":"...","answer":"..."}],
+  "ctaTitle": "kort rubrik för sista CTA-bandet",
+  "ctaText": "1 mening som får kunden att ta nästa steg"
+}
+
+ABSOLUTA REGLER:
+1. Hitta ALDRIG på adresser, telefon, priser, öppettider, årtal, statistik, certifieringar, kundnamn eller citat.
+2. "scenarios" = TYPISKA situationer — inte påhittade referensuppdrag. Skriv aldrig kundnamn.
+3. Om ett fält saknar grund, utelämna det.
+4. Om business_name saknas eller ser ut som HTTP-fel/domän utan namn, returnera {"error":"invalid business name"}.
+5. Extrahera 4–7 verkliga tjänster. Vid oklarhet: standard bilverkstadskategorier utan pris.
+6. Language = svenska. Ton = editoriell, konkret, självsäker.
+7. heroLine1 + heroLine2 = premium headline tillsammans.
+8. Max 4500 tokens totalt.`,
+    polishSystemPrompt: `Du är en senior svensk copywriter för premium bilverkstadssajter.
+
+Skriv om ALLA textfält i det medskickade JSON-objektet till naturlig, flytande svenska av hög kvalitet. Ton: modernt, självsäkert, editoriellt.
+
+ABSOLUTA REGLER:
+1. Behåll EXAKT samma JSON-struktur, samma nycklar, samma antal element i arrays.
+2. Hitta ALDRIG på nya fakta (adresser, telefon, priser, årtal, certifieringar, kundnamn).
+3. Fixa styltiga meningar, konstig ordföljd, saknad interpunktion, för långa meningar, upprepningar, klichéer.
+4. Varje textblock ska ha varierad meningslängd. Undvik att alla meningar börjar med "Vi".
+5. heroLine1 + heroLine2 = korta, slagkraftiga rader (3–7 ord vardera) med punkt i slutet.
+6. Om ett fält är tomt — låt det vara tomt.
+7. Svara med ENBART det uppdaterade JSON-objektet.`,
+  },
+  hair_salon: {
+    key: 'hair_salon',
+    label: 'Frisörsalong',
+    aboutPageTitle: 'Om salongen',
+    aboutShort: 'salongen',
+    metaDescSuffix: 'frisörsalong',
+    systemPromptTopic: 'frisörsalongssajter',
+    serviceLabel: 'Behandling',
+    useLeadImages: false, // Skip lead-scraped images — too much risk of broken/blocked thumbnails
+    stockImages: [
+      // Curated Unsplash — salon interiors, hairdressing, styling
+      'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=1600&q=80',
+      'https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?w=1600&q=80',
+      'https://images.unsplash.com/photo-1600948836101-f9ffda59d250?w=1600&q=80',
+      'https://images.unsplash.com/photo-1580618672591-eb180b1a973f?w=1600&q=80',
+      'https://images.unsplash.com/photo-1595476108010-b4d1f102b1b1?w=1200&q=80',
+      'https://images.unsplash.com/photo-1562322140-8baeececf3df?w=1200&q=80',
+      'https://images.unsplash.com/photo-1519415943484-9fa1873496d4?w=1200&q=80',
+      'https://images.unsplash.com/photo-1633681926035-ec1ac984418a?w=1200&q=80',
+      'https://images.unsplash.com/photo-1521590832167-7bcbfaa6381f?w=1200&q=80',
+      'https://images.unsplash.com/photo-1596178065887-1198b6148b2b?w=1200&q=80',
+    ],
+    heroLine1Default: (city) => `Din frisör${city ? ' i ' + city : ''}.`,
+    heroLine2Default: 'Vi lyfter håret — och känslan när du går härifrån.',
+    heroEyebrowDefault: (city) => city ? `Frisörsalong i ${city}` : 'Frisörsalong',
+    heroSublineDefault: 'Personlig rådgivning, hantverk och färgteknik för hår som känns lika bra som det ser ut. Från vardagsklippning till styling inför de större dagarna.',
+    aboutTitleDefault: 'Håret förtjänar mer än ett snabbt besök',
+    aboutEyebrow: 'Hantverk & känsla',
+    pathwaysHeading: 'Vilken väg passar dig — låt oss guida dig rätt',
+    scenariosHeading: 'Så jobbar vi bakom stolen',
+    scenariosIntro: 'Här är typiska besök vi tar emot varje vecka — så du känner igen dig och vet vad du kan förvänta dig.',
+    processHeading: 'Tre steg till hår du älskar',
+    diffHeading: 'Fyra saker du märker redan vid första besöket',
+    ctaTitleDefault: 'Boka tid — vi guidar dig till rätt behandling',
+    ctaTextDefault: 'Berätta vad du vill åstadkomma så matchar vi dig med rätt frisör och behandling.',
+    contactHeadline: 'Boka din tid',
+    contactSubline: 'Ring eller mejla oss — vi hjälper dig hitta rätt behandling och tid som passar.',
+    servicesPageSub: 'Varje behandling är beskriven så att du vet vad som ingår och när den passar dig bäst.',
+    footerTagline: 'Demo skapad för en modernare digital salongsupplevelse.',
+    fallbackServices: [
+      { name: 'Klippning', description: 'Personlig klippning anpassad efter hårets form, textur och din vardag.' },
+      { name: 'Färgning', description: 'Färg som håller länge och tar hand om håret — från ombyten till diskreta uppfräschningar.' },
+      { name: 'Slingor & balayage', description: 'Handmålade ljuspartier för naturlig dimension och mjuka övergångar.' },
+      { name: 'Styling & uppsättning', description: 'Styling inför bröllop, fest eller fotografering — professionellt och långhållbart.' },
+    ],
+    fallbackValues: [
+      { title: 'Personlig konsultation', text: 'Vi lyssnar innan vi klipper — varje behandling börjar med en dialog.' },
+      { title: 'Skonsam teknik', text: 'Vi väljer produkter och metoder som tar hand om håret på lång sikt.' },
+      { title: 'Hantverk hela vägen', text: 'Varje detalj görs på riktigt, inte på autopilot.' },
+    ],
+    fallbackFaqs: [
+      { question: 'Hur bokar jag tid?', answer: 'Kontakta salongen via telefon eller kontaktuppgifterna på sidan.' },
+      { question: 'Får jag en konsultation innan?', answer: 'Ja, varje behandling börjar med en kort dialog så att resultatet blir det du önskar.' },
+      { question: 'Passar era färgtekniker även skört hår?', answer: 'Absolut. Vi väljer skonsammare produkter och tekniker efter hårets skick.' },
+      { question: 'Kan jag boka styling inför en händelse?', answer: 'Ja, vi tar gärna hand om styling och uppsättning inför bröllop, fest och fotografering.' },
+    ],
+    fallbackPathways: [
+      { eyebrow: 'NY LOOK', title: 'Boka klippning', description: 'När det är dags för en ny form eller en fräschare vardagsklippning.', ctaLabel: 'Boka klippning' },
+      { eyebrow: 'FÄRG & TON', title: 'Boka färgning', description: 'Från fullfärg till subtila toningar som lyfter det du redan har.', ctaLabel: 'Boka färg' },
+      { eyebrow: 'LJUSARE HÅR', title: 'Boka slingor eller balayage', description: 'Handmålade ljuspartier för naturlig dimension.', ctaLabel: 'Boka slingor' },
+      { eyebrow: 'HÄNDELSER', title: 'Boka uppsättning eller styling', description: 'Styling som håller — även efter en lång kväll.', ctaLabel: 'Boka styling' },
+    ],
+    systemPrompt: `Du är en senior svensk copywriter och art director för PREMIUM frisörsalongssajter i klass med de bästa nordiska varumärkena inom hår och beauty. Ton: modernt, självsäkert, editoriellt, taktilt. Bygg förtroende via HANTVERK, PERSONLIG RÅDGIVNING och KÄNSLA — inte genom siffror eller påhittade certifikat.
+
+VIKTIGT: Skriv INTE HTML. Returnera bara giltig JSON enligt schemat nedan. HTML byggs av systemet.
+
+RETURFORMAT — endast JSON, ingen markdown, inga kommentarer:
+{
+  "businessName": "...",
+  "tagline": "kort premium tagline",
+  "heroEyebrow": "kort label, t.ex. 'Frisörsalong i {ort}'",
+  "heroLine1": "första raden (3–6 ord, editoriell)",
+  "heroLine2": "andra raden (3–7 ord, kontrast/löfte)",
+  "heroSubline": "1–2 meningar som förklarar värdet konkret",
+  "trustBadges": ["Personlig konsultation", "Skonsam teknik", "Hantverk hela vägen"],
+  "pathwaysIntro": "1 mening om att guida kunden rätt in",
+  "pathways": [
+    {"eyebrow":"NY LOOK","title":"Boka klippning","description":"...","ctaLabel":"Boka klippning"},
+    {"eyebrow":"FÄRG & TON","title":"Boka färgning","description":"...","ctaLabel":"Boka färg"},
+    {"eyebrow":"LJUSARE HÅR","title":"Boka slingor / balayage","description":"...","ctaLabel":"Boka slingor"},
+    {"eyebrow":"HÄNDELSER","title":"Boka uppsättning","description":"...","ctaLabel":"Boka styling"}
+  ],
+  "services": [{"name":"...","description":"vad behandlingen är","when":"'När:' — kort rad om när kunden ska välja den"}],
+  "aboutTitle": "editoriell rubrik, gärna 2 rader",
+  "aboutIntro": "1 stark manifest-mening",
+  "aboutBefore": "stycke om FÖRE besöket (konsultation, förväntningar)",
+  "aboutDuring": "stycke om UNDER behandlingen (hantverk, teknik, känsla)",
+  "aboutAfter": "stycke om EFTER (hemvård, resultat som håller)",
+  "differentiators": [
+    {"title":"Personlig konsultation innan varje behandling","text":"..."},
+    {"title":"Skonsamma produkter och tekniker","text":"..."},
+    {"title":"Hantverk från erfarna frisörer","text":"..."},
+    {"title":"Resultat som håller mellan besöken","text":"..."}
+  ],
+  "scenarios": [
+    {"category":"Klippning","title":"Klippning som håller formen till nästa besök","description":"...","delivery":"..."},
+    {"category":"Färg","title":"Ny färg inför en viktig händelse — utan att skada håret","description":"...","delivery":"..."},
+    {"category":"Rådgivning","title":"Råd för hår som känns tunt eller livlöst","description":"...","delivery":"..."}
+  ],
+  "processSteps": [
+    {"title":"Konsultation","description":"...","outcome":"..."},
+    {"title":"Behandling med hantverk","description":"...","outcome":"..."},
+    {"title":"Styling och hemvård","description":"...","outcome":"..."}
+  ],
+  "values": [{"title":"...","text":"..."}],
+  "faqs": [{"question":"...","answer":"..."}],
+  "ctaTitle": "kort rubrik för sista CTA-bandet",
+  "ctaText": "1 mening som får kunden att boka"
+}
+
+ABSOLUTA REGLER:
+1. Hitta ALDRIG på adresser, telefon, priser, öppettider, årtal, statistik, certifieringar, kundnamn eller citat.
+2. "scenarios" = TYPISKA besök salongen tar emot — inte påhittade referenser. Skriv aldrig kundnamn.
+3. Om ett fält saknar grund, utelämna det.
+4. Om business_name saknas eller ser ut som HTTP-fel/domän utan namn, returnera {"error":"invalid business name"}.
+5. Extrahera 4–7 verkliga behandlingar från källdatan. Vid oklarhet: standard frisör­behandlingar (klippning, färg, slingor, styling) utan pris.
+6. Language = svenska. Ton = editoriell, taktil, självsäker — undvik "vi erbjuder marknadens bästa".
+7. heroLine1 + heroLine2 = premium headline tillsammans.
+8. Max 4500 tokens totalt.`,
+    polishSystemPrompt: `Du är en senior svensk copywriter för premium frisörsalongssajter.
+
+Skriv om ALLA textfält i det medskickade JSON-objektet till naturlig, flytande svenska av hög kvalitet. Ton: modernt, självsäkert, editoriellt, taktilt.
+
+ABSOLUTA REGLER:
+1. Behåll EXAKT samma JSON-struktur, samma nycklar, samma antal element i arrays.
+2. Hitta ALDRIG på nya fakta (adresser, telefon, priser, årtal, certifieringar, kundnamn).
+3. Fixa styltiga meningar, konstig ordföljd, saknad interpunktion, för långa meningar, upprepningar, klichéer.
+4. Varje textblock ska ha varierad meningslängd. Undvik att alla meningar börjar med "Vi".
+5. heroLine1 + heroLine2 = korta, slagkraftiga rader (3–7 ord vardera) med punkt i slutet.
+6. Om ett fält är tomt — låt det vara tomt.
+7. Svara med ENBART det uppdaterade JSON-objektet.`,
+  },
+}
+
+function nicheFromTemplate(template: string | null | undefined): NicheConfig {
+  if (template === 'hair_salon_v1') return NICHE_CONFIG.hair_salon
+  return NICHE_CONFIG.auto_workshop
 }
 
 Deno.serve(async (req) => {
@@ -104,6 +416,7 @@ Deno.serve(async (req) => {
     if (claimErr || !claimed) return json({ ok: true, message: 'lost race, another worker claimed it' })
 
     const site = claimed as any
+    const nc = nicheFromTemplate(site.template)
 
     const nextAttempts = (site.attempts ?? 0) + 1
     await supabase.from('generated_sites').update({ attempts: nextAttempts }).eq('id', generated_site_id)
@@ -156,8 +469,7 @@ Deno.serve(async (req) => {
     // Real images from the lead's own site (their domain)
     const scrapedImages: string[] = Array.isArray(scraped.images) ? scraped.images.slice(0, 8) : []
 
-    // Case-insensitive lookup across all custom_fields keys (handles Phone,
-    // TELEFON, Mobil, phone_number, "Telefonnummer" etc.)
+    // Case-insensitive lookup across all custom_fields keys
     const cfLookup = (patterns: RegExp[]): string | null => {
       for (const [k, v] of Object.entries(cf)) {
         if (v == null || v === '') continue
@@ -184,93 +496,31 @@ Deno.serve(async (req) => {
       source_url: site.source_url,
       has_real_branding: hasRealBranding,
       google_maps_url: googleMapsUrl,
+      niche: nc.key,
     }
 
-    // Image pool priority: user extras → scraped from their own site → Unsplash fallback
-    const unsplashPool = [
-      'https://images.unsplash.com/photo-1487754180451-c456f719a1fc?w=1600&q=80',
-      'https://images.unsplash.com/photo-1625047509168-a7026f36de04?w=1600&q=80',
-      'https://images.unsplash.com/photo-1632823471565-1ecdf5c6d7f4?w=1200&q=80',
-      'https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=1600&q=80',
-      'https://images.unsplash.com/photo-1580273916550-e323be2ae537?w=1200&q=80',
-      'https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?w=1200&q=80',
-      'https://images.unsplash.com/photo-1493031440916-e69b7a91be16?w=1200&q=80',
-      'https://images.unsplash.com/photo-1552930294-3af53b58f61c?w=1200&q=80',
-    ]
-    const imagePool = [...extraImages, ...scrapedImages, ...unsplashPool].slice(0, 10)
+    // Image pool priority depends on niche:
+    //   auto_workshop → user extras > scraped from own site > curated Unsplash
+    //   hair_salon    → curated Unsplash ONLY (avoid broken/blocked thumbs)
+    const imagePool = nc.useLeadImages
+      ? [...extraImages, ...scrapedImages, ...nc.stockImages].slice(0, 12)
+      : [...nc.stockImages].slice(0, 12)
 
-    const screenshotUrl: string | null = scraped.screenshot_url ?? null
+    // Only include screenshot when lead images are allowed for this niche.
+    // For hair salons we skip design-inspo from screenshots too (their sites are
+    // typically low quality and just confuse the plan).
+    const screenshotUrl: string | null = nc.useLeadImages ? (scraped.screenshot_url ?? null) : null
 
-    const systemPrompt = `Du är en senior svensk copywriter och art director för PREMIUM bilverkstadssajter i klass med de bästa nordiska SaaS- och bilmärkessajter. Ton: modernt, självsäkert, editoriellt. Bygg förtroende via TYDLIGHET och YRKESSTOLTHET — inte genom siffror eller påhittade certifikat.
-
-VIKTIGT: Skriv INTE HTML. Returnera bara giltig JSON enligt schemat nedan. HTML byggs av systemet.
-
-RETURFORMAT — endast JSON, ingen markdown, inga kommentarer:
-{
-  "businessName": "...",
-  "tagline": "kort premium tagline",
-  "heroEyebrow": "kort label, t.ex. 'Bilverkstad i {ort}' eller kategori",
-  "heroLine1": "första raden av rubriken (3–6 ord, editoriell känsla)",
-  "heroLine2": "andra raden (3–7 ord, kontrast/löfte, t.ex. 'Vi bygger trygghet, inte gissningar.')",
-  "heroSubline": "1–2 meningar som förklarar värdet konkret",
-  "trustBadges": ["Garanti på allt arbete", "Tydliga underlag", "Personlig service"],
-  "pathwaysIntro": "1 mening om att guida kunden rätt in",
-  "pathways": [
-    {"eyebrow":"PLANERAT BESÖK","title":"Starta med bilservice","description":"Kort scenario när det passar (1–2 meningar)","ctaLabel":"Starta med service"},
-    {"eyebrow":"OSÄKER FELBILD","title":"Boka felsökning","description":"...","ctaLabel":"Boka felsökning"},
-    {"eyebrow":"SÄKERHET FÖRST","title":"Boka bromskontroll","description":"...","ctaLabel":"Boka bromskontroll"},
-    {"eyebrow":"SÄSONG & KOMFORT","title":"Boka klimatsystem","description":"...","ctaLabel":"Boka klimat"}
-  ],
-  "services": [{"name":"...","description":"vad tjänsten är","when":"'När:' — kort rad om när kunden ska välja den"}],
-  "aboutTitle": "editoriell rubrik, gärna 2 rader",
-  "aboutIntro": "1 stark manifest-mening",
-  "aboutBefore": "stycke om FÖRE besöket (transparens, planering)",
-  "aboutDuring": "stycke om UNDER arbetet (expertis, träffsäkerhet)",
-  "aboutAfter": "stycke om EFTER (rak återkoppling, begripligt underlag)",
-  "differentiators": [
-    {"title":"Tydlig offert innan större beslut","text":"..."},
-    {"title":"All expertis samlad under ett tak","text":"..."},
-    {"title":"Smidig kontakt på dina villkor","text":"..."},
-    {"title":"Verklig kvalitet, inte bara ord","text":"..."}
-  ],
-  "scenarios": [
-    {"category":"Service","title":"Servicegenomgång inför längre körning","description":"Beskriv typiskt scenario (inte påhittad kund)","delivery":"Vad kunden får som resultat"},
-    {"category":"Diagnostik","title":"När varningslampan tänds men felet inte är självklart","description":"...","delivery":"..."},
-    {"category":"Bromsar","title":"Bromsar som känns ojämna eller låter","description":"...","delivery":"..."}
-  ],
-  "processSteps": [
-    {"title":"Beskriv behovet","description":"...","outcome":"Smidigare planering och inga missförstånd."},
-    {"title":"Vi ger dig en tydlig plan","description":"...","outcome":"Högsta kvalitet redan från första steget."},
-    {"title":"Raka rör, inga överraskningar","description":"...","outcome":"Trygghet och full transparens hela vägen."}
-  ],
-  "values": [{"title":"...","text":"..."}],
-  "faqs": [{"question":"...","answer":"..."}],
-  "ctaTitle": "kort rubrik för sista CTA-bandet",
-  "ctaText": "1 mening som får kunden att ta nästa steg"
-}
-
-ABSOLUTA REGLER:
-1. Hitta ALDRIG på adresser, telefonnummer, priser, öppettider, årtal, statistik, certifieringar, kundnamn eller citat.
-2. "scenarios" är TYPISKA situationer verkstaden hanterar — inte påhittade referensuppdrag. Skriv aldrig kundnamn.
-3. Om ett fält saknar grund, utelämna det. Bättre kortare än fejkat.
-4. Om business_name saknas eller ser ut som HTTP-fel/domän utan namn, returnera {"error":"invalid business name"}.
-5. Extrahera 4–7 verkliga tjänster från källdatan. Vid oklarhet: standard bilverkstadskategorier utan pris eller falska löften.
-6. Language = svenska. Ton = editoriell, konkret, självsäker — inga "vi erbjuder marknadens bästa"-klichéer.
-7. heroLine1 + heroLine2 ska tillsammans kännas som en HEADLINE värdig en premium-sajt (t.ex. "Din bilverkstad i Lund. / Vi bygger trygghet, inte gissningar.").
-8. Max 4500 tokens totalt.`
-
-    // Regen feedback: when the user clicks "Regenerera" on /site-approvals
-    // we stash the feedback in custom_fields.regen_feedback. Inject it here
-    // so the plan is rewritten around the user's notes.
+    // Regen feedback: injected when the user clicks "Regenerera" on /site-approvals
     const regenFeedback = typeof cf.regen_feedback === 'string' && cf.regen_feedback.trim()
       ? String(cf.regen_feedback).trim()
       : null
 
     const userTextParts = [
-      'Skapa en kompakt innehållsplan för en 3-sidig premium-sajt för denna bilverkstad. Skriv ENDAST JSON enligt schemat.',
+      `Skapa en kompakt innehållsplan för en 3-sidig premium-sajt för denna ${nc.label.toLowerCase()}. Skriv ENDAST JSON enligt schemat.`,
       '',
       regenFeedback
-        ? `--- ANVÄNDARENS FEEDBACK FÖR REGENERERING (HÖGSTA PRIORITET, applicera dessa ändringar) ---\n${regenFeedback}\n`
+        ? `--- ANVÄNDARENS FEEDBACK FÖR REGENERERING (HÖGSTA PRIORITET) ---\n${regenFeedback}\n`
         : '',
       'FAKTA (endast detta — hitta aldrig på siffror, adresser eller årtal):',
       JSON.stringify(facts, null, 2),
@@ -282,25 +532,24 @@ ABSOLUTA REGLER:
       'Markdown (första 1800 tecken):',
       (pages.home?.markdown || homeMd).slice(0, 1800),
       '',
-      `--- KÄLLDATA: OM-OSS-SIDAN ${pages.about ? `(${pages.about.url})` : '(hittades ej — härled från hem)'} ---`,
+      `--- KÄLLDATA: OM-OSS-SIDAN ${pages.about ? `(${pages.about.url})` : '(hittades ej)'} ---`,
       pages.about
         ? `Titel: ${pages.about.title}\nMarkdown (första 1400 tecken):\n${pages.about.markdown.slice(0, 1400)}`
-        : '[Ingen separat about-sida. Använd HEM-sidans markdown för kort företagsbeskrivning. Inga påhittade fakta.]',
+        : '[Ingen separat about-sida. Använd HEM-sidans markdown. Inga påhittade fakta.]',
       '',
-      `--- KÄLLDATA: TJÄNSTER-SIDAN ${pages.services ? `(${pages.services.url})` : '(hittades ej — härled från hem)'} ---`,
+      `--- KÄLLDATA: TJÄNSTER-SIDAN ${pages.services ? `(${pages.services.url})` : '(hittades ej)'} ---`,
       pages.services
         ? `Titel: ${pages.services.title}\nMarkdown (första 1800 tecken):\n${pages.services.markdown.slice(0, 1800)}`
-        : '[Ingen separat tjänster-sida. Extrahera tjänster från HEM-sidans markdown. Om oklart, använd branschstandard-tjänster utan påhittade priser.]',
+        : '[Ingen separat tjänster-sida. Extrahera från HEM-sidans markdown. Om oklart, använd branschstandard utan påhittade priser.]',
       '',
       screenshotUrl
-        ? 'BIFOGAD BILD nedan = skärmdump av deras nuvarande hemsida. Använd som STIL-INSPO för färgkänsla/ton, men gör en NYARE, BÄTTRE version — kopiera inte deras layout.'
-        : '[Ingen skärmdump av nuvarande sajt tillgänglig.]',
+        ? 'BIFOGAD BILD nedan = skärmdump av deras nuvarande hemsida. Använd som STIL-INSPO för färgkänsla, men gör en NYARE, BÄTTRE version.'
+        : '[Ingen skärmdump används.]',
       '',
       'Returnera BARA JSON-objektet med innehållsplanen, inte HTML.',
     ].filter(Boolean).join('\n')
 
-    // Multimodal content — only include the screenshot on models that support vision.
-    // DeepSeek V3.1 is text-only; sending an image_url would 400.
+    // Multimodal: DeepSeek V3.1 is text-only, so we don't attach images at all today.
     const chosenModel = MODEL
     const supportsVision = /claude|gpt-4|gpt-5|gemini|llama-.*vision|qwen.*vl/i.test(chosenModel)
     const userContent: any[] = [{ type: 'text', text: userTextParts }]
@@ -308,11 +557,8 @@ ABSOLUTA REGLER:
       userContent.push({ type: 'image_url', image_url: { url: screenshotUrl } })
     }
 
-
     // Run AI work synchronously. Background waitUntil has proven unreliable for
-    // this long-running job in Supabase Edge: the HTTP call can return 202 while
-    // the worker is recycled before persisting `generated`, leaving the serial
-    // outreach queue blocked forever.
+    // this long-running job in Supabase Edge.
     const runGeneration = async () => {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 60_000)
@@ -329,7 +575,7 @@ ABSOLUTA REGLER:
           body: JSON.stringify({
             model: chosenModel,
             messages: [
-              { role: 'system', content: systemPrompt },
+              { role: 'system', content: nc.systemPrompt },
               { role: 'user', content: userContent },
             ],
             temperature: 0.6,
@@ -372,6 +618,7 @@ ABSOLUTA REGLER:
           plan: parsed,
           facts,
           openrouterKey,
+          nc,
         }).catch((e) => {
           console.warn('copy polish failed, using DeepSeek plan:', (e as Error).message)
           return parsed!
@@ -384,6 +631,7 @@ ABSOLUTA REGLER:
           brandFonts,
           imagePool,
           googleMapsUrl,
+          nc,
         })
 
         await supabase.from('generated_sites').update({
@@ -403,7 +651,7 @@ ABSOLUTA REGLER:
     }
 
     await runGeneration()
-    return json({ ok: true, status: 'generated', model: chosenModel })
+    return json({ ok: true, status: 'generated', model: chosenModel, niche: nc.key })
 
   } catch (err) {
     console.error('generate-site error', err)
@@ -412,31 +660,15 @@ ABSOLUTA REGLER:
 })
 
 // ---------------------------------------------------------------------------
-// Copy polish: run the DeepSeek content plan through Claude Haiku so all the
-// prose feels like a real Swedish copywriter wrote it (natural rhythm, correct
-// punctuation, sentences that flow). Structure/fields are preserved exactly;
-// no new facts are introduced. Cheap: ~1–3k tokens per site on Haiku.
+// Copy polish: rewrites the plan in natural Swedish. Structure preserved.
 // ---------------------------------------------------------------------------
 async function polishCopyWithClaude(args: {
   plan: SitePlan
   facts: Record<string, unknown>
   openrouterKey: string
+  nc: NicheConfig
 }): Promise<SitePlan> {
-  const { plan, facts, openrouterKey } = args
-
-  const system = `Du är en senior svensk copywriter för premium bilverkstadssajter.
-
-DIN UPPGIFT: Skriv om ALLA textfält i det medskickade JSON-objektet till naturlig, flytande svenska av hög kvalitet. Ton: modernt, självsäkert, editoriellt — som en välskriven varumärkessajt, inte som en broschyr.
-
-ABSOLUTA REGLER:
-1. Behåll EXAKT samma JSON-struktur, samma nycklar, samma antal element i arrays. Ändra bara textvärdena.
-2. Hitta ALDRIG på nya fakta (adresser, telefon, priser, årtal, certifieringar, kundnamn). Om ett textfält innehåller påhittade siffror eller påhittade certifieringar — ta bort dem och skriv om utan.
-3. Fixa: styltiga meningar, konstig ordföljd, meningar som saknar punkt, för långa meningar (dela i två), upprepningar, klichéer ("marknadens bästa", "vi erbjuder"), engelska direktöversättningar.
-4. Rytm: varje textblock ska ha varierad meningslängd. Undvik att alla meningar börjar med "Vi".
-5. heroLine1 + heroLine2 = korta, slagkraftiga rader (3–7 ord vardera) som fungerar som en headline tillsammans. Punkt i slutet av varje rad.
-6. heroSubline, description, text, answer = 1–3 välformulerade meningar med korrekt interpunktion.
-7. Om ett fält är null/tomt — låt det vara tomt. Fyll aldrig i påhittat innehåll.
-8. Svara med ENBART det uppdaterade JSON-objektet. Ingen markdown, inga kommentarer, ingen förklaring.`
+  const { plan, facts, openrouterKey, nc } = args
 
   const user = `FAKTA (påhittad information är förbjuden — håll dig till dessa):
 ${JSON.stringify(facts, null, 2)}
@@ -461,7 +693,7 @@ Returnera samma JSON med förbättrad svensk copy.`
       body: JSON.stringify({
         model: 'openai/gpt-4.1-mini',
         messages: [
-          { role: 'system', content: system },
+          { role: 'system', content: nc.polishSystemPrompt },
           { role: 'user', content: user },
         ],
         temperature: 0.7,
@@ -470,12 +702,11 @@ Returnera samma JSON med förbättrad svensk copy.`
       }),
     })
     clearTimeout(timeoutId)
-    if (!resp.ok) throw new Error(`claude polish ${resp.status}: ${(await resp.text()).slice(0, 300)}`)
+    if (!resp.ok) throw new Error(`polish ${resp.status}: ${(await resp.text()).slice(0, 300)}`)
     const data = await resp.json()
     const raw: string = data.choices?.[0]?.message?.content ?? ''
     const cleaned = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```\s*$/i, '').trim()
     const polished = JSON.parse(cleaned) as SitePlan
-    // Sanity: keep DeepSeek's plan for any field Claude dropped
     return { ...plan, ...polished }
   } finally {
     clearTimeout(timeoutId)
@@ -489,6 +720,7 @@ function buildSiteFiles({
   brandFonts,
   imagePool,
   googleMapsUrl,
+  nc,
 }: {
   plan: SitePlan
   facts: Record<string, unknown>
@@ -496,22 +728,23 @@ function buildSiteFiles({
   brandFonts: string[]
   imagePool: string[]
   googleMapsUrl: string | null
+  nc: NicheConfig
 }): Record<string, string> {
-  const businessName = cleanText(plan.businessName || String(facts.business_name || '')) || 'Bilverkstad'
+  const businessName = cleanText(plan.businessName || String(facts.business_name || '')) || nc.label
   const phone = cleanText(String(facts.phone || ''))
   const email = cleanText(String(facts.email || ''))
   const address = [facts.address, facts.city].map((v) => cleanText(String(v || ''))).filter(Boolean).join(', ')
   const city = cleanText(String(facts.city || ''))
-  const services = normalizeServices(plan.services)
-  const values = normalizeValues(plan.values)
-  const faqs = normalizeFaqs(plan.faqs)
-  const pathways = normalizePathways(plan.pathways)
+  const services = normalizeServices(plan.services, nc)
+  const values = normalizeValues(plan.values, nc)
+  const faqs = normalizeFaqs(plan.faqs, nc)
+  const pathways = normalizePathways(plan.pathways, nc)
   const differentiators = normalizeDifferentiators(plan.differentiators)
   const scenarios = normalizeScenarios(plan.scenarios)
   const processSteps = normalizeProcess(plan.processSteps)
   const trustBadges = (plan.trustBadges || []).map(cleanText).filter(Boolean).slice(0, 3)
   const images = imagePool.filter((url) => /^https?:\/\//i.test(url)).slice(0, 10)
-  const img = (i: number) => images[i % Math.max(images.length, 1)] || 'https://images.unsplash.com/photo-1487754180451-c456f719a1fc?w=1600&q=80'
+  const img = (i: number) => images[i % Math.max(images.length, 1)] || nc.stockImages[0]
   const hasContact = Boolean(phone || email || address)
   const primaryHref = phone ? `tel:${phone.replace(/\s+/g, '')}` : email ? `mailto:${email}` : null
   const primaryLabel = phone ? 'Ring nu' : email ? 'Mejla oss' : null
@@ -524,7 +757,7 @@ function buildSiteFiles({
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${esc(title)} | ${esc(businessName)}</title>
-  <meta name="description" content="${esc(plan.tagline || plan.heroSubline || `${businessName} – bilverkstad`)}" />
+  <meta name="description" content="${esc(plan.tagline || plan.heroSubline || `${businessName} – ${nc.metaDescSuffix}`)}" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=${encodeURIComponent(displayFont).replace(/%20/g, '+')}:wght@500;600;700;800;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -641,7 +874,7 @@ function buildSiteFiles({
 <body>
   ${nav(active, businessName, primaryHref, primaryLabel, hasContact)}
   ${body}
-  ${footer(businessName, plan.tagline, { phone, email, address })}
+  ${footer(businessName, plan.tagline, { phone, email, address }, nc)}
 </body>
 </html>`
 
@@ -650,33 +883,33 @@ function buildSiteFiles({
     : ''
   const bookCta = `<a class="btn ghost" href="tjanster.html">${esc(bookLabel)}</a>`
 
-  const heroLine1 = cleanText(plan.heroLine1 || `Din bilverkstad${city ? ' i ' + city : ''}.`)
-  const heroLine2 = cleanText(plan.heroLine2 || 'Vi bygger trygghet, inte gissningar.')
-  const heroEyebrow = cleanText(plan.heroEyebrow || (city ? `Bilverkstad i ${city}` : 'Bilverkstad'))
-  const heroSub = cleanText(plan.heroSubline || 'Auktoriserad kunskap kring service, felsökning, bromsar och däck. Raka beslutsunderlag och en smidig upplevelse från första kontakt till färdig bil.')
+  const heroLine1 = cleanText(plan.heroLine1 || nc.heroLine1Default(city))
+  const heroLine2 = cleanText(plan.heroLine2 || nc.heroLine2Default)
+  const heroEyebrow = cleanText(plan.heroEyebrow || nc.heroEyebrowDefault(city))
+  const heroSub = cleanText(plan.heroSubline || nc.heroSublineDefault)
 
   const trustRow = trustBadges.length
     ? `<div class="trust-row">${trustBadges.map((b) => `<span>${esc(b)}</span>`).join('')}</div>`
     : ''
 
   const pathwaysSection = pathways.length
-    ? `<section class="section band-tight"><div class="wrap"><div class="eyebrow">Rätt väg in</div><h2 class="h2">${esc('Rätt hjälp från start — så att du slipper gissa')}</h2>${plan.pathwaysIntro ? `<p class="lead lg" style="margin-top:20px">${esc(plan.pathwaysIntro)}</p>` : ''}<div class="grid g-4" style="margin-top:52px">${pathways.map((p) => `<div class="card path-card"><div class="eyebrow" style="margin-bottom:14px">${esc(p.eyebrow)}</div><h3>${esc(p.title)}</h3><p>${esc(p.description)}</p><a class="arrow" href="tjanster.html">${esc(p.ctaLabel || 'Läs mer')}</a></div>`).join('')}</div></div></section>`
+    ? `<section class="section band-tight"><div class="wrap"><div class="eyebrow">Rätt väg in</div><h2 class="h2">${esc(nc.pathwaysHeading)}</h2>${plan.pathwaysIntro ? `<p class="lead lg" style="margin-top:20px">${esc(plan.pathwaysIntro)}</p>` : ''}<div class="grid g-4" style="margin-top:52px">${pathways.map((p) => `<div class="card path-card"><div class="eyebrow" style="margin-bottom:14px">${esc(p.eyebrow)}</div><h3>${esc(p.title)}</h3><p>${esc(p.description)}</p><a class="arrow" href="tjanster.html">${esc(p.ctaLabel || 'Läs mer')}</a></div>`).join('')}</div></div></section>`
     : ''
 
   const aboutTeaser = (plan.aboutBefore || plan.aboutDuring || plan.aboutAfter || plan.aboutIntro) ? `
-    <section class="section"><div class="wrap"><div class="about-split"><div><div class="eyebrow">${esc('Yrkesstolthet')}</div><h2 class="h2">${esc(plan.aboutTitle || 'Förtroende byggs i verkstaden — inte med en checklista')}</h2>${plan.aboutIntro ? `<p class="lead lg" style="margin-top:24px">${esc(plan.aboutIntro)}</p>` : ''}<div class="btns"><a class="btn" href="om-oss.html">Om verkstaden</a>${primaryCta}</div></div><div class="about-blocks">${plan.aboutBefore ? `<div class="about-block"><h4>Före besöket</h4><p>${esc(plan.aboutBefore)}</p></div>` : ''}${plan.aboutDuring ? `<div class="about-block"><h4>Under arbetet</h4><p>${esc(plan.aboutDuring)}</p></div>` : ''}${plan.aboutAfter ? `<div class="about-block"><h4>Efter arbetet</h4><p>${esc(plan.aboutAfter)}</p></div>` : ''}</div></div></div></section>` : ''
+    <section class="section"><div class="wrap"><div class="about-split"><div><div class="eyebrow">${esc(nc.aboutEyebrow)}</div><h2 class="h2">${esc(plan.aboutTitle || nc.aboutTitleDefault)}</h2>${plan.aboutIntro ? `<p class="lead lg" style="margin-top:24px">${esc(plan.aboutIntro)}</p>` : ''}<div class="btns"><a class="btn" href="om-oss.html">${esc(nc.aboutPageTitle)}</a>${primaryCta}</div></div><div class="about-blocks">${plan.aboutBefore ? `<div class="about-block"><h4>Före besöket</h4><p>${esc(plan.aboutBefore)}</p></div>` : ''}${plan.aboutDuring ? `<div class="about-block"><h4>Under arbetet</h4><p>${esc(plan.aboutDuring)}</p></div>` : ''}${plan.aboutAfter ? `<div class="about-block"><h4>Efter arbetet</h4><p>${esc(plan.aboutAfter)}</p></div>` : ''}</div></div></div></section>` : ''
 
   const scenariosSection = scenarios.length >= 2 ? `
-    <section class="section band"><div class="wrap"><div class="eyebrow">Resultat</div><h2 class="h2">Verkliga exempel på hur vi löser problem</h2><p class="lead lg" style="margin-top:20px">Så här jobbar vi bakom kulisserna. Se vad vi granskar, hur vi resonerar och varför yrkesstolthet lönar sig.</p><div class="grid g-3" style="margin-top:52px">${scenarios.map((s, i) => `<div class="scenario"><img src="${attr(img(i + 2))}" alt="${esc(s.title)}"><div class="scenario-body"><div class="tag">${esc(s.category)}</div><h3>${esc(s.title)}</h3><p>${esc(s.description)}</p><div class="delivery"><strong>Leverans:</strong> ${esc(s.delivery)}</div></div></div>`).join('')}</div></div></section>` : ''
+    <section class="section band"><div class="wrap"><div class="eyebrow">Resultat</div><h2 class="h2">${esc(nc.scenariosHeading)}</h2><p class="lead lg" style="margin-top:20px">${esc(nc.scenariosIntro)}</p><div class="grid g-3" style="margin-top:52px">${scenarios.map((s, i) => `<div class="scenario"><img src="${attr(img(i + 2))}" alt="${esc(s.title)}"><div class="scenario-body"><div class="tag">${esc(s.category)}</div><h3>${esc(s.title)}</h3><p>${esc(s.description)}</p><div class="delivery"><strong>Leverans:</strong> ${esc(s.delivery)}</div></div></div>`).join('')}</div></div></section>` : ''
 
   const processSection = processSteps.length >= 3 ? `
-    <section class="section"><div class="wrap"><div class="eyebrow">Så märks det i praktiken</div><h2 class="h2">Tre steg mot ett tryggare bilägande</h2><div class="grid g-3" style="margin-top:56px">${processSteps.map((s, i) => `<div><div class="num">${String(i + 1).padStart(2, '0')}</div><h3 class="h3">${esc(s.title)}</h3><p class="lead" style="font-size:16px;margin-top:12px">${esc(s.description)}</p>${s.outcome ? `<div class="step-outcome">${esc(s.outcome)}</div>` : ''}</div>`).join('')}</div></div></section>` : ''
+    <section class="section"><div class="wrap"><div class="eyebrow">Så märks det i praktiken</div><h2 class="h2">${esc(nc.processHeading)}</h2><div class="grid g-3" style="margin-top:56px">${processSteps.map((s, i) => `<div><div class="num">${String(i + 1).padStart(2, '0')}</div><h3 class="h3">${esc(s.title)}</h3><p class="lead" style="font-size:16px;margin-top:12px">${esc(s.description)}</p>${s.outcome ? `<div class="step-outcome">${esc(s.outcome)}</div>` : ''}</div>`).join('')}</div></div></section>` : ''
 
   const diffSection = differentiators.length >= 3 ? `
-    <section class="section band-tight"><div class="wrap"><div class="eyebrow">Så arbetar vi</div><h2 class="h2">Fyra saker du känner innan bilen ens rullar in</h2><div class="diff-grid">${differentiators.map((d) => `<div class="diff"><h3>${esc(d.title)}</h3><p>${esc(d.text)}</p></div>`).join('')}</div></div></section>` : ''
+    <section class="section band-tight"><div class="wrap"><div class="eyebrow">Så arbetar vi</div><h2 class="h2">${esc(nc.diffHeading)}</h2><div class="diff-grid">${differentiators.map((d) => `<div class="diff"><h3>${esc(d.title)}</h3><p>${esc(d.text)}</p></div>`).join('')}</div></div></section>` : ''
 
   const finalCta = `
-    <section class="section-sm"><div class="cta-band"><div class="eyebrow" style="color:var(--bg);background:color-mix(in srgb,var(--bg) 20%,transparent);border-color:color-mix(in srgb,var(--bg) 30%,transparent)">Nästa steg</div><h2 class="h2">${esc(plan.ctaTitle || 'Välj rätt väg för din bil — boka direkt eller läs mer')}</h2><p class="lead">${esc(plan.ctaText || 'Oavsett vad din bil behöver guidar vi dig till rätt tjänst och säkerställer ett professionellt omhändertagande.')}</p><div class="btns">${primaryCta}${bookCta}</div></div></section>`
+    <section class="section-sm"><div class="cta-band"><div class="eyebrow" style="color:var(--bg);background:color-mix(in srgb,var(--bg) 20%,transparent);border-color:color-mix(in srgb,var(--bg) 30%,transparent)">Nästa steg</div><h2 class="h2">${esc(plan.ctaTitle || nc.ctaTitleDefault)}</h2><p class="lead">${esc(plan.ctaText || nc.ctaTextDefault)}</p><div class="btns">${primaryCta}${bookCta}</div></div></section>`
 
   const homeBody = `
     <section class="hero"><img src="${attr(img(0))}" alt="${esc(businessName)}"><div class="hero-inner"><div class="eyebrow">${esc(heroEyebrow)}</div><h1 class="h1"><span class="line">${esc(heroLine1)}</span><span class="line accent">${esc(heroLine2)}</span></h1><p class="lead lg">${esc(heroSub)}</p><div class="btns">${primaryCta}${bookCta}</div>${trustRow}</div></section>
@@ -686,108 +919,80 @@ function buildSiteFiles({
     ${processSection}
     ${diffSection}
     ${finalCta}
-    ${contactSection({ phone, email, address, googleMapsUrl })}`
+    ${contactSection({ phone, email, address, googleMapsUrl, nc })}`
 
   const aboutBody = `
-    ${pageHero('Om verkstaden', plan.aboutTitle || `Möt ${businessName}`, plan.aboutIntro || plan.tagline || '', img(1))}
+    ${pageHero(nc.aboutPageTitle, plan.aboutTitle || `Möt ${businessName}`, plan.aboutIntro || plan.tagline || '', img(1))}
     ${(plan.aboutBefore || plan.aboutDuring || plan.aboutAfter) ? `<section class="section"><div class="wrap about-split"><img class="photo" src="${attr(img(2))}" alt="${esc(businessName)}"><div class="about-blocks">${plan.aboutBefore ? `<div class="about-block"><h4>Före besöket</h4><p>${esc(plan.aboutBefore)}</p></div>` : ''}${plan.aboutDuring ? `<div class="about-block"><h4>Under arbetet</h4><p>${esc(plan.aboutDuring)}</p></div>` : ''}${plan.aboutAfter ? `<div class="about-block"><h4>Efter arbetet</h4><p>${esc(plan.aboutAfter)}</p></div>` : ''}</div></div></section>` : ''}
     ${values.length ? `<section class="section band-tight"><div class="wrap"><div class="eyebrow">Vad vi står för</div><h2 class="h2">Tryggare känsla hela vägen</h2><div class="grid g-3" style="margin-top:48px">${values.map((v) => `<div class="card"><h3 class="h3">${esc(v.title)}</h3><p style="color:var(--text-muted);margin:14px 0 0">${esc(v.text)}</p></div>`).join('')}</div></div></section>` : ''}
     ${diffSection}
     ${finalCta}`
 
   const servicesBody = `
-    ${pageHero('Tjänster', plan.aboutTitle && plan.aboutTitle.length < 60 ? 'Fyra starka startpunkter för din bil' : 'Våra tjänster', 'Varje tjänst är tydligt beskriven för att hjälpa dig förstå när den passar och vad som ingår.', img(0))}
-    <section class="section"><div class="wrap">${services.map((s, i) => `<div class="service-row ${i % 2 === 1 ? 'rev' : ''}"><div class="s-media"><img src="${attr(img(i + 1))}" alt="${esc(s.name)}"></div><div><div class="eyebrow">Tjänst 0${i + 1}</div><h2>${esc(s.name)}</h2><p class="lead">${esc(s.description)}</p>${s.when ? `<div class="when"><strong>När passar det?</strong><p>${esc(s.when)}</p></div>` : ''}<div class="btns">${primaryCta}</div></div></div>`).join('')}</div></section>
+    ${pageHero('Tjänster', plan.aboutTitle && plan.aboutTitle.length < 60 ? plan.aboutTitle : 'Våra tjänster', nc.servicesPageSub, img(0))}
+    <section class="section"><div class="wrap">${services.map((s, i) => `<div class="service-row ${i % 2 === 1 ? 'rev' : ''}"><div class="s-media"><img src="${attr(img(i + 1))}" alt="${esc(s.name)}"></div><div><div class="eyebrow">${esc(nc.serviceLabel)} 0${i + 1}</div><h2>${esc(s.name)}</h2><p class="lead">${esc(s.description)}</p>${s.when ? `<div class="when"><strong>När passar det?</strong><p>${esc(s.when)}</p></div>` : ''}<div class="btns">${primaryCta}</div></div></div>`).join('')}</div></section>
     ${faqs.length ? `<section class="section band-tight"><div class="wrap"><div class="eyebrow">Vanliga frågor</div><h2 class="h2">Bra att veta inför ditt besök</h2><div style="margin-top:40px;max-width:900px">${faqs.map((f) => `<details class="faq"><summary>${esc(f.question)}</summary><p>${esc(f.answer)}</p></details>`).join('')}</div></div></section>` : ''}
     ${finalCta}`
 
   return {
     'index.html': common('home', 'Hem', homeBody),
-    'om-oss.html': common('about', 'Om oss', aboutBody),
+    'om-oss.html': common('about', nc.aboutPageTitle, aboutBody),
     'tjanster.html': common('services', 'Tjänster', servicesBody),
   }
 }
 
-function normalizeServices(items?: ServiceItem[]): ServiceItem[] {
-  const fallback = [
-    { name: 'Service och underhåll', description: 'Regelbunden service och kontroll för att bilen ska kännas trygg i vardagen.' },
-    { name: 'Felsökning', description: 'Systematisk genomgång när bilen varnar, låter annorlunda eller inte fungerar som den ska.' },
-    { name: 'Reparationer', description: 'Åtgärder och reparationer med fokus på tydlig kommunikation genom hela arbetet.' },
-    { name: 'Bromsar och säkerhet', description: 'Kontroll och åtgärd av viktiga slitdelar för säkrare körning.' },
-  ]
+function normalizeServices(items: ServiceItem[] | undefined, nc: NicheConfig): ServiceItem[] {
   const cleaned = (items || [])
-    .map((s) => ({ name: cleanText(s?.name || ''), description: cleanText(s?.description || '') }))
+    .map((s) => ({ name: cleanText(s?.name || ''), description: cleanText(s?.description || ''), when: cleanText(s?.when || '') }))
     .filter((s) => s.name && s.description)
     .slice(0, 7)
-  return cleaned.length >= 3 ? cleaned : fallback
+  return cleaned.length >= 3 ? cleaned : nc.fallbackServices
 }
 
-function normalizeValues(items?: ValueItem[]): ValueItem[] {
-  const fallback = [
-    { title: 'Tydlighet', text: 'Kunden ska förstå vad som görs och varför.' },
-    { title: 'Noggrannhet', text: 'Varje uppdrag behandlas metodiskt och professionellt.' },
-    { title: 'Trygg service', text: 'Målet är en enklare verkstadsupplevelse från första kontakt.' },
-  ]
+function normalizeValues(items: ValueItem[] | undefined, nc: NicheConfig): ValueItem[] {
   const cleaned = (items || [])
     .map((v) => ({ title: cleanText(v?.title || ''), text: cleanText(v?.text || '') }))
     .filter((v) => v.title && v.text)
     .slice(0, 4)
-  return cleaned.length >= 3 ? cleaned : fallback
+  return cleaned.length >= 3 ? cleaned : nc.fallbackValues
 }
 
-function normalizeFaqs(items?: FaqItem[]): FaqItem[] {
-  const fallback = [
-    { question: 'Hur bokar jag tid?', answer: 'Kontakta verkstaden via telefon eller kontaktuppgifterna på sidan.' },
-    { question: 'Kan ni felsöka bilen först?', answer: 'Ja, felsökning är ofta första steget när problemet inte är helt tydligt.' },
-    { question: 'Får jag veta vad som behöver göras?', answer: 'En bra verkstadsupplevelse bygger på tydlig information innan arbetet går vidare.' },
-    { question: 'Arbetar ni med vanliga servicejobb?', answer: 'Ja, sidan presenterar både service, felsökning och reparationer utan att ange påhittade priser.' },
-  ]
+function normalizeFaqs(items: FaqItem[] | undefined, nc: NicheConfig): FaqItem[] {
   const cleaned = (items || [])
     .map((f) => ({ question: cleanText(f?.question || ''), answer: cleanText(f?.answer || '') }))
     .filter((f) => f.question && f.answer)
     .slice(0, 6)
-  return cleaned.length >= 3 ? cleaned : fallback
+  return cleaned.length >= 3 ? cleaned : nc.fallbackFaqs
 }
 
-function normalizePathways(items?: PathwayItem[]): PathwayItem[] {
-  const fallback: PathwayItem[] = [
-    { eyebrow: 'PLANERAT BESÖK', title: 'Starta med bilservice', description: 'När det är dags för ordinarie service eller kontroll inför en längre resa.', ctaLabel: 'Starta med service' },
-    { eyebrow: 'OSÄKER FELBILD', title: 'Boka felsökning', description: 'När bilen varnar, låter annorlunda eller beter sig konstigt utan att du vet varför.', ctaLabel: 'Boka felsökning' },
-    { eyebrow: 'SÄKERHET FÖRST', title: 'Boka bromskontroll', description: 'När bromsarna känns ojämna, låter eller helt enkelt behöver en säkerhetsgenomgång.', ctaLabel: 'Boka bromskontroll' },
-    { eyebrow: 'SÄSONG & KOMFORT', title: 'Boka klimatsystem', description: 'När AC:n tappat effekt eller inför säsongsbyte då komfort och sikt blir avgörande.', ctaLabel: 'Boka klimat' },
-  ]
+function normalizePathways(items: PathwayItem[] | undefined, nc: NicheConfig): PathwayItem[] {
   const cleaned = (items || [])
     .map((p) => ({ eyebrow: cleanText(p?.eyebrow || ''), title: cleanText(p?.title || ''), description: cleanText(p?.description || ''), ctaLabel: cleanText(p?.ctaLabel || 'Läs mer') }))
     .filter((p) => p.title && p.description)
     .slice(0, 4)
-  return cleaned.length >= 3 ? cleaned : fallback
+  return cleaned.length >= 3 ? cleaned : nc.fallbackPathways
 }
 
 function normalizeDifferentiators(items?: DifferentiatorItem[]): DifferentiatorItem[] {
-  const cleaned = (items || [])
+  return (items || [])
     .map((d) => ({ title: cleanText(d?.title || ''), text: cleanText(d?.text || '') }))
     .filter((d) => d.title && d.text)
     .slice(0, 4)
-  return cleaned
 }
 
 function normalizeScenarios(items?: ScenarioItem[]): ScenarioItem[] {
-  const cleaned = (items || [])
+  return (items || [])
     .map((s) => ({ category: cleanText(s?.category || 'Verkstad'), title: cleanText(s?.title || ''), description: cleanText(s?.description || ''), delivery: cleanText(s?.delivery || '') }))
     .filter((s) => s.title && s.description && s.delivery)
     .slice(0, 3)
-  return cleaned
 }
 
 function normalizeProcess(items?: ProcessStep[]): ProcessStep[] {
-  const cleaned = (items || [])
+  return (items || [])
     .map((s) => ({ title: cleanText(s?.title || ''), description: cleanText(s?.description || ''), outcome: cleanText(s?.outcome || '') }))
     .filter((s) => s.title && s.description)
     .slice(0, 3)
-  return cleaned
 }
-
-
 
 function nav(active: 'home' | 'about' | 'services', businessName: string, primaryHref: string | null, primaryLabel: string | null, hasContact: boolean): string {
   const a = (key: string) => active === key ? ' active' : ''
@@ -802,12 +1007,7 @@ function pageHero(eyebrow: string, title: string, sub: string, image: string): s
   return `<section class="page-hero"><img src="${attr(image)}" alt=""><div class="wrap"><div class="eyebrow">${esc(eyebrow)}</div><h1 class="h1" style="margin:0 auto">${esc(title)}</h1>${sub ? `<p class="lead" style="margin:24px auto 0">${esc(sub)}</p>` : ''}</div></section>`
 }
 
-function serviceCard(s: ServiceItem): string {
-  return `<div class="card"><div class="icon"><svg width="25" height="25" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-5.8 5.8a2.1 2.1 0 1 0 3 3l5.8-5.8a4 4 0 0 0 5.4-5.4l-2.4 2.4-3-3 2.4-2.4Z"/></svg></div><h3>${esc(s.name)}</h3><p>${esc(s.description)}</p></div>`
-}
-
-function contactSection({ phone, email, address, googleMapsUrl }: { phone: string; email: string; address: string; googleMapsUrl: string | null }): string {
-  // Only render if there is real contact data — never fabricate a "kontakt saknas" placeholder.
+function contactSection({ phone, email, address, googleMapsUrl, nc }: { phone: string; email: string; address: string; googleMapsUrl: string | null; nc: NicheConfig }): string {
   if (!phone && !email && !address) return ''
   const rows = [
     phone ? `<div class="contact-item"><strong>Telefon</strong><br><a href="tel:${attr(phone.replace(/\s+/g, ''))}">${esc(phone)}</a></div>` : '',
@@ -815,21 +1015,20 @@ function contactSection({ phone, email, address, googleMapsUrl }: { phone: strin
     address ? `<div class="contact-item"><strong>Adress</strong><br>${esc(address)}</div>` : '',
   ].filter(Boolean).join('')
   const hasValidMap = googleMapsUrl && /^https:\/\/www\.google\.[^\s"']+\/maps\/embed/i.test(googleMapsUrl)
-  // No map, no fake placeholder — use a single-column layout so nothing looks empty.
   const wrapClass = hasValidMap ? 'wrap contact' : 'wrap'
   const map = hasValidMap
     ? `<iframe class="map" src="${attr(googleMapsUrl!)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>`
     : ''
-  return `<section id="kontakt" class="section band"><div class="${wrapClass}"><div><div class="eyebrow">Kontakt</div><h2 class="h2">Ta nästa steg</h2><p class="lead">Boka service, fråga om felsökning eller beskriv vad bilen behöver hjälp med.</p><div class="contact-list" style="margin-top:24px">${rows}</div></div>${map}</div></section>`
+  return `<section id="kontakt" class="section band"><div class="${wrapClass}"><div><div class="eyebrow">Kontakt</div><h2 class="h2">${esc(nc.contactHeadline)}</h2><p class="lead">${esc(nc.contactSubline)}</p><div class="contact-list" style="margin-top:24px">${rows}</div></div>${map}</div></section>`
 }
 
-function footer(businessName: string, tagline: string | undefined, contact: { phone: string; email: string; address: string }): string {
+function footer(businessName: string, tagline: string | undefined, contact: { phone: string; email: string; address: string }, nc: NicheConfig): string {
   const contactRows = [contact.phone, contact.email, contact.address].filter(Boolean).map(esc).join('<br>')
   const hasContact = Boolean(contactRows)
   const cols = hasContact ? '1.5fr 1fr 1fr' : '1.5fr 1fr'
   const contactCol = hasContact ? `<div><div class="footer-title">Kontakt</div><p>${contactRows}</p></div>` : ''
   const navContact = hasContact ? `<br><a href="index.html#kontakt">Kontakt</a>` : ''
-  return `<footer><div class="wrap"><div class="footer-grid" style="grid-template-columns:${cols}"><div><div class="footer-title">${esc(businessName)}</div><p>${esc(tagline || 'Demo skapad för en modernare digital kundupplevelse.')}</p></div><div><div class="footer-title">Navigering</div><p><a href="index.html">Hem</a><br><a href="om-oss.html">Om oss</a><br><a href="tjanster.html">Tjänster</a>${navContact}</p></div>${contactCol}</div><p style="margin-top:42px;border-top:1px solid color-mix(in srgb,var(--text) 8%,transparent);padding-top:24px">© ${CURRENT_YEAR} ${esc(businessName)} — Demo skapad av Botlio</p></div></footer>`
+  return `<footer><div class="wrap"><div class="footer-grid" style="grid-template-columns:${cols}"><div><div class="footer-title">${esc(businessName)}</div><p>${esc(tagline || nc.footerTagline)}</p></div><div><div class="footer-title">Navigering</div><p><a href="index.html">Hem</a><br><a href="om-oss.html">${esc(nc.aboutPageTitle)}</a><br><a href="tjanster.html">Tjänster</a>${navContact}</p></div>${contactCol}</div><p style="margin-top:42px;border-top:1px solid color-mix(in srgb,var(--text) 8%,transparent);padding-top:24px">© ${CURRENT_YEAR} ${esc(businessName)} — Demo skapad av Botlio</p></div></footer>`
 }
 
 function cleanText(value: string): string {
@@ -872,7 +1071,6 @@ async function failOrRetry(supabase: any, id: string, attempts: number, msg: str
     }).eq('id', id)
   }
 }
-
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
