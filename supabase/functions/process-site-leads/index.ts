@@ -108,7 +108,7 @@ Deno.serve(async (req) => {
         const take = Math.min(GEN_PER_TICK, capacity)
         const { data: needsSite } = await supabase
           .from('site_leads')
-          .select('id, user_id, company_name, website, email, phone, address, category, rating, review_snippets, audit_reason, audit_details, feedback')
+          .select('id, user_id, company_name, website, email, phone, address, category, niche, rating, review_snippets, audit_reason, audit_details, feedback')
           .eq('status', 'needs_site')
           .not('website', 'is', null)
           .not('email', 'is', null)
