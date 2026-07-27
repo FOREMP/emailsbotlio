@@ -1002,6 +1002,7 @@ export type Database = {
           generated_site_id: string | null
           id: string
           last_email_sent_at: string | null
+          niche: string
           phone: string | null
           rating: number | null
           review_snippets: Json | null
@@ -1031,6 +1032,7 @@ export type Database = {
           generated_site_id?: string | null
           id?: string
           last_email_sent_at?: string | null
+          niche?: string
           phone?: string | null
           rating?: number | null
           review_snippets?: Json | null
@@ -1060,6 +1062,7 @@ export type Database = {
           generated_site_id?: string | null
           id?: string
           last_email_sent_at?: string | null
+          niche?: string
           phone?: string | null
           rating?: number | null
           review_snippets?: Json | null

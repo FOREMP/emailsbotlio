@@ -88,12 +88,18 @@ const STATUS_COLORS: Record<string, string> = {
   failed: "bg-red-500",
 };
 
+const NICHE_OPTIONS: { value: string; label: string }[] = [
+  { value: "auto_workshop", label: "Bilverkstad / mekaniker" },
+  { value: "hair_salon", label: "Frisörsalong" },
+];
+
 export default function SiteLeads() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [uploading, setUploading] = useState(false);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [parsed, setParsed] = useState<ParsedData | null>(null);
   const [mapping, setMapping] = useState<Record<string, ImportRole>>({});
+  const [niche, setNiche] = useState<string>("auto_workshop");
   const [progress, setProgress] = useState(0);
   const [editing, setEditing] = useState<Lead | null>(null);
   const [saving, setSaving] = useState(false);
@@ -139,7 +145,7 @@ export default function SiteLeads() {
       for (let i = 0; i < parsed.rows.length; i += BATCH_SIZE) {
         const rows = parsed.rows.slice(i, i + BATCH_SIZE).map((row) => slimRow(row, mapping));
         const { data, error } = await supabase.functions.invoke("import-site-leads", {
-          body: { rows, mapping },
+          body: { rows, mapping, niche },
         });
         if (error) {
           totals.failed_batches += 1;
@@ -258,6 +264,23 @@ export default function SiteLeads() {
             {uploading && <span className="text-muted-foreground">Importerar {progress}/{parsed.rows.length}</span>}
             <Button variant="ghost" size="sm" className="ml-auto" disabled={uploading} onClick={() => setParsed(null)}>Avbryt</Button>
           </div>
+
+          <div className="grid gap-1 max-w-sm">
+            <Label className="text-xs uppercase text-muted-foreground">Bransch / mall</Label>
+            <Select value={niche} onValueChange={setNiche} disabled={uploading}>
+              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {NICHE_OPTIONS.map((n) => (
+                  <SelectItem key={n.value} value={n.value}>{n.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Alla leads i denna fil taggas med denna bransch. AI:n använder taggen för att välja rätt hemsidemall.
+            </p>
+          </div>
+
+
 
           <div className="grid gap-3 md:grid-cols-2">
             {parsed.headers.map((header) => (
