@@ -361,8 +361,14 @@ ABSOLUTA REGLER:
   },
 }
 
-function nicheFromTemplate(template: string | null | undefined): NicheConfig {
-  if (template === 'hair_salon_v1') return NICHE_CONFIG.hair_salon
+function nicheFromTemplate(template: string | null | undefined, hints: Array<unknown> = []): NicheConfig {
+  const joined = hints
+    .filter((v) => v != null)
+    .map((v) => String(v).toLowerCase())
+    .join(' ')
+  const looksSalon = /hair|hairdresser|hair\s*salon|fris[öo]r|frisörsalong|salong|barber|barbershop|fade|klipp|beauty|sk[öo]nhet|nail|hudv[åa]rd|spa|lashes|brow|laser hair/.test(joined)
+
+  if (template === 'hair_salon_v1' || looksSalon) return NICHE_CONFIG.hair_salon
   return NICHE_CONFIG.auto_workshop
 }
 
@@ -417,12 +423,11 @@ Deno.serve(async (req) => {
       .update({ status: 'processing', updated_at: new Date().toISOString() })
       .eq('id', generated_site_id)
       .eq('status', 'queued')
-      .select('id, contact_id, source_url, scraped_content, template, attempts')
+      .select('id, contact_id, site_lead_id, source_url, scraped_content, template, attempts')
       .maybeSingle()
     if (claimErr || !claimed) return json({ ok: true, message: 'lost race, another worker claimed it' })
 
     const site = claimed as any
-    const nc = nicheFromTemplate(site.template)
 
     const nextAttempts = (site.attempts ?? 0) + 1
     await supabase.from('generated_sites').update({ attempts: nextAttempts }).eq('id', generated_site_id)
@@ -448,8 +453,38 @@ Deno.serve(async (req) => {
       .eq('id', site.contact_id)
       .single()
 
-    const branding = scraped.branding ?? {}
     const cf = (contact?.custom_fields ?? {}) as Record<string, unknown>
+    const siteLeadId = typeof site.site_lead_id === 'string'
+      ? site.site_lead_id
+      : typeof cf.__site_lead_id === 'string'
+        ? cf.__site_lead_id
+        : null
+    const { data: siteLead } = siteLeadId
+      ? await supabase
+        .from('site_leads')
+        .select('niche, category, company_name')
+        .eq('id', siteLeadId)
+        .maybeSingle()
+      : { data: null }
+
+    const nc = nicheFromTemplate(site.template, [
+      siteLead?.niche,
+      siteLead?.category,
+      siteLead?.company_name,
+      cf.niche,
+      cf.category,
+      cf.company,
+      contact?.company,
+    ])
+
+    if (site.template !== `${nc.key === 'hair_salon' ? 'hair_salon' : 'auto_workshop'}_v1`) {
+      await supabase
+        .from('generated_sites')
+        .update({ template: `${nc.key === 'hair_salon' ? 'hair_salon' : 'auto_workshop'}_v1` })
+        .eq('id', generated_site_id)
+    }
+
+    const branding = scraped.branding ?? {}
 
 
     // Full brand palette (fall back to premium dark when missing)
