@@ -443,6 +443,7 @@ async function startGeneration(
           reviews: (lead.review_snippets ?? []).slice(0, 3),
           audit_reason: lead.audit_reason ?? null,
           audit_details: lead.audit_details ?? null,
+        niche,
         },
       })
       .select('id')
@@ -453,10 +454,11 @@ async function startGeneration(
 
   // Create the generated_sites row wired to the lead. Template is picked
   // from the lead's niche tag so the AI knows which layout to build.
+  const niche = inferLeadNiche(lead)
   const nicheTemplate = ({
     auto_workshop: 'auto_workshop_v1',
     hair_salon: 'hair_salon_v1',
-  } as Record<string, string>)[(lead as any).niche] ?? 'default'
+  } as Record<string, string>)[niche]
   const { data: gs, error: gsErr } = await supabase
     .from('generated_sites')
     .insert({
@@ -488,6 +490,7 @@ async function startGeneration(
         audit_reason: lead.audit_reason ?? null,
         audit_details: lead.audit_details ?? null,
         regen_feedback: lead.feedback ?? null,
+        niche,
       },
     })
     .eq('id', contactId)
@@ -525,6 +528,18 @@ function normaliseUrl(raw: string): string {
   if (!s) return ''
   if (/^https?:\/\//i.test(s)) return s
   return `https://${s.replace(/^\/+/, '')}`
+}
+
+function inferLeadNiche(lead: any): 'auto_workshop' | 'hair_salon' {
+  if (lead?.niche === 'hair_salon') return 'hair_salon'
+  const text = [lead?.company_name, lead?.category, lead?.niche]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+  if (/hair|hairdresser|hair\s*salon|fris[öo]r|frisörsalong|salong|barber|barbershop|fade|klipp|beauty|sk[öo]nhet|nail|hudv[åa]rd|spa|lashes|brow|laser hair/.test(text)) {
+    return 'hair_salon'
+  }
+  return 'auto_workshop'
 }
 
 function json(body: unknown, status = 200): Response {
