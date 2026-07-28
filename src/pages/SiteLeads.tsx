@@ -99,7 +99,7 @@ export default function SiteLeads() {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [parsed, setParsed] = useState<ParsedData | null>(null);
   const [mapping, setMapping] = useState<Record<string, ImportRole>>({});
-  const [niche, setNiche] = useState<string>("auto_workshop");
+  const [niche, setNiche] = useState<string>("");
   const [progress, setProgress] = useState(0);
   const [editing, setEditing] = useState<Lead | null>(null);
   const [saving, setSaving] = useState(false);
