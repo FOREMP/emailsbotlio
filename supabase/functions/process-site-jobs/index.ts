@@ -231,17 +231,23 @@ ABSOLUTA REGLER:
     serviceLabel: 'Behandling',
     useLeadImages: false, // Skip lead-scraped images — too much risk of broken/blocked thumbnails
     stockImages: [
-      // Curated Unsplash — salon interiors, hairdressing, styling
-      'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=1600&q=80',
-      'https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?w=1600&q=80',
-      'https://images.unsplash.com/photo-1600948836101-f9ffda59d250?w=1600&q=80',
-      'https://images.unsplash.com/photo-1580618672591-eb180b1a973f?w=1600&q=80',
-      'https://images.unsplash.com/photo-1595476108010-b4d1f102b1b1?w=1200&q=80',
-      'https://images.unsplash.com/photo-1562322140-8baeececf3df?w=1200&q=80',
-      'https://images.unsplash.com/photo-1519415943484-9fa1873496d4?w=1200&q=80',
-      'https://images.unsplash.com/photo-1633681926035-ec1ac984418a?w=1200&q=80',
-      'https://images.unsplash.com/photo-1521590832167-7bcbfaa6381f?w=1200&q=80',
-      'https://images.unsplash.com/photo-1596178065887-1198b6148b2b?w=1200&q=80',
+      // Curated Unsplash — salon interiors first (used as hero via img(0)),
+      // then styling / color / product / portrait shots for gallery slots.
+      // All 1600w, q=80. Ordered interior-first so hero picks look editorial.
+      'https://images.unsplash.com/photo-1633681926022-84c23e8cb2d6?w=1600&q=80', // wide bright salon interior
+      'https://images.unsplash.com/photo-1521490878406-b748d926a1d3?w=1600&q=80', // modern salon chairs
+      'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=1600&q=80',    // stylist at chair
+      'https://images.unsplash.com/photo-1610384104075-e05c8cf200c3?w=1600&q=80', // salon washing station
+      'https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?w=1600&q=80', // color / balayage
+      'https://images.unsplash.com/photo-1580618672591-eb180b1a973f?w=1600&q=80', // scissors + hands
+      'https://images.unsplash.com/photo-1595475207225-428b62bda831?w=1600&q=80', // hairdresser detail
+      'https://images.unsplash.com/photo-1519415943484-9fa1873496d4?w=1600&q=80', // blow-dry
+      'https://images.unsplash.com/photo-1562322140-8baeececf3df?w=1600&q=80',    // product flatlay
+      'https://images.unsplash.com/photo-1596178065887-1198b6148b2b?w=1600&q=80', // styled portrait
+      'https://images.unsplash.com/photo-1616394584738-fc6e612e71b9?w=1600&q=80', // hair color close-up
+      'https://images.unsplash.com/photo-1503951914875-452162b0f3f1?w=1600&q=80', // barber-style cut portrait
+      'https://images.unsplash.com/photo-1521590832167-7bcbfaa6381f?w=1600&q=80', // combs / tools
+      'https://images.unsplash.com/photo-1633681926035-ec1ac984418a?w=1600&q=80', // modern interior detail
     ],
     heroLine1Default: (city) => `Din frisör${city ? ' i ' + city : ''}.`,
     heroLine2Default: 'Vi lyfter håret — och känslan när du går härifrån.',

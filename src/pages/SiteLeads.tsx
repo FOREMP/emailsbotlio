@@ -99,7 +99,7 @@ export default function SiteLeads() {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [parsed, setParsed] = useState<ParsedData | null>(null);
   const [mapping, setMapping] = useState<Record<string, ImportRole>>({});
-  const [niche, setNiche] = useState<string>("auto_workshop");
+  const [niche, setNiche] = useState<string>("");
   const [progress, setProgress] = useState(0);
   const [editing, setEditing] = useState<Lead | null>(null);
   const [saving, setSaving] = useState(false);
@@ -133,6 +133,10 @@ export default function SiteLeads() {
 
   const startImport = async () => {
     if (!parsed) return;
+    if (!niche) {
+      toast({ title: "Välj bransch", description: "Välj bransch/mall innan import — annars vet AI:n inte vilken hemsidemall som ska användas.", variant: "destructive" });
+      return;
+    }
     if (!Object.values(mapping).includes("company_name")) {
       toast({ title: "Välj företagskolumn", description: "Mappa en kolumn till Företag innan import.", variant: "destructive" });
       return;
@@ -268,15 +272,17 @@ export default function SiteLeads() {
           <div className="grid gap-1 max-w-sm">
             <Label className="text-xs uppercase text-muted-foreground">Bransch / mall</Label>
             <Select value={niche} onValueChange={setNiche} disabled={uploading}>
-              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-9"><SelectValue placeholder="Välj bransch…" /></SelectTrigger>
               <SelectContent>
                 {NICHE_OPTIONS.map((n) => (
                   <SelectItem key={n.value} value={n.value}>{n.label}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">
-              Alla leads i denna fil taggas med denna bransch. AI:n använder taggen för att välja rätt hemsidemall.
+            <p className={`text-xs ${niche ? 'text-muted-foreground' : 'text-destructive'}`}>
+              {niche
+                ? 'Alla leads i denna fil taggas med denna bransch. AI:n använder taggen för att välja rätt hemsidemall.'
+                : 'Välj bransch — annars vet AI:n inte vilken mall som ska användas.'}
             </p>
           </div>
 
@@ -304,7 +310,7 @@ export default function SiteLeads() {
 
           <div className="flex justify-end gap-2">
             <Button variant="outline" disabled={uploading} onClick={() => setMapping(autoDetectMapping(parsed.headers))}>Auto-mappa</Button>
-            <Button disabled={uploading} onClick={startImport}>{uploading ? "Importerar..." : `Importera ${parsed.rows.length} leads`}</Button>
+            <Button disabled={uploading || !niche} onClick={startImport}>{uploading ? "Importerar..." : `Importera ${parsed.rows.length} leads`}</Button>
           </div>
         </Card>
       )}
