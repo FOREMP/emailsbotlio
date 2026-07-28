@@ -310,7 +310,7 @@ export default function SiteLeads() {
 
           <div className="flex justify-end gap-2">
             <Button variant="outline" disabled={uploading} onClick={() => setMapping(autoDetectMapping(parsed.headers))}>Auto-mappa</Button>
-            <Button disabled={uploading} onClick={startImport}>{uploading ? "Importerar..." : `Importera ${parsed.rows.length} leads`}</Button>
+            <Button disabled={uploading || !niche} onClick={startImport}>{uploading ? "Importerar..." : `Importera ${parsed.rows.length} leads`}</Button>
           </div>
         </Card>
       )}
