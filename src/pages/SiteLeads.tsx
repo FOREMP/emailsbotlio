@@ -272,15 +272,17 @@ export default function SiteLeads() {
           <div className="grid gap-1 max-w-sm">
             <Label className="text-xs uppercase text-muted-foreground">Bransch / mall</Label>
             <Select value={niche} onValueChange={setNiche} disabled={uploading}>
-              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-9"><SelectValue placeholder="Välj bransch…" /></SelectTrigger>
               <SelectContent>
                 {NICHE_OPTIONS.map((n) => (
                   <SelectItem key={n.value} value={n.value}>{n.label}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">
-              Alla leads i denna fil taggas med denna bransch. AI:n använder taggen för att välja rätt hemsidemall.
+            <p className={`text-xs ${niche ? 'text-muted-foreground' : 'text-destructive'}`}>
+              {niche
+                ? 'Alla leads i denna fil taggas med denna bransch. AI:n använder taggen för att välja rätt hemsidemall.'
+                : 'Välj bransch — annars vet AI:n inte vilken mall som ska användas.'}
             </p>
           </div>
 
