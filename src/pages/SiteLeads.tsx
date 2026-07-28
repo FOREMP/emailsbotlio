@@ -133,6 +133,10 @@ export default function SiteLeads() {
 
   const startImport = async () => {
     if (!parsed) return;
+    if (!niche) {
+      toast({ title: "Välj bransch", description: "Välj bransch/mall innan import — annars vet AI:n inte vilken hemsidemall som ska användas.", variant: "destructive" });
+      return;
+    }
     if (!Object.values(mapping).includes("company_name")) {
       toast({ title: "Välj företagskolumn", description: "Mappa en kolumn till Företag innan import.", variant: "destructive" });
       return;
