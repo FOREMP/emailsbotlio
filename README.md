@@ -12,8 +12,6 @@ This project was built with [Lovable](https://lovable.dev).
 
 **Live app**: https://emailsbotlio.lovable.app
 
-## Build with Lovable
-
 Continue developing this project in the [Lovable editor](https://lovable.dev/projects/d6bf7a7f-b789-4c79-a79c-982fa80de230).
 
 - **Ship faster**: describe what you want to build and Lovable handles the code.
