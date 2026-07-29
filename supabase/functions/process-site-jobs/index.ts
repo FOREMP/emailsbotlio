@@ -449,7 +449,7 @@ Deno.serve(async (req) => {
 
     const { data: contact } = await supabase
       .from('contacts')
-      .select('first_name, last_name, email, company, custom_fields')
+      .select('first_name, last_name, email, custom_fields')
       .eq('id', site.contact_id)
       .single()
 
@@ -474,7 +474,6 @@ Deno.serve(async (req) => {
       cf.niche,
       cf.category,
       cf.company,
-      contact?.company,
     ])
 
     if (site.template !== `${nc.key === 'hair_salon' ? 'hair_salon' : 'auto_workshop'}_v1`) {
@@ -529,7 +528,7 @@ Deno.serve(async (req) => {
     const emailFromCf = cfLookup([/^email/, /epost/, /^mail/])
 
     const facts = {
-      business_name: (cf.company ?? contact?.company ?? pages.home?.title ?? scraped.title ?? '').toString().trim() || null,
+      business_name: (cf.company ?? siteLead?.company_name ?? pages.home?.title ?? scraped.title ?? '').toString().trim() || null,
       phone: phoneFromCf,
       address: addressFromCf,
       city: cityFromCf,
