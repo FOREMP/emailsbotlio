@@ -231,9 +231,9 @@ ABSOLUTA REGLER:
     serviceLabel: 'Behandling',
     useLeadImages: false, // Skip lead-scraped images — too much risk of broken/blocked thumbnails
     stockImages: [
-      // Curated Unsplash — salon interiors first (used as hero via img(0)),
-      // then styling / color / product / portrait shots for gallery slots.
-      // All 1600w, q=80. Ordered interior-first so hero picks look editorial.
+      // Curated Unsplash — premium salon interiors first (used as hero via img(0)),
+      // then styling / color / editorial beauty shots for gallery slots.
+      // Deliberately avoid barber / workshop-coded imagery.
       'https://images.unsplash.com/photo-1633681926022-84c23e8cb2d6?w=1600&q=80', // wide bright salon interior
       'https://images.unsplash.com/photo-1521490878406-b748d926a1d3?w=1600&q=80', // modern salon chairs
       'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=1600&q=80',    // stylist at chair
@@ -245,8 +245,8 @@ ABSOLUTA REGLER:
       'https://images.unsplash.com/photo-1562322140-8baeececf3df?w=1600&q=80',    // product flatlay
       'https://images.unsplash.com/photo-1596178065887-1198b6148b2b?w=1600&q=80', // styled portrait
       'https://images.unsplash.com/photo-1616394584738-fc6e612e71b9?w=1600&q=80', // hair color close-up
-      'https://images.unsplash.com/photo-1503951914875-452162b0f3f1?w=1600&q=80', // barber-style cut portrait
-      'https://images.unsplash.com/photo-1521590832167-7bcbfaa6381f?w=1600&q=80', // combs / tools
+      'https://images.unsplash.com/photo-1515377905703-c4788e51af15?w=1600&q=80', // soft beauty portrait
+      'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=1600&q=80', // premium editorial portrait
       'https://images.unsplash.com/photo-1633681926035-ec1ac984418a?w=1600&q=80', // modern interior detail
     ],
     heroLine1Default: (city) => `Personligt hårhantverk${city ? ' i ' + city : ''}.`,
@@ -349,7 +349,8 @@ ABSOLUTA REGLER:
 7. heroLine1 + heroLine2 = premium headline tillsammans.
 8. Undvik generiska ord som "professionell", "hög kvalitet" och "marknadsledande" om de inte följs av konkret mening.
 9. Skriv hellre tät, egen copy än långa stycken som bara fyller ut.
-10. Max 4500 tokens totalt.`,
+10. Undvik barber-, barbershop- och maskulint clipper-språk om inte källdatan tydligt visar att det är just den typen av salong.
+11. Max 4500 tokens totalt.`,
     polishSystemPrompt: `Du är en senior svensk copywriter för premium frisörsalongssajter.
 
 Skriv om ALLA textfält i det medskickade JSON-objektet till naturlig, flytande svenska av hög kvalitet. Ton: modernt, självsäkert, editoriellt, taktilt.
@@ -513,7 +514,7 @@ Deno.serve(async (req) => {
           textPrimary: '#f1f5f9',
           textSecondary: '#94a3b8',
         }
-    const brandPalette = {
+    const brandPalette = buildAccessiblePalette({
       primary: bc.primary || branding.primaryColor || paletteDefaults.primary,
       secondary: bc.secondary || bc.accent || paletteDefaults.secondary,
       accent: bc.accent || bc.secondary || paletteDefaults.accent,
@@ -521,7 +522,7 @@ Deno.serve(async (req) => {
       surface: bc.surface || bc.card || paletteDefaults.surface,
       textPrimary: bc.textPrimary || bc.text || paletteDefaults.textPrimary,
       textSecondary: bc.textSecondary || bc.muted || paletteDefaults.textSecondary,
-    }
+    }, paletteDefaults)
     const brandFonts = Array.isArray(branding.fonts)
       ? branding.fonts.map((f: any) => (typeof f === 'string' ? f : f?.family)).filter(Boolean).slice(0, 4)
       : []
@@ -830,7 +831,7 @@ function buildSiteFiles({
     .theme-salon .brand{font-family:var(--font-display);font-size:28px;font-weight:600;letter-spacing:.01em}
     .theme-salon .links a{border-radius:999px;font-weight:600}
     .theme-salon .links a.active,.theme-salon .links a:hover{background:color-mix(in srgb,var(--primary) 10%,transparent)}
-    .theme-salon .nav-cta{color:#fff!important;border-radius:999px;box-shadow:0 14px 38px color-mix(in srgb,var(--primary) 24%,transparent)}
+    .theme-salon .nav-cta{color:var(--on-primary)!important;border-radius:999px;box-shadow:0 14px 38px color-mix(in srgb,var(--primary) 24%,transparent)}
     .theme-salon .section{padding:84px 28px}
     .theme-salon .section-sm{padding:64px 28px}
     .theme-salon .eyebrow{border:0;background:transparent;padding:0;border-radius:0;letter-spacing:.28em;margin-bottom:18px}
@@ -841,7 +842,7 @@ function buildSiteFiles({
     .theme-salon .lead{font-size:17px;line-height:1.8;max-width:60ch}
     .theme-salon .lead.lg{font-size:18px}
     .theme-salon .btn{border-radius:999px;padding:15px 27px}
-    .theme-salon .btn.primary{color:#fff;box-shadow:0 14px 34px color-mix(in srgb,var(--primary) 22%,transparent)}
+    .theme-salon .btn.primary{color:var(--on-primary);box-shadow:0 14px 34px color-mix(in srgb,var(--primary) 22%,transparent)}
     .theme-salon .hero{min-height:72vh;padding:74px 28px 48px}
     .theme-salon .hero>img{filter:brightness(.84) saturate(.74)}
     .theme-salon .hero:after{background:linear-gradient(90deg,color-mix(in srgb,var(--bg) 96%,transparent) 0%,color-mix(in srgb,var(--bg) 84%,transparent) 42%,color-mix(in srgb,var(--bg) 18%,transparent) 100%)}
@@ -867,10 +868,10 @@ function buildSiteFiles({
     .theme-salon .scenario img{height:250px}
     .theme-salon .scenario .tag{margin-bottom:12px}
     .theme-salon .diff{border-left:0;border-top:2px solid var(--primary);border-radius:28px;background:color-mix(in srgb,var(--surface) 92%,var(--bg))}
-    .theme-salon .cta-band{background:linear-gradient(135deg,var(--primary),color-mix(in srgb,var(--primary) 70%,var(--accent)));color:#fff;border-radius:32px}
-    .theme-salon .cta-band h2{color:#fff}
-    .theme-salon .cta-band .lead{color:rgba(255,255,255,.86);max-width:none}
-    .theme-salon .cta-band .btn.primary{background:#fff;color:var(--primary);border-color:#fff}
+    .theme-salon .cta-band{background:linear-gradient(135deg,var(--primary),color-mix(in srgb,var(--primary) 70%,var(--accent)));color:var(--on-primary);border-radius:32px}
+    .theme-salon .cta-band h2{color:var(--on-primary)}
+    .theme-salon .cta-band .lead{color:var(--on-primary-muted);max-width:none}
+    .theme-salon .cta-band .btn.primary{background:var(--surface);color:var(--text);border-color:var(--surface)}
     .theme-salon .footer-title{text-transform:none;letter-spacing:.06em}
     .theme-salon footer{background:color-mix(in srgb,var(--surface) 94%,var(--bg))}
     .theme-salon .salon-panel-label{font-size:11px;font-weight:800;letter-spacing:.18em;text-transform:uppercase;color:var(--primary)}
@@ -913,10 +914,10 @@ function buildSiteFiles({
     .theme-salon .salon-diff-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin-top:40px}
     .theme-salon .salon-cta-grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:24px;align-items:stretch;text-align:left}
     .theme-salon .salon-cta-grid .btns{justify-content:flex-start}
-    .theme-salon .salon-cta-card{padding:24px;border-radius:24px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.18)}
-    .theme-salon .salon-cta-card .salon-contact-line{border-top-color:rgba(255,255,255,.18)}
-    .theme-salon .salon-cta-card .salon-contact-line span{color:rgba(255,255,255,.74)}
-    .theme-salon .salon-cta-card .salon-contact-line strong{color:#fff}
+    .theme-salon .salon-cta-card{padding:24px;border-radius:24px;background:color-mix(in srgb,var(--on-primary) 10%,transparent);border:1px solid color-mix(in srgb,var(--on-primary) 18%,transparent)}
+    .theme-salon .salon-cta-card .salon-contact-line{border-top-color:color-mix(in srgb,var(--on-primary) 16%,transparent)}
+    .theme-salon .salon-cta-card .salon-contact-line span{color:var(--on-primary-muted)}
+    .theme-salon .salon-cta-card .salon-contact-line strong{color:var(--on-primary)}
     @media(max-width:1100px){
       .theme-salon .hero-inner,.theme-salon .salon-manifesto-grid,.theme-salon .salon-section-intro,.theme-salon .salon-cta-grid{grid-template-columns:1fr}
       .theme-salon .salon-gallery,.theme-salon .salon-copy-stack,.theme-salon .salon-value-grid,.theme-salon .salon-path-grid,.theme-salon .salon-step-grid,.theme-salon .salon-diff-grid{grid-template-columns:1fr 1fr}
@@ -926,6 +927,10 @@ function buildSiteFiles({
       .theme-salon .section,.theme-salon .section-sm{padding:64px 20px}
       .theme-salon .hero{padding:112px 20px 40px}
       .theme-salon .page-hero{padding:108px 20px 56px}
+      .theme-salon .brand{font-size:22px}
+      .theme-salon .salon-hero-panel,.theme-salon .salon-side-note,.theme-salon .salon-step,.theme-salon .salon-path-card,.theme-salon .salon-copy-card,.theme-salon .salon-value,.theme-salon .salon-cta-card{padding:20px}
+      .theme-salon .h1{font-size:clamp(36px,11vw,56px)}
+      .theme-salon .lead,.theme-salon .lead.lg{font-size:16px;line-height:1.7}
       .theme-salon .salon-gallery,.theme-salon .salon-copy-stack,.theme-salon .salon-value-grid,.theme-salon .salon-path-grid,.theme-salon .salon-step-grid,.theme-salon .salon-diff-grid{grid-template-columns:1fr}
       .theme-salon .service-row{padding:44px 0}
       .theme-salon .service-row img,.theme-salon .photo{height:320px}
@@ -943,15 +948,18 @@ function buildSiteFiles({
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=${encodeURIComponent(displayFont).replace(/%20/g, '+')}:wght@500;600;700;800;900&family=Inter:wght@400;500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    :root{--primary:${cssColor(brandPalette.primary,'#f97316')};--secondary:${cssColor(brandPalette.secondary,'#0ea5e9')};--accent:${cssColor(brandPalette.accent,'#f59e0b')};--bg:${cssColor(brandPalette.background,'#0a0e1a')};--surface:${cssColor(brandPalette.surface,'#131a2b')};--surface-2:color-mix(in srgb,var(--surface) 70%,var(--bg));--text:${cssColor(brandPalette.textPrimary,'#f1f5f9')};--text-muted:${cssColor(brandPalette.textSecondary,'#94a3b8')};--border:color-mix(in srgb,var(--text) 10%,transparent);--font-display:'${cssString(displayFont)}',Space Grotesk,sans-serif;--font-body:${cssString(bodyFont)},Inter,sans-serif}
-    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font-body);line-height:1.6;-webkit-font-smoothing:antialiased}a{color:inherit}img{max-width:100%;display:block}
+    :root{--primary:${cssColor(brandPalette.primary,'#f97316')};--secondary:${cssColor(brandPalette.secondary,'#0ea5e9')};--accent:${cssColor(brandPalette.accent,'#f59e0b')};--bg:${cssColor(brandPalette.background,'#0a0e1a')};--surface:${cssColor(brandPalette.surface,'#131a2b')};--surface-2:color-mix(in srgb,var(--surface) 70%,var(--bg));--text:${cssColor(brandPalette.textPrimary,'#f1f5f9')};--text-muted:${cssColor(brandPalette.textSecondary,'#94a3b8')};--on-primary:${cssColor(brandPalette.onPrimary,'#ffffff')};--on-primary-muted:${cssColor(brandPalette.onPrimaryMuted,'rgba(255,255,255,.84)')};--border:color-mix(in srgb,var(--text) 10%,transparent);--font-display:'${cssString(displayFont)}',Space Grotesk,sans-serif;--font-body:${cssString(bodyFont)},Inter,sans-serif}
+    *{box-sizing:border-box}html{scroll-behavior:smooth;overflow-x:hidden}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font-body);line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden}body.menu-open{overflow:hidden}a{color:inherit}img{max-width:100%;display:block}
     .nav{position:sticky;top:0;z-index:50;background:color-mix(in srgb,var(--bg) 85%,transparent);backdrop-filter:blur(20px);border-bottom:1px solid var(--border)}
-    .nav-inner{max-width:1280px;margin:0 auto;padding:18px 28px;display:flex;align-items:center;justify-content:space-between;gap:24px}
+    .nav-inner{max-width:1280px;margin:0 auto;padding:18px 28px;display:flex;align-items:center;justify-content:space-between;gap:24px;position:relative}
     .brand{font-family:var(--font-display);font-size:20px;font-weight:800;letter-spacing:-.02em;text-decoration:none}
-    .links{display:flex;gap:4px;align-items:center}
+    .nav-toggle{display:none;align-items:center;justify-content:center;gap:4px;width:46px;height:46px;border:1px solid var(--border);border-radius:999px;background:color-mix(in srgb,var(--surface) 88%,transparent);color:var(--text);cursor:pointer;flex-direction:column}
+    .nav-toggle span{display:block;width:18px;height:2px;border-radius:999px;background:currentColor;transition:transform .2s ease,opacity .2s ease}
+    .nav-menu{display:flex;align-items:center;gap:16px;min-width:0}
+    .links{display:flex;gap:4px;align-items:center;min-width:0;flex-wrap:wrap}
     .links a{padding:10px 14px;border-radius:10px;text-decoration:none;color:var(--text-muted);font-weight:600;font-size:14px;transition:.2s}
     .links a.active,.links a:hover{background:color-mix(in srgb,var(--primary) 14%,transparent);color:var(--text)}
-    .nav-cta{background:var(--primary)!important;color:var(--bg)!important;padding:11px 18px!important;box-shadow:0 8px 28px color-mix(in srgb,var(--primary) 40%,transparent)}
+    .nav-cta{background:var(--primary)!important;color:var(--on-primary)!important;padding:11px 18px!important;box-shadow:0 8px 28px color-mix(in srgb,var(--primary) 40%,transparent);text-decoration:none;border-radius:14px;font-weight:700;white-space:nowrap}
     .section{padding:110px 28px;position:relative}
     .section-sm{padding:80px 28px}
     .wrap{max-width:1280px;margin:0 auto}
@@ -967,7 +975,7 @@ function buildSiteFiles({
     .btns{display:flex;gap:14px;flex-wrap:wrap;margin-top:36px}
     .btn{display:inline-flex;align-items:center;gap:10px;padding:16px 26px;border-radius:14px;text-decoration:none;font-weight:700;font-size:15px;border:1px solid var(--border);background:color-mix(in srgb,var(--text) 6%,transparent);transition:.2s}
     .btn:hover{transform:translateY(-1px)}
-    .btn.primary{background:var(--primary);color:var(--bg);border-color:var(--primary);box-shadow:0 16px 40px color-mix(in srgb,var(--primary) 34%,transparent)}
+    .btn.primary{background:var(--primary);color:var(--on-primary);border-color:var(--primary);box-shadow:0 16px 40px color-mix(in srgb,var(--primary) 34%,transparent)}
     .btn.ghost{background:transparent}
     .arrow{display:inline-flex;align-items:center;gap:8px;color:var(--primary);font-weight:700;text-decoration:none;font-size:15px;margin-top:16px}
     .arrow:after{content:"→";transition:.2s}
@@ -1020,11 +1028,11 @@ function buildSiteFiles({
     .diff{padding:32px;border-left:3px solid var(--primary);background:color-mix(in srgb,var(--surface) 60%,transparent);border-radius:0 16px 16px 0}
     .diff h3{font-family:var(--font-display);font-size:20px;font-weight:700;margin:0 0 12px}
     .diff p{margin:0;color:var(--text-muted);font-size:15px;line-height:1.65}
-    .cta-band{background:linear-gradient(135deg,var(--primary),color-mix(in srgb,var(--primary) 60%,var(--accent)));color:var(--bg);text-align:center;padding:100px 28px;border-radius:28px;margin:40px auto;max-width:1280px}
-    .cta-band h2{color:var(--bg);margin:0 auto;max-width:800px}
-    .cta-band .lead{color:color-mix(in srgb,var(--bg) 78%,var(--primary));margin:20px auto 0;font-size:19px}
-    .cta-band .btn{border-color:var(--bg)}
-    .cta-band .btn.primary{background:var(--bg);color:var(--primary);border-color:var(--bg);box-shadow:0 20px 50px rgba(0,0,0,.3)}
+    .cta-band{background:linear-gradient(135deg,var(--primary),color-mix(in srgb,var(--primary) 60%,var(--accent)));color:var(--on-primary);text-align:center;padding:100px 28px;border-radius:28px;margin:40px auto;max-width:1280px}
+    .cta-band h2{color:var(--on-primary);margin:0 auto;max-width:800px}
+    .cta-band .lead{color:var(--on-primary-muted);margin:20px auto 0;font-size:19px}
+    .cta-band .btn{border-color:color-mix(in srgb,var(--on-primary) 26%,transparent)}
+    .cta-band .btn.primary{background:var(--bg);color:var(--text);border-color:var(--bg);box-shadow:0 20px 50px rgba(0,0,0,.3)}
     .cta-band .btns{justify-content:center;margin-top:36px}
     .faq{border-top:1px solid var(--border);padding:28px 0}
     .faq summary{cursor:pointer;list-style:none;font-family:var(--font-display);font-size:20px;font-weight:700;display:flex;justify-content:space-between;align-items:center;gap:20px}
@@ -1041,15 +1049,18 @@ function buildSiteFiles({
     .contact-list{display:grid;gap:14px;margin-top:28px}
     .contact-item{padding:22px 24px;background:var(--surface);border:1px solid var(--border);border-radius:16px}
     .contact-item strong{display:block;font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--primary);margin-bottom:6px}
-    .contact-item a{color:var(--text);font-weight:600;text-decoration:none;font-size:17px}
+    .contact-item a{color:var(--text);font-weight:600;text-decoration:none;font-size:17px;overflow-wrap:anywhere}
     .map{width:100%;height:420px;border:0;border-radius:20px}
     footer{padding:80px 28px 40px;border-top:1px solid var(--border);color:var(--text-muted);background:var(--surface-2)}
-    .footer-grid{display:grid;grid-template-columns:1.6fr 1fr 1fr;gap:56px}
+    .footer-grid{display:grid;gap:56px}
+    .footer-grid.cols-2{grid-template-columns:1.5fr 1fr}
+    .footer-grid.cols-3{grid-template-columns:1.5fr 1fr 1fr}
     .footer-title{font-family:var(--font-display);font-size:18px;font-weight:700;color:var(--text);margin-bottom:16px;text-transform:uppercase;letter-spacing:.12em}
+    .footer-grid p,.footer-grid a{overflow-wrap:anywhere}
     .footer-grid a{color:var(--text-muted);text-decoration:none;display:block;padding:4px 0;font-size:15px}
     .footer-grid a:hover{color:var(--primary)}
     .foot-bottom{margin-top:60px;padding-top:24px;border-top:1px solid var(--border);text-align:center;font-size:14px}
-    @media(max-width:900px){.nav-inner{padding:14px 20px}.links a{padding:8px 10px;font-size:13px}.section,.section-sm{padding:70px 20px}.hero{min-height:auto;padding:100px 20px}.g-4,.g-3,.g-2,.about-split,.diff-grid,.contact-grid,.footer-grid{grid-template-columns:1fr}.service-row{grid-template-columns:1fr;gap:32px;padding:60px 0}.service-row.rev>.s-media{order:0}.service-row img,.photo{height:340px}.cta-band{padding:70px 24px;border-radius:20px}}
+    @media(max-width:900px){.nav-inner{padding:14px 20px}.nav-toggle{display:inline-flex}.nav-menu{display:none;position:absolute;top:calc(100% + 10px);left:20px;right:20px;z-index:60;flex-direction:column;align-items:stretch;padding:16px;border-radius:22px;border:1px solid var(--border);background:color-mix(in srgb,var(--surface) 94%,var(--bg));box-shadow:0 24px 60px rgba(0,0,0,.22)}.nav.open .nav-menu{display:flex}.nav.open .nav-toggle span:nth-child(1){transform:translateY(6px) rotate(45deg)}.nav.open .nav-toggle span:nth-child(2){opacity:0}.nav.open .nav-toggle span:nth-child(3){transform:translateY(-6px) rotate(-45deg)}.links{flex-direction:column;align-items:stretch;gap:8px}.links a,.nav-cta{width:100%;justify-content:center}.links a{padding:12px 14px;font-size:15px}.section,.section-sm{padding:70px 20px}.hero{min-height:auto;padding:100px 20px}.g-4,.g-3,.g-2,.about-split,.diff-grid,.contact-grid,.footer-grid{grid-template-columns:1fr}.service-row{grid-template-columns:1fr;gap:32px;padding:60px 0}.service-row.rev>.s-media{order:0}.service-row img,.photo{height:340px}.cta-band{padding:70px 24px;border-radius:20px}footer{padding:64px 20px 34px}}
   </style>
 </head>
 <body class="${nc.key === 'hair_salon' ? 'theme-salon' : 'theme-auto'}">
@@ -1057,6 +1068,27 @@ function buildSiteFiles({
   ${nav(active, businessName, primaryHref, primaryLabel, hasContact)}
   ${body}
   ${footer(businessName, plan.tagline, { phone, email, address }, nc)}
+  <script>
+    (() => {
+      const nav = document.querySelector('.nav')
+      const button = document.querySelector('.nav-toggle')
+      const menu = document.querySelector('.nav-menu')
+      if (!nav || !button || !menu) return
+      const setOpen = (open) => {
+        nav.classList.toggle('open', open)
+        button.setAttribute('aria-expanded', open ? 'true' : 'false')
+        document.body.classList.toggle('menu-open', open)
+      }
+      button.addEventListener('click', () => setOpen(!nav.classList.contains('open')))
+      menu.querySelectorAll('a').forEach((link) => link.addEventListener('click', () => setOpen(false)))
+      document.addEventListener('click', (event) => {
+        if (!nav.contains(event.target)) setOpen(false)
+      })
+      window.addEventListener('resize', () => {
+        if (window.innerWidth > 900) setOpen(false)
+      })
+    })()
+  </script>
 </body>
 </html>`
 
@@ -1146,7 +1178,7 @@ function buildSiteFiles({
   ) : ''
 
   const finalCta = isSalon
-    ? `<section class="section-sm"><div class="wrap"><div class="cta-band salon-cta-grid"><div><div class="eyebrow" style="color:rgba(255,255,255,.75);background:transparent;border:0;padding:0">Nästa steg</div><h2 class="h2">${esc(plan.ctaTitle || nc.ctaTitleDefault)}</h2><p class="lead">${esc(plan.ctaText || nc.ctaTextDefault)}</p><div class="btns">${primaryCta}${bookCta}</div></div><div class="salon-cta-card"><div class="salon-panel-label" style="color:rgba(255,255,255,.78)">Direktkontakt</div>${salonQuickContactRows || trustBadges.map((b) => `<div class="salon-contact-line"><span>Det du får</span><strong>${esc(b)}</strong></div>`).join('')}</div></div></div></section>`
+    ? `<section class="section-sm"><div class="wrap"><div class="cta-band salon-cta-grid"><div><div class="eyebrow" style="color:var(--on-primary-muted);background:transparent;border:0;padding:0">Nästa steg</div><h2 class="h2">${esc(plan.ctaTitle || nc.ctaTitleDefault)}</h2><p class="lead">${esc(plan.ctaText || nc.ctaTextDefault)}</p><div class="btns">${primaryCta}${bookCta}</div></div><div class="salon-cta-card"><div class="salon-panel-label" style="color:var(--on-primary-muted)">Direktkontakt</div>${salonQuickContactRows || trustBadges.map((b) => `<div class="salon-contact-line"><span>Det du får</span><strong>${esc(b)}</strong></div>`).join('')}</div></div></div></section>`
     : `<section class="section-sm"><div class="cta-band"><div class="eyebrow" style="color:var(--bg);background:color-mix(in srgb,var(--bg) 20%,transparent);border-color:color-mix(in srgb,var(--bg) 30%,transparent)">Nästa steg</div><h2 class="h2">${esc(plan.ctaTitle || nc.ctaTitleDefault)}</h2><p class="lead">${esc(plan.ctaText || nc.ctaTextDefault)}</p><div class="btns">${primaryCta}${bookCta}</div></div></section>`
 
   const homeBody = isSalon
@@ -1261,7 +1293,7 @@ function nav(active: 'home' | 'about' | 'services', businessName: string, primar
   const cta = primaryHref && primaryLabel
     ? `<a class="nav-cta" href="${attr(primaryHref)}">${esc(primaryLabel)}</a>`
     : ''
-  return `<nav class="nav"><div class="nav-inner"><a class="brand" href="index.html">${esc(businessName)}</a><div class="links"><a class="${a('home')}" href="index.html">Hem</a><a class="${a('about')}" href="om-oss.html">Om oss</a><a class="${a('services')}" href="tjanster.html">Tjänster</a>${contactLink}${cta}</div></div></nav>`
+  return `<nav class="nav"><div class="nav-inner"><a class="brand" href="index.html">${esc(businessName)}</a><button class="nav-toggle" type="button" aria-label="Öppna meny" aria-controls="site-menu" aria-expanded="false"><span></span><span></span><span></span></button><div class="nav-menu" id="site-menu"><div class="links"><a class="${a('home')}" href="index.html">Hem</a><a class="${a('about')}" href="om-oss.html">Om oss</a><a class="${a('services')}" href="tjanster.html">Tjänster</a>${contactLink}</div>${cta}</div></div></nav>`
 }
 
 function pageHero(eyebrow: string, title: string, sub: string, image: string): string {
@@ -1286,10 +1318,10 @@ function contactSection({ phone, email, address, googleMapsUrl, nc }: { phone: s
 function footer(businessName: string, tagline: string | undefined, contact: { phone: string; email: string; address: string }, nc: NicheConfig): string {
   const contactRows = [contact.phone, contact.email, contact.address].filter(Boolean).map(esc).join('<br>')
   const hasContact = Boolean(contactRows)
-  const cols = hasContact ? '1.5fr 1fr 1fr' : '1.5fr 1fr'
+  const colsClass = hasContact ? 'cols-3' : 'cols-2'
   const contactCol = hasContact ? `<div><div class="footer-title">Kontakt</div><p>${contactRows}</p></div>` : ''
   const navContact = hasContact ? `<br><a href="index.html#kontakt">Kontakt</a>` : ''
-  return `<footer><div class="wrap"><div class="footer-grid" style="grid-template-columns:${cols}"><div><div class="footer-title">${esc(businessName)}</div><p>${esc(tagline || nc.footerTagline)}</p></div><div><div class="footer-title">Navigering</div><p><a href="index.html">Hem</a><br><a href="om-oss.html">${esc(nc.aboutPageTitle)}</a><br><a href="tjanster.html">Tjänster</a>${navContact}</p></div>${contactCol}</div><p style="margin-top:42px;border-top:1px solid color-mix(in srgb,var(--text) 8%,transparent);padding-top:24px">© ${CURRENT_YEAR} ${esc(businessName)} — Demo skapad av Botlio</p></div></footer>`
+  return `<footer><div class="wrap"><div class="footer-grid ${colsClass}"><div><div class="footer-title">${esc(businessName)}</div><p>${esc(tagline || nc.footerTagline)}</p></div><div><div class="footer-title">Navigering</div><p><a href="index.html">Hem</a><br><a href="om-oss.html">${esc(nc.aboutPageTitle)}</a><br><a href="tjanster.html">Tjänster</a>${navContact}</p></div>${contactCol}</div><p class="foot-bottom">© ${CURRENT_YEAR} ${esc(businessName)} — Demo skapad av Botlio</p></div></footer>`
 }
 
 function cleanText(value: string): string {
@@ -1316,6 +1348,101 @@ function cssString(value: string): string {
 function cssColor(value: string, fallback: string): string {
   const v = String(value || '').trim()
   return /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v) || /^rgb(a)?\([^)]+\)$/i.test(v) || /^[a-z]+$/i.test(v) ? v : fallback
+}
+
+function buildAccessiblePalette(
+  raw: Record<string, string>,
+  defaults: {
+    primary: string
+    secondary: string
+    accent: string
+    background: string
+    surface: string
+    textPrimary: string
+    textSecondary: string
+  },
+): Record<string, string> {
+  const background = cssColor(raw.background, defaults.background)
+  const surface = cssColor(raw.surface, defaults.surface)
+  const primary = cssColor(raw.primary, defaults.primary)
+  const secondary = cssColor(raw.secondary, defaults.secondary)
+  const accent = cssColor(raw.accent, defaults.accent)
+  const lightTheme = isLightColor(background)
+  const safePrimaryText = lightTheme ? '#2a1f1f' : '#ffffff'
+  const safeMutedText = lightTheme ? '#5f5350' : '#d8d0ca'
+
+  return {
+    primary,
+    secondary,
+    accent,
+    background,
+    surface,
+    textPrimary: ensureReadableText([background, surface], cssColor(raw.textPrimary, defaults.textPrimary), defaults.textPrimary, 6.2),
+    textSecondary: ensureReadableText([background, surface], cssColor(raw.textSecondary, defaults.textSecondary), safeMutedText, 4.5),
+    onPrimary: pickBestContrast(primary, '#ffffff', safePrimaryText),
+    onPrimaryMuted: pickBestContrast(primary, lightTheme ? '#f8efea' : '#f5ede8', lightTheme ? '#4d403d' : '#f5ede8'),
+  }
+}
+
+function ensureReadableText(backgrounds: string[], preferred: string, fallback: string, minRatio: number): string {
+  const valid = backgrounds.filter((color) => !!parseCssColor(color))
+  if (valid.length && valid.every((bg) => contrastRatio(bg, preferred) >= minRatio)) return preferred
+  if (valid.length && valid.every((bg) => contrastRatio(bg, fallback) >= minRatio)) return fallback
+  return pickBestContrast(valid[0] || '#ffffff', '#111111', '#ffffff')
+}
+
+function pickBestContrast(background: string, optionA: string, optionB: string): string {
+  return contrastRatio(background, optionA) >= contrastRatio(background, optionB) ? optionA : optionB
+}
+
+function isLightColor(color: string): boolean {
+  return relativeLuminance(color) > 0.56
+}
+
+function contrastRatio(a: string, b: string): number {
+  const lumA = relativeLuminance(a)
+  const lumB = relativeLuminance(b)
+  const light = Math.max(lumA, lumB)
+  const dark = Math.min(lumA, lumB)
+  return (light + 0.05) / (dark + 0.05)
+}
+
+function relativeLuminance(color: string): number {
+  const rgb = parseCssColor(color)
+  if (!rgb) return 0
+  const channels = [rgb.r, rgb.g, rgb.b].map((value) => {
+    const srgb = value / 255
+    return srgb <= 0.03928 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+}
+
+function parseCssColor(color: string): { r: number; g: number; b: number } | null {
+  const value = String(color || '').trim().toLowerCase()
+  if (/^#([0-9a-f]{3})$/i.test(value)) {
+    const hex = value.slice(1)
+    return {
+      r: parseInt(hex[0] + hex[0], 16),
+      g: parseInt(hex[1] + hex[1], 16),
+      b: parseInt(hex[2] + hex[2], 16),
+    }
+  }
+  if (/^#([0-9a-f]{6})$/i.test(value)) {
+    return {
+      r: parseInt(value.slice(1, 3), 16),
+      g: parseInt(value.slice(3, 5), 16),
+      b: parseInt(value.slice(5, 7), 16),
+    }
+  }
+  const rgb = value.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/i)
+  if (rgb) {
+    return {
+      r: Math.max(0, Math.min(255, Number(rgb[1]))),
+      g: Math.max(0, Math.min(255, Number(rgb[2]))),
+      b: Math.max(0, Math.min(255, Number(rgb[3]))),
+    }
+  }
+  return null
 }
 
 async function failOrRetry(supabase: any, id: string, attempts: number, msg: string) {
