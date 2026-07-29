@@ -79,29 +79,20 @@ const Sites = () => {
     },
   });
 
-  // Watchdog: any row that hasn't moved for >8 min in an in-flight state = worker
-  // died AND cron didn't rescue it. Mark failed so user can retry.
+  // UI watchdog: keep polling while generation/deploy is in flight.
+  // Do not mark backend jobs as failed from the browser — the edge worker has
+  // its own retry/reaper logic and some generations legitimately take longer.
   useEffect(() => {
     if (!sites.length) return;
     const stuck = sites.filter((s) => {
       if (!["queued", "processing", "generating", "deploying"].includes(s.status)) return false;
       const stamp = s.updated_at ?? s.created_at;
       const ageMs = Date.now() - new Date(stamp).getTime();
-      return ageMs > 8 * 60 * 1000;
+      return ageMs > 12 * 60 * 1000;
 
     });
     if (!stuck.length) return;
-    (async () => {
-      const ids = stuck.map((s) => s.id);
-      await supabase
-        .from("generated_sites")
-        .update({
-          status: "failed",
-          error_message: "Timed out — no worker progress for 8 min. Click Generate to retry.",
-        })
-        .in("id", ids);
-      qc.invalidateQueries({ queryKey: ["generated_sites"] });
-    })();
+    qc.invalidateQueries({ queryKey: ["generated_sites"] });
   }, [sites, qc]);
 
 
