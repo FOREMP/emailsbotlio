@@ -249,28 +249,28 @@ ABSOLUTA REGLER:
       'https://images.unsplash.com/photo-1521590832167-7bcbfaa6381f?w=1600&q=80', // combs / tools
       'https://images.unsplash.com/photo-1633681926035-ec1ac984418a?w=1600&q=80', // modern interior detail
     ],
-    heroLine1Default: (city) => `Din frisör${city ? ' i ' + city : ''}.`,
-    heroLine2Default: 'Vi lyfter håret — och känslan när du går härifrån.',
+    heroLine1Default: (city) => `Personligt hårhantverk${city ? ' i ' + city : ''}.`,
+    heroLine2Default: 'Form, färg och känsla i balans.',
     heroEyebrowDefault: (city) => city ? `Frisörsalong i ${city}` : 'Frisörsalong',
-    heroSublineDefault: 'Personlig rådgivning, hantverk och färgteknik för hår som känns lika bra som det ser ut. Från vardagsklippning till styling inför de större dagarna.',
-    aboutTitleDefault: 'Håret förtjänar mer än ett snabbt besök',
+    heroSublineDefault: 'För dig som vill känna dig lika rätt i spegeln veckan efter som när du lämnar stolen. Klippning, färg och styling med lugn rådgivning och ett säkert handlag.',
+    aboutTitleDefault: 'Ett salongsbesök ska kännas genomtänkt',
     aboutEyebrow: 'Hantverk & känsla',
-    pathwaysHeading: 'Vilken väg passar dig — låt oss guida dig rätt',
-    scenariosHeading: 'Så jobbar vi bakom stolen',
-    scenariosIntro: 'Här är typiska besök vi tar emot varje vecka — så du känner igen dig och vet vad du kan förvänta dig.',
-    processHeading: 'Tre steg till hår du älskar',
-    diffHeading: 'Fyra saker du märker redan vid första besöket',
-    ctaTitleDefault: 'Boka tid — vi guidar dig till rätt behandling',
-    ctaTextDefault: 'Berätta vad du vill åstadkomma så matchar vi dig med rätt frisör och behandling.',
+    pathwaysHeading: 'Välj din väg in i salongen',
+    scenariosHeading: 'Tre typer av besök vi formar varje vecka',
+    scenariosIntro: 'Här ser du hur vi tänker kring form, färg och helhetskänsla när olika behov möter stolen.',
+    processHeading: 'Så blir känslan rätt hela vägen',
+    diffHeading: 'Det som gör upplevelsen mer genomarbetad',
+    ctaTitleDefault: 'Boka en tid som känns värd att längta till',
+    ctaTextDefault: 'Berätta vad du vill förändra, förfina eller förstärka så leder vi dig till rätt behandling från start.',
     contactHeadline: 'Boka din tid',
     contactSubline: 'Ring eller mejla oss — vi hjälper dig hitta rätt behandling och tid som passar.',
-    servicesPageSub: 'Varje behandling är beskriven så att du vet vad som ingår och när den passar dig bäst.',
-    footerTagline: 'Demo skapad för en modernare digital salongsupplevelse.',
+    servicesPageSub: 'Varje behandling presenteras med en tydlig känsla för när den passar, vad som ingår och vilket resultat du kan sikta mot.',
+    footerTagline: 'Demo skapad för en mer premium salongsupplevelse.',
     fallbackServices: [
-      { name: 'Klippning', description: 'Personlig klippning anpassad efter hårets form, textur och din vardag.' },
-      { name: 'Färgning', description: 'Färg som håller länge och tar hand om håret — från ombyten till diskreta uppfräschningar.' },
-      { name: 'Slingor & balayage', description: 'Handmålade ljuspartier för naturlig dimension och mjuka övergångar.' },
-      { name: 'Styling & uppsättning', description: 'Styling inför bröllop, fest eller fotografering — professionellt och långhållbart.' },
+      { name: 'Klippning', description: 'En klippning som tar hänsyn till hårets fall, din vardag och hur formen ska kännas även mellan besöken.' },
+      { name: 'Färgning', description: 'Färg med djup, glans och balans — anpassad för att lyfta helheten utan att kompromissa med hårets kvalitet.' },
+      { name: 'Slingor & balayage', description: 'Mjukare ljusspel och mer dimension genom handmålade partier som känns levande snarare än hårda.' },
+      { name: 'Styling & uppsättning', description: 'Genomarbetad styling inför fest, fotografering eller en dag då allt behöver sitta precis rätt.' },
     ],
     fallbackValues: [
       { title: 'Personlig konsultation', text: 'Vi lyssnar innan vi klipper — varje behandling börjar med en dialog.' },
@@ -284,34 +284,36 @@ ABSOLUTA REGLER:
       { question: 'Kan jag boka styling inför en händelse?', answer: 'Ja, vi tar gärna hand om styling och uppsättning inför bröllop, fest och fotografering.' },
     ],
     fallbackPathways: [
-      { eyebrow: 'NY LOOK', title: 'Boka klippning', description: 'När det är dags för en ny form eller en fräschare vardagsklippning.', ctaLabel: 'Boka klippning' },
-      { eyebrow: 'FÄRG & TON', title: 'Boka färgning', description: 'Från fullfärg till subtila toningar som lyfter det du redan har.', ctaLabel: 'Boka färg' },
-      { eyebrow: 'LJUSARE HÅR', title: 'Boka slingor eller balayage', description: 'Handmålade ljuspartier för naturlig dimension.', ctaLabel: 'Boka slingor' },
-      { eyebrow: 'HÄNDELSER', title: 'Boka uppsättning eller styling', description: 'Styling som håller — även efter en lång kväll.', ctaLabel: 'Boka styling' },
+      { eyebrow: 'NY FORM', title: 'Boka klippning', description: 'När du vill att håret ska falla bättre, kännas lättare att bära och hålla formen längre.', ctaLabel: 'Boka klippning' },
+      { eyebrow: 'FÄRG & TON', title: 'Boka färgning', description: 'För dig som vill fördjupa tonen, bli mjukare i uttrycket eller ge håret ny lyster.', ctaLabel: 'Boka färg' },
+      { eyebrow: 'LJUS & DIMENSION', title: 'Boka slingor eller balayage', description: 'När du söker mer rörelse, mjukare övergångar och ett resultat som känns naturligt levande.', ctaLabel: 'Boka slingor' },
+      { eyebrow: 'INFÖR NÅGOT VIKTIGT', title: 'Boka uppsättning eller styling', description: 'När håret behöver kännas lika genomarbetat som resten av dagen du gör dig i ordning för.', ctaLabel: 'Boka styling' },
     ],
-    systemPrompt: `Du är en senior svensk copywriter och art director för PREMIUM frisörsalongssajter i klass med de bästa nordiska varumärkena inom hår och beauty. Ton: modernt, självsäkert, editoriellt, taktilt. Bygg förtroende via HANTVERK, PERSONLIG RÅDGIVNING och KÄNSLA — inte genom siffror eller påhittade certifikat.
+    systemPrompt: `Du är en senior svensk copywriter och art director för PREMIUM frisörsalongssajter i klass med de bästa nordiska varumärkena inom hår och beauty. Ton: modernt, självsäkert, editoriellt, taktilt och diskret exklusivt. Bygg förtroende via HANTVERK, PERSONLIG RÅDGIVNING och KÄNSLA — inte genom siffror eller påhittade certifikat.
+
+Sajten ska kännas dyr, personlig och genomarbetad även när underlaget är tunt. När fakta är få ska du skriva med selektiv skärpa och värme, aldrig med generiskt fluff eller tomma påståenden.
 
 VIKTIGT: Skriv INTE HTML. Returnera bara giltig JSON enligt schemat nedan. HTML byggs av systemet.
 
 RETURFORMAT — endast JSON, ingen markdown, inga kommentarer:
 {
   "businessName": "...",
-  "tagline": "kort premium tagline",
+  "tagline": "kort premium tagline, 3–7 ord",
   "heroEyebrow": "kort label, t.ex. 'Frisörsalong i {ort}'",
   "heroLine1": "första raden (3–6 ord, editoriell)",
   "heroLine2": "andra raden (3–7 ord, kontrast/löfte)",
-  "heroSubline": "1–2 meningar som förklarar värdet konkret",
+  "heroSubline": "2 meningar som förklarar värdet konkret och känns skrivna för just salongen",
   "trustBadges": ["Personlig konsultation", "Skonsam teknik", "Hantverk hela vägen"],
-  "pathwaysIntro": "1 mening om att guida kunden rätt in",
+  "pathwaysIntro": "1 mening om att guida kunden rätt in, varm och tydlig",
   "pathways": [
     {"eyebrow":"NY LOOK","title":"Boka klippning","description":"...","ctaLabel":"Boka klippning"},
     {"eyebrow":"FÄRG & TON","title":"Boka färgning","description":"...","ctaLabel":"Boka färg"},
     {"eyebrow":"LJUSARE HÅR","title":"Boka slingor / balayage","description":"...","ctaLabel":"Boka slingor"},
     {"eyebrow":"HÄNDELSER","title":"Boka uppsättning","description":"...","ctaLabel":"Boka styling"}
   ],
-  "services": [{"name":"...","description":"vad behandlingen är","when":"'När:' — kort rad om när kunden ska välja den"}],
+  "services": [{"name":"...","description":"1–2 meningar om vad behandlingen är och varför den känns värd att boka","when":"'När:' — kort rad om när kunden ska välja den"}],
   "aboutTitle": "editoriell rubrik, gärna 2 rader",
-  "aboutIntro": "1 stark manifest-mening",
+  "aboutIntro": "1–2 meningar med tydlig hållning och känsla",
   "aboutBefore": "stycke om FÖRE besöket (konsultation, förväntningar)",
   "aboutDuring": "stycke om UNDER behandlingen (hantverk, teknik, känsla)",
   "aboutAfter": "stycke om EFTER (hemvård, resultat som håller)",
@@ -334,7 +336,7 @@ RETURFORMAT — endast JSON, ingen markdown, inga kommentarer:
   "values": [{"title":"...","text":"..."}],
   "faqs": [{"question":"...","answer":"..."}],
   "ctaTitle": "kort rubrik för sista CTA-bandet",
-  "ctaText": "1 mening som får kunden att boka"
+  "ctaText": "1–2 meningar som får kunden att boka utan att låta säljig"
 }
 
 ABSOLUTA REGLER:
@@ -345,7 +347,9 @@ ABSOLUTA REGLER:
 5. Extrahera 4–7 verkliga behandlingar från källdatan. Vid oklarhet: standard frisör­behandlingar (klippning, färg, slingor, styling) utan pris.
 6. Language = svenska. Ton = editoriell, taktil, självsäker — undvik "vi erbjuder marknadens bästa".
 7. heroLine1 + heroLine2 = premium headline tillsammans.
-8. Max 4500 tokens totalt.`,
+8. Undvik generiska ord som "professionell", "hög kvalitet" och "marknadsledande" om de inte följs av konkret mening.
+9. Skriv hellre tät, egen copy än långa stycken som bara fyller ut.
+10. Max 4500 tokens totalt.`,
     polishSystemPrompt: `Du är en senior svensk copywriter för premium frisörsalongssajter.
 
 Skriv om ALLA textfält i det medskickade JSON-objektet till naturlig, flytande svenska av hög kvalitet. Ton: modernt, självsäkert, editoriellt, taktilt.
@@ -356,8 +360,9 @@ ABSOLUTA REGLER:
 3. Fixa styltiga meningar, konstig ordföljd, saknad interpunktion, för långa meningar, upprepningar, klichéer.
 4. Varje textblock ska ha varierad meningslängd. Undvik att alla meningar börjar med "Vi".
 5. heroLine1 + heroLine2 = korta, slagkraftiga rader (3–7 ord vardera) med punkt i slutet.
-6. Om ett fält är tomt — låt det vara tomt.
-7. Svara med ENBART det uppdaterade JSON-objektet.`,
+6. Byt ut generiska fraser som "professionell", "hög kvalitet" och "vi erbjuder" mot mer konkret, egen och taktil svenska när fakta tillåter det.
+7. Om ett fält är tomt — låt det vara tomt.
+8. Svara med ENBART det uppdaterade JSON-objektet.`,
   },
 }
 
@@ -802,42 +807,129 @@ function buildSiteFiles({
   const differentiators = normalizeDifferentiators(plan.differentiators)
   const scenarios = normalizeScenarios(plan.scenarios)
   const processSteps = normalizeProcess(plan.processSteps)
-  const trustBadges = (plan.trustBadges || []).map(cleanText).filter(Boolean).slice(0, 3)
+  const isSalon = nc.key === 'hair_salon'
+  const trustBadgeSource = (plan.trustBadges || []).map(cleanText).filter(Boolean)
+  const trustBadges = (trustBadgeSource.length
+    ? trustBadgeSource
+    : values.map((v) => cleanText(v.title)).filter(Boolean)
+  ).slice(0, 3)
   const images = imagePool.filter((url) => /^https?:\/\//i.test(url)).slice(0, 10)
   const img = (i: number) => images[i % Math.max(images.length, 1)] || nc.stockImages[0]
   const hasContact = Boolean(phone || email || address)
   const primaryHref = phone ? `tel:${phone.replace(/\s+/g, '')}` : email ? `mailto:${email}` : null
   const primaryLabel = phone ? 'Ring nu' : email ? 'Mejla oss' : null
   const bookLabel = 'Boka tid'
-  const displayFont = brandFonts[0] || (nc.key === 'hair_salon' ? 'Cormorant Garamond' : 'Space Grotesk')
-  const bodyFont = nc.key === 'hair_salon' ? 'Manrope' : 'Inter'
-  const nicheStyles = nc.key === 'hair_salon' ? `
+  const displayFont = brandFonts[0] || (isSalon ? 'Cormorant Garamond' : 'Space Grotesk')
+  const bodyFont = isSalon ? 'Manrope' : 'Inter'
+  const nicheStyles = isSalon ? `
     .theme-salon{--font-body:Manrope,sans-serif}
-    .theme-salon .nav{background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(16px)}
-    .theme-salon .brand{font-family:var(--font-display);font-size:26px;font-weight:600;letter-spacing:.01em}
+    .theme-salon{background:
+      radial-gradient(circle at top right,color-mix(in srgb,var(--accent) 18%,transparent),transparent 34%),
+      linear-gradient(180deg,#fbf4ee 0%,var(--bg) 24%,var(--bg) 100%)}
+    .theme-salon .nav{background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(18px);border-bottom-color:color-mix(in srgb,var(--primary) 12%,transparent)}
+    .theme-salon .brand{font-family:var(--font-display);font-size:28px;font-weight:600;letter-spacing:.01em}
     .theme-salon .links a{border-radius:999px;font-weight:600}
-    .theme-salon .nav-cta{color:#fff!important;border-radius:999px;box-shadow:none}
-    .theme-salon .eyebrow{border:0;background:transparent;padding:0;border-radius:0;letter-spacing:.28em}
+    .theme-salon .links a.active,.theme-salon .links a:hover{background:color-mix(in srgb,var(--primary) 10%,transparent)}
+    .theme-salon .nav-cta{color:#fff!important;border-radius:999px;box-shadow:0 14px 38px color-mix(in srgb,var(--primary) 24%,transparent)}
+    .theme-salon .section{padding:84px 28px}
+    .theme-salon .section-sm{padding:64px 28px}
+    .theme-salon .eyebrow{border:0;background:transparent;padding:0;border-radius:0;letter-spacing:.28em;margin-bottom:18px}
     .theme-salon .h1,.theme-salon .h2,.theme-salon .h3{letter-spacing:-.01em}
-    .theme-salon .h1{font-weight:600;line-height:.95}
+    .theme-salon .h1{font-size:clamp(44px,6.3vw,82px);font-weight:600;line-height:.96}
     .theme-salon .h1 .accent{font-style:italic;font-weight:500;color:var(--primary)}
-    .theme-salon .hero>img{filter:brightness(.78) saturate(.82)}
-    .theme-salon .hero:after{background:linear-gradient(90deg,color-mix(in srgb,var(--bg) 96%,transparent) 0%,color-mix(in srgb,var(--bg) 80%,transparent) 48%,color-mix(in srgb,var(--bg) 18%,transparent) 100%)}
+    .theme-salon .h2{font-size:clamp(30px,4vw,56px);max-width:14ch}
+    .theme-salon .lead{font-size:17px;line-height:1.8;max-width:60ch}
+    .theme-salon .lead.lg{font-size:18px}
     .theme-salon .btn{border-radius:999px;padding:15px 27px}
     .theme-salon .btn.primary{color:#fff;box-shadow:0 14px 34px color-mix(in srgb,var(--primary) 22%,transparent)}
-    .theme-salon .card{border-radius:2px;box-shadow:0 18px 55px color-mix(in srgb,var(--text) 8%,transparent)}
+    .theme-salon .hero{min-height:72vh;padding:74px 28px 48px}
+    .theme-salon .hero>img{filter:brightness(.84) saturate(.74)}
+    .theme-salon .hero:after{background:linear-gradient(90deg,color-mix(in srgb,var(--bg) 96%,transparent) 0%,color-mix(in srgb,var(--bg) 84%,transparent) 42%,color-mix(in srgb,var(--bg) 18%,transparent) 100%)}
+    .theme-salon .hero-inner{display:grid;grid-template-columns:minmax(0,1.15fr) 360px;gap:42px;align-items:end}
+    .theme-salon .trust-row{gap:12px;margin-top:28px}
+    .theme-salon .trust-row span{padding:10px 14px;border-radius:999px;background:color-mix(in srgb,var(--surface) 86%,transparent);border:1px solid color-mix(in srgb,var(--primary) 16%,transparent);color:var(--text)}
+    .theme-salon .trust-row span:before{display:none}
+    .theme-salon .card{border-radius:28px;box-shadow:0 18px 55px color-mix(in srgb,var(--text) 8%,transparent);background:color-mix(in srgb,var(--surface) 92%,var(--bg))}
     .theme-salon .card:hover{transform:translateY(-2px)}
-    .theme-salon .path-card{border-top:2px solid var(--primary)}
-    .theme-salon .band{background:linear-gradient(145deg,var(--surface),color-mix(in srgb,var(--accent) 13%,var(--bg)))}
-    .theme-salon .band-tight{background:color-mix(in srgb,var(--surface) 72%,var(--bg))}
-    .theme-salon .photo,.theme-salon .service-row img{border-radius:2px;box-shadow:0 24px 70px color-mix(in srgb,var(--text) 12%,transparent)}
-    .theme-salon .scenario{border-radius:2px;box-shadow:0 16px 45px color-mix(in srgb,var(--text) 8%,transparent)}
-    .theme-salon .diff{border-left:0;border-top:2px solid var(--primary);border-radius:0;background:transparent}
-    .theme-salon .cta-band{background:linear-gradient(135deg,var(--primary),color-mix(in srgb,var(--primary) 72%,var(--accent)));color:#fff;border-radius:2px}
+    .theme-salon .path-card{border-top:0}
+    .theme-salon .band{background:linear-gradient(145deg,color-mix(in srgb,var(--surface) 95%,var(--bg)),color-mix(in srgb,var(--accent) 10%,var(--bg)))}
+    .theme-salon .band-tight{background:linear-gradient(180deg,color-mix(in srgb,var(--surface) 88%,var(--bg)),color-mix(in srgb,var(--surface) 96%,var(--bg)))}
+    .theme-salon .page-hero{text-align:left;padding:116px 28px 70px}
+    .theme-salon .page-hero .h1{margin:0!important;max-width:12ch}
+    .theme-salon .page-hero .lead{margin:22px 0 0!important}
+    .theme-salon .page-hero>img{opacity:.2}
+    .theme-salon .photo,.theme-salon .service-row img{border-radius:28px;box-shadow:0 24px 70px color-mix(in srgb,var(--text) 12%,transparent)}
+    .theme-salon .service-row{gap:40px;padding:56px 0}
+    .theme-salon .service-row img{height:420px}
+    .theme-salon .service-row h2{font-size:clamp(28px,3.4vw,44px)}
+    .theme-salon .service-row .when{border-radius:20px;background:color-mix(in srgb,var(--primary) 8%,var(--surface));border-color:color-mix(in srgb,var(--primary) 18%,transparent)}
+    .theme-salon .scenario{border-radius:28px;box-shadow:0 16px 45px color-mix(in srgb,var(--text) 8%,transparent);background:color-mix(in srgb,var(--surface) 94%,var(--bg))}
+    .theme-salon .scenario img{height:250px}
+    .theme-salon .scenario .tag{margin-bottom:12px}
+    .theme-salon .diff{border-left:0;border-top:2px solid var(--primary);border-radius:28px;background:color-mix(in srgb,var(--surface) 92%,var(--bg))}
+    .theme-salon .cta-band{background:linear-gradient(135deg,var(--primary),color-mix(in srgb,var(--primary) 70%,var(--accent)));color:#fff;border-radius:32px}
     .theme-salon .cta-band h2{color:#fff}
-    .theme-salon .cta-band .lead{color:rgba(255,255,255,.82)}
+    .theme-salon .cta-band .lead{color:rgba(255,255,255,.86);max-width:none}
     .theme-salon .cta-band .btn.primary{background:#fff;color:var(--primary);border-color:#fff}
-    .theme-salon footer{background:var(--surface)}
+    .theme-salon .footer-title{text-transform:none;letter-spacing:.06em}
+    .theme-salon footer{background:color-mix(in srgb,var(--surface) 94%,var(--bg))}
+    .theme-salon .salon-panel-label{font-size:11px;font-weight:800;letter-spacing:.18em;text-transform:uppercase;color:var(--primary)}
+    .theme-salon .salon-panel-copy{margin:14px 0 0;color:var(--text);font-size:16px;line-height:1.75}
+    .theme-salon .salon-pill-list{display:flex;flex-wrap:wrap;gap:10px;margin-top:22px}
+    .theme-salon .salon-pill{padding:9px 12px;border-radius:999px;background:color-mix(in srgb,var(--primary) 10%,transparent);border:1px solid color-mix(in srgb,var(--primary) 18%,transparent);font-size:13px;font-weight:700;color:var(--text)}
+    .theme-salon .salon-hero-panel{padding:28px;border-radius:30px;background:color-mix(in srgb,var(--surface) 88%,transparent);border:1px solid color-mix(in srgb,var(--primary) 14%,transparent);box-shadow:0 20px 65px color-mix(in srgb,var(--text) 8%,transparent)}
+    .theme-salon .salon-contact-quick{display:grid;gap:12px;margin-top:24px}
+    .theme-salon .salon-contact-line{display:grid;gap:4px;padding-top:12px;border-top:1px solid color-mix(in srgb,var(--primary) 12%,transparent);text-decoration:none;color:inherit}
+    .theme-salon .salon-contact-line span{font-size:11px;font-weight:800;letter-spacing:.18em;text-transform:uppercase;color:var(--text-muted)}
+    .theme-salon .salon-contact-line strong{font-size:16px;font-weight:700;color:var(--text)}
+    .theme-salon .salon-gallery-shell{padding-top:0}
+    .theme-salon .salon-gallery{display:grid;grid-template-columns:1.1fr .9fr .9fr;gap:18px;margin-top:-18px}
+    .theme-salon .salon-gallery img{width:100%;height:240px;object-fit:cover;border-radius:28px;box-shadow:0 22px 65px color-mix(in srgb,var(--text) 10%,transparent)}
+    .theme-salon .salon-gallery .tall{height:300px}
+    .theme-salon .salon-section-intro{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:26px;align-items:end;margin-bottom:38px}
+    .theme-salon .salon-side-note{padding:22px 24px;border-radius:24px;background:color-mix(in srgb,var(--surface) 88%,var(--bg));border:1px solid color-mix(in srgb,var(--primary) 12%,transparent);color:var(--text);font-size:15px;line-height:1.7}
+    .theme-salon .salon-path-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .theme-salon .salon-path-card{padding:28px 28px 26px}
+    .theme-salon .salon-path-number{display:block;font-size:11px;font-weight:800;letter-spacing:.18em;text-transform:uppercase;color:var(--text-muted);margin-bottom:14px}
+    .theme-salon .salon-manifesto-grid{display:grid;grid-template-columns:.92fr 1.08fr;gap:52px;align-items:center}
+    .theme-salon .salon-image-stack{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+    .theme-salon .salon-image-stack img{width:100%;object-fit:cover;border-radius:28px;box-shadow:0 22px 65px color-mix(in srgb,var(--text) 10%,transparent)}
+    .theme-salon .salon-image-stack .tall{grid-row:span 2;height:100%}
+    .theme-salon .salon-image-stack img:not(.tall){height:240px}
+    .theme-salon .salon-copy-stack{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:28px}
+    .theme-salon .salon-copy-card{padding:20px 20px 18px;border-radius:22px;background:color-mix(in srgb,var(--surface) 92%,var(--bg));border:1px solid color-mix(in srgb,var(--primary) 10%,transparent)}
+    .theme-salon .salon-copy-card span{display:block;font-size:11px;font-weight:800;letter-spacing:.18em;text-transform:uppercase;color:var(--primary);margin-bottom:10px}
+    .theme-salon .salon-copy-card p{margin:0;color:var(--text-muted);font-size:15px;line-height:1.7}
+    .theme-salon .salon-value-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:18px}
+    .theme-salon .salon-value{padding:18px 20px;border-radius:22px;background:color-mix(in srgb,var(--surface) 92%,var(--bg));border:1px solid color-mix(in srgb,var(--primary) 10%,transparent)}
+    .theme-salon .salon-value h3{margin:0 0 10px;font-family:var(--font-display);font-size:20px;font-weight:600}
+    .theme-salon .salon-value p{margin:0;color:var(--text-muted);font-size:15px;line-height:1.7}
+    .theme-salon .salon-step-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-top:48px}
+    .theme-salon .salon-step{padding:28px;border-radius:26px;background:color-mix(in srgb,var(--surface) 94%,var(--bg));border:1px solid color-mix(in srgb,var(--primary) 12%,transparent)}
+    .theme-salon .salon-step-index{display:block;font-size:11px;font-weight:800;letter-spacing:.18em;text-transform:uppercase;color:var(--primary);margin-bottom:14px}
+    .theme-salon .salon-step h3{margin:0;font-family:var(--font-display);font-size:26px;font-weight:600}
+    .theme-salon .salon-step p{margin:14px 0 0;color:var(--text-muted);font-size:15px;line-height:1.72}
+    .theme-salon .salon-step .step-outcome{margin-top:18px;padding-top:14px}
+    .theme-salon .salon-diff-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin-top:40px}
+    .theme-salon .salon-cta-grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:24px;align-items:stretch;text-align:left}
+    .theme-salon .salon-cta-grid .btns{justify-content:flex-start}
+    .theme-salon .salon-cta-card{padding:24px;border-radius:24px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.18)}
+    .theme-salon .salon-cta-card .salon-contact-line{border-top-color:rgba(255,255,255,.18)}
+    .theme-salon .salon-cta-card .salon-contact-line span{color:rgba(255,255,255,.74)}
+    .theme-salon .salon-cta-card .salon-contact-line strong{color:#fff}
+    @media(max-width:1100px){
+      .theme-salon .hero-inner,.theme-salon .salon-manifesto-grid,.theme-salon .salon-section-intro,.theme-salon .salon-cta-grid{grid-template-columns:1fr}
+      .theme-salon .salon-gallery,.theme-salon .salon-copy-stack,.theme-salon .salon-value-grid,.theme-salon .salon-path-grid,.theme-salon .salon-step-grid,.theme-salon .salon-diff-grid{grid-template-columns:1fr 1fr}
+      .theme-salon .salon-gallery .tall{height:240px}
+    }
+    @media(max-width:760px){
+      .theme-salon .section,.theme-salon .section-sm{padding:64px 20px}
+      .theme-salon .hero{padding:112px 20px 40px}
+      .theme-salon .page-hero{padding:108px 20px 56px}
+      .theme-salon .salon-gallery,.theme-salon .salon-copy-stack,.theme-salon .salon-value-grid,.theme-salon .salon-path-grid,.theme-salon .salon-step-grid,.theme-salon .salon-diff-grid{grid-template-columns:1fr}
+      .theme-salon .service-row{padding:44px 0}
+      .theme-salon .service-row img,.theme-salon .photo{height:320px}
+    }
   ` : ''
 
   const common = (active: 'home' | 'about' | 'services', title: string, body: string) => `<!DOCTYPE html>
@@ -977,31 +1069,98 @@ function buildSiteFiles({
   const heroLine2 = cleanText(plan.heroLine2 || nc.heroLine2Default)
   const heroEyebrow = cleanText(plan.heroEyebrow || nc.heroEyebrowDefault(city))
   const heroSub = cleanText(plan.heroSubline || nc.heroSublineDefault)
+  const aboutTitle = cleanText(plan.aboutTitle || nc.aboutTitleDefault)
+  const aboutIntro = cleanText(plan.aboutIntro || plan.tagline || heroSub)
+  const tagline = cleanText(plan.tagline || '')
+  const pathwaysIntro = cleanText(plan.pathwaysIntro || (isSalon ? 'Välj det som ligger närmast det du vill förstärka, förnya eller få hjälp att landa rätt i.' : ''))
+  const sectionNote = cleanText(plan.tagline || 'Klippning, färg och styling med tydlig känsla för helheten.')
 
   const trustRow = trustBadges.length
     ? `<div class="trust-row">${trustBadges.map((b) => `<span>${esc(b)}</span>`).join('')}</div>`
     : ''
 
-  const pathwaysSection = pathways.length
-    ? `<section class="section band-tight"><div class="wrap"><div class="eyebrow">Rätt väg in</div><h2 class="h2">${esc(nc.pathwaysHeading)}</h2>${plan.pathwaysIntro ? `<p class="lead lg" style="margin-top:20px">${esc(plan.pathwaysIntro)}</p>` : ''}<div class="grid g-4" style="margin-top:52px">${pathways.map((p) => `<div class="card path-card"><div class="eyebrow" style="margin-bottom:14px">${esc(p.eyebrow)}</div><h3>${esc(p.title)}</h3><p>${esc(p.description)}</p><a class="arrow" href="tjanster.html">${esc(p.ctaLabel || 'Läs mer')}</a></div>`).join('')}</div></div></section>`
+  const aboutItems = [
+    { title: 'Före besöket', text: cleanText(plan.aboutBefore || '') },
+    { title: 'Under behandlingen', text: cleanText(plan.aboutDuring || '') },
+    { title: 'Efter besöket', text: cleanText(plan.aboutAfter || '') },
+  ].filter((item) => item.text)
+
+  const aboutBlocks = aboutItems.map((item) => `<div class="about-block"><h4>${esc(item.title)}</h4><p>${esc(item.text)}</p></div>`).join('')
+  const salonAboutBlocks = aboutItems.map((item) => `<article class="salon-copy-card"><span>${esc(item.title)}</span><p>${esc(item.text)}</p></article>`).join('')
+  const salonValues = values.length
+    ? `<div class="salon-value-grid">${values.slice(0, 3).map((v) => `<article class="salon-value"><h3>${esc(v.title)}</h3><p>${esc(v.text)}</p></article>`).join('')}</div>`
     : ''
 
-  const aboutTeaser = (plan.aboutBefore || plan.aboutDuring || plan.aboutAfter || plan.aboutIntro) ? `
-    <section class="section"><div class="wrap"><div class="about-split"><div><div class="eyebrow">${esc(nc.aboutEyebrow)}</div><h2 class="h2">${esc(plan.aboutTitle || nc.aboutTitleDefault)}</h2>${plan.aboutIntro ? `<p class="lead lg" style="margin-top:24px">${esc(plan.aboutIntro)}</p>` : ''}<div class="btns"><a class="btn" href="om-oss.html">${esc(nc.aboutPageTitle)}</a>${primaryCta}</div></div><div class="about-blocks">${plan.aboutBefore ? `<div class="about-block"><h4>Före besöket</h4><p>${esc(plan.aboutBefore)}</p></div>` : ''}${plan.aboutDuring ? `<div class="about-block"><h4>Under arbetet</h4><p>${esc(plan.aboutDuring)}</p></div>` : ''}${plan.aboutAfter ? `<div class="about-block"><h4>Efter arbetet</h4><p>${esc(plan.aboutAfter)}</p></div>` : ''}</div></div></div></section>` : ''
+  const salonQuickContactRows = [
+    phone ? `<a class="salon-contact-line" href="tel:${attr(phone.replace(/\s+/g, ''))}"><span>Telefon</span><strong>${esc(phone)}</strong></a>` : '',
+    email ? `<a class="salon-contact-line" href="mailto:${attr(email)}"><span>E-post</span><strong>${esc(email)}</strong></a>` : '',
+    address ? `<div class="salon-contact-line"><span>Adress</span><strong>${esc(address)}</strong></div>` : '',
+  ].filter(Boolean).join('')
+  const salonQuickContact = salonQuickContactRows ? `<div class="salon-contact-quick">${salonQuickContactRows}</div>` : ''
+  const salonHeroPanel = isSalon ? `
+    <aside class="salon-hero-panel">
+      <div class="salon-panel-label">Känslan på plats</div>
+      <p class="salon-panel-copy">${esc(tagline || aboutIntro || 'Lugn rådgivning, formkänsla och resultat som håller ihop med hela uttrycket.')}</p>
+      <div class="salon-pill-list">${trustBadges.map((b) => `<span class="salon-pill">${esc(b)}</span>`).join('')}</div>
+      ${salonQuickContact}
+    </aside>` : ''
+  const salonGallery = isSalon ? `
+    <section class="section-sm salon-gallery-shell">
+      <div class="wrap">
+        <div class="salon-gallery">
+          <img class="tall" src="${attr(img(1))}" alt="${esc(businessName)}">
+          <img src="${attr(img(2))}" alt="${esc(businessName)}">
+          <img src="${attr(img(3))}" alt="${esc(businessName)}">
+        </div>
+      </div>
+    </section>` : ''
 
-  const scenariosSection = scenarios.length >= 2 ? `
-    <section class="section band"><div class="wrap"><div class="eyebrow">Resultat</div><h2 class="h2">${esc(nc.scenariosHeading)}</h2><p class="lead lg" style="margin-top:20px">${esc(nc.scenariosIntro)}</p><div class="grid g-3" style="margin-top:52px">${scenarios.map((s, i) => `<div class="scenario"><img src="${attr(img(i + 2))}" alt="${esc(s.title)}"><div class="scenario-body"><div class="tag">${esc(s.category)}</div><h3>${esc(s.title)}</h3><p>${esc(s.description)}</p><div class="delivery"><strong>Leverans:</strong> ${esc(s.delivery)}</div></div></div>`).join('')}</div></div></section>` : ''
+  const pathwaysSection = pathways.length
+    ? isSalon
+      ? `<section class="section band-tight"><div class="wrap"><div class="salon-section-intro"><div><div class="eyebrow">Din väg in</div><h2 class="h2">${esc(nc.pathwaysHeading)}</h2>${pathwaysIntro ? `<p class="lead lg" style="margin-top:20px">${esc(pathwaysIntro)}</p>` : ''}</div><div class="salon-side-note">${esc(sectionNote)}</div></div><div class="grid salon-path-grid">${pathways.map((p, i) => `<div class="card path-card salon-path-card"><span class="salon-path-number">Väg ${String(i + 1).padStart(2, '0')}</span><div class="eyebrow" style="margin-bottom:12px">${esc(p.eyebrow)}</div><h3>${esc(p.title)}</h3><p>${esc(p.description)}</p><a class="arrow" href="tjanster.html">${esc(p.ctaLabel || 'Läs mer')}</a></div>`).join('')}</div></div></section>`
+      : `<section class="section band-tight"><div class="wrap"><div class="eyebrow">Rätt väg in</div><h2 class="h2">${esc(nc.pathwaysHeading)}</h2>${pathwaysIntro ? `<p class="lead lg" style="margin-top:20px">${esc(pathwaysIntro)}</p>` : ''}<div class="grid g-4" style="margin-top:52px">${pathways.map((p) => `<div class="card path-card"><div class="eyebrow" style="margin-bottom:14px">${esc(p.eyebrow)}</div><h3>${esc(p.title)}</h3><p>${esc(p.description)}</p><a class="arrow" href="tjanster.html">${esc(p.ctaLabel || 'Läs mer')}</a></div>`).join('')}</div></div></section>`
+    : ''
 
-  const processSection = processSteps.length >= 3 ? `
-    <section class="section"><div class="wrap"><div class="eyebrow">Så märks det i praktiken</div><h2 class="h2">${esc(nc.processHeading)}</h2><div class="grid g-3" style="margin-top:56px">${processSteps.map((s, i) => `<div><div class="num">${String(i + 1).padStart(2, '0')}</div><h3 class="h3">${esc(s.title)}</h3><p class="lead" style="font-size:16px;margin-top:12px">${esc(s.description)}</p>${s.outcome ? `<div class="step-outcome">${esc(s.outcome)}</div>` : ''}</div>`).join('')}</div></div></section>` : ''
+  const aboutTeaser = (aboutItems.length || aboutIntro) ? (
+    isSalon
+      ? `<section class="section"><div class="wrap salon-manifesto-grid"><div class="salon-image-stack"><img class="tall" src="${attr(img(4))}" alt="${esc(businessName)}"><img src="${attr(img(5))}" alt="${esc(businessName)}"><img src="${attr(img(6))}" alt="${esc(businessName)}"></div><div><div class="eyebrow">${esc(nc.aboutEyebrow)}</div><h2 class="h2">${esc(aboutTitle)}</h2>${aboutIntro ? `<p class="lead lg" style="margin-top:22px">${esc(aboutIntro)}</p>` : ''}${salonAboutBlocks ? `<div class="salon-copy-stack">${salonAboutBlocks}</div>` : ''}${salonValues}</div></div></section>`
+      : `<section class="section"><div class="wrap"><div class="about-split"><div><div class="eyebrow">${esc(nc.aboutEyebrow)}</div><h2 class="h2">${esc(aboutTitle)}</h2>${aboutIntro ? `<p class="lead lg" style="margin-top:24px">${esc(aboutIntro)}</p>` : ''}<div class="btns"><a class="btn" href="om-oss.html">${esc(nc.aboutPageTitle)}</a>${primaryCta}</div></div><div class="about-blocks">${aboutBlocks}</div></div></div></section>`
+  ) : ''
 
-  const diffSection = differentiators.length >= 3 ? `
-    <section class="section band-tight"><div class="wrap"><div class="eyebrow">Så arbetar vi</div><h2 class="h2">${esc(nc.diffHeading)}</h2><div class="diff-grid">${differentiators.map((d) => `<div class="diff"><h3>${esc(d.title)}</h3><p>${esc(d.text)}</p></div>`).join('')}</div></div></section>` : ''
+  const scenariosSection = scenarios.length >= 2 ? (
+    isSalon
+      ? `<section class="section band"><div class="wrap"><div class="salon-section-intro"><div><div class="eyebrow">Form & resultat</div><h2 class="h2">${esc(nc.scenariosHeading)}</h2><p class="lead lg" style="margin-top:20px">${esc(nc.scenariosIntro)}</p></div><div class="salon-side-note">${esc(tagline || heroSub)}</div></div><div class="grid g-3">${scenarios.map((s, i) => `<div class="scenario"><img src="${attr(img(i + 2))}" alt="${esc(s.title)}"><div class="scenario-body"><div class="tag">${esc(s.category)}</div><h3>${esc(s.title)}</h3><p>${esc(s.description)}</p><div class="delivery"><strong>Leverans:</strong> ${esc(s.delivery)}</div></div></div>`).join('')}</div></div></section>`
+      : `<section class="section band"><div class="wrap"><div class="eyebrow">Resultat</div><h2 class="h2">${esc(nc.scenariosHeading)}</h2><p class="lead lg" style="margin-top:20px">${esc(nc.scenariosIntro)}</p><div class="grid g-3" style="margin-top:52px">${scenarios.map((s, i) => `<div class="scenario"><img src="${attr(img(i + 2))}" alt="${esc(s.title)}"><div class="scenario-body"><div class="tag">${esc(s.category)}</div><h3>${esc(s.title)}</h3><p>${esc(s.description)}</p><div class="delivery"><strong>Leverans:</strong> ${esc(s.delivery)}</div></div></div>`).join('')}</div></div></section>`
+  ) : ''
 
-  const finalCta = `
-    <section class="section-sm"><div class="cta-band"><div class="eyebrow" style="color:var(--bg);background:color-mix(in srgb,var(--bg) 20%,transparent);border-color:color-mix(in srgb,var(--bg) 30%,transparent)">Nästa steg</div><h2 class="h2">${esc(plan.ctaTitle || nc.ctaTitleDefault)}</h2><p class="lead">${esc(plan.ctaText || nc.ctaTextDefault)}</p><div class="btns">${primaryCta}${bookCta}</div></div></section>`
+  const processSection = processSteps.length >= 3 ? (
+    isSalon
+      ? `<section class="section"><div class="wrap"><div class="eyebrow">Så landar upplevelsen</div><h2 class="h2">${esc(nc.processHeading)}</h2><div class="salon-step-grid">${processSteps.map((s, i) => `<article class="salon-step"><span class="salon-step-index">Steg ${String(i + 1).padStart(2, '0')}</span><h3>${esc(s.title)}</h3><p>${esc(s.description)}</p>${s.outcome ? `<div class="step-outcome">${esc(s.outcome)}</div>` : ''}</article>`).join('')}</div></div></section>`
+      : `<section class="section"><div class="wrap"><div class="eyebrow">Så märks det i praktiken</div><h2 class="h2">${esc(nc.processHeading)}</h2><div class="grid g-3" style="margin-top:56px">${processSteps.map((s, i) => `<div><div class="num">${String(i + 1).padStart(2, '0')}</div><h3 class="h3">${esc(s.title)}</h3><p class="lead" style="font-size:16px;margin-top:12px">${esc(s.description)}</p>${s.outcome ? `<div class="step-outcome">${esc(s.outcome)}</div>` : ''}</div>`).join('')}</div></div></section>`
+  ) : ''
 
-  const homeBody = `
+  const diffSection = differentiators.length >= 3 ? (
+    isSalon
+      ? `<section class="section band-tight"><div class="wrap"><div class="eyebrow">Det du märker</div><h2 class="h2">${esc(nc.diffHeading)}</h2><div class="salon-diff-grid">${differentiators.map((d) => `<div class="diff salon-diff"><h3>${esc(d.title)}</h3><p>${esc(d.text)}</p></div>`).join('')}</div></div></section>`
+      : `<section class="section band-tight"><div class="wrap"><div class="eyebrow">Så arbetar vi</div><h2 class="h2">${esc(nc.diffHeading)}</h2><div class="diff-grid">${differentiators.map((d) => `<div class="diff"><h3>${esc(d.title)}</h3><p>${esc(d.text)}</p></div>`).join('')}</div></div></section>`
+  ) : ''
+
+  const finalCta = isSalon
+    ? `<section class="section-sm"><div class="wrap"><div class="cta-band salon-cta-grid"><div><div class="eyebrow" style="color:rgba(255,255,255,.75);background:transparent;border:0;padding:0">Nästa steg</div><h2 class="h2">${esc(plan.ctaTitle || nc.ctaTitleDefault)}</h2><p class="lead">${esc(plan.ctaText || nc.ctaTextDefault)}</p><div class="btns">${primaryCta}${bookCta}</div></div><div class="salon-cta-card"><div class="salon-panel-label" style="color:rgba(255,255,255,.78)">Direktkontakt</div>${salonQuickContactRows || trustBadges.map((b) => `<div class="salon-contact-line"><span>Det du får</span><strong>${esc(b)}</strong></div>`).join('')}</div></div></div></section>`
+    : `<section class="section-sm"><div class="cta-band"><div class="eyebrow" style="color:var(--bg);background:color-mix(in srgb,var(--bg) 20%,transparent);border-color:color-mix(in srgb,var(--bg) 30%,transparent)">Nästa steg</div><h2 class="h2">${esc(plan.ctaTitle || nc.ctaTitleDefault)}</h2><p class="lead">${esc(plan.ctaText || nc.ctaTextDefault)}</p><div class="btns">${primaryCta}${bookCta}</div></div></section>`
+
+  const homeBody = isSalon
+    ? `
+    <section class="hero"><img src="${attr(img(0))}" alt="${esc(businessName)}"><div class="hero-inner salon-hero-grid"><div class="salon-hero-copy"><div class="eyebrow">${esc(heroEyebrow)}</div><h1 class="h1"><span class="line">${esc(heroLine1)}</span><span class="line accent">${esc(heroLine2)}</span></h1><p class="lead lg">${esc(heroSub)}</p><div class="btns">${primaryCta}${bookCta}</div>${trustRow}</div>${salonHeroPanel}</div></section>
+    ${salonGallery}
+    ${pathwaysSection}
+    ${aboutTeaser}
+    ${scenariosSection}
+    ${processSection}
+    ${diffSection}
+    ${finalCta}
+    ${contactSection({ phone, email, address, googleMapsUrl, nc })}`
+    : `
     <section class="hero"><img src="${attr(img(0))}" alt="${esc(businessName)}"><div class="hero-inner"><div class="eyebrow">${esc(heroEyebrow)}</div><h1 class="h1"><span class="line">${esc(heroLine1)}</span><span class="line accent">${esc(heroLine2)}</span></h1><p class="lead lg">${esc(heroSub)}</p><div class="btns">${primaryCta}${bookCta}</div>${trustRow}</div></section>
     ${pathwaysSection}
     ${aboutTeaser}
@@ -1011,14 +1170,26 @@ function buildSiteFiles({
     ${finalCta}
     ${contactSection({ phone, email, address, googleMapsUrl, nc })}`
 
-  const aboutBody = `
-    ${pageHero(nc.aboutPageTitle, plan.aboutTitle || `Möt ${businessName}`, plan.aboutIntro || plan.tagline || '', img(1))}
-    ${(plan.aboutBefore || plan.aboutDuring || plan.aboutAfter) ? `<section class="section"><div class="wrap about-split"><img class="photo" src="${attr(img(2))}" alt="${esc(businessName)}"><div class="about-blocks">${plan.aboutBefore ? `<div class="about-block"><h4>Före besöket</h4><p>${esc(plan.aboutBefore)}</p></div>` : ''}${plan.aboutDuring ? `<div class="about-block"><h4>Under arbetet</h4><p>${esc(plan.aboutDuring)}</p></div>` : ''}${plan.aboutAfter ? `<div class="about-block"><h4>Efter arbetet</h4><p>${esc(plan.aboutAfter)}</p></div>` : ''}</div></div></section>` : ''}
+  const aboutBody = isSalon
+    ? `
+    ${pageHero(nc.aboutPageTitle, aboutTitle || `Möt ${businessName}`, aboutIntro || tagline || '', img(1))}
+    ${(aboutItems.length || aboutIntro || values.length) ? `<section class="section"><div class="wrap salon-manifesto-grid"><div class="salon-image-stack"><img class="tall" src="${attr(img(2))}" alt="${esc(businessName)}"><img src="${attr(img(7))}" alt="${esc(businessName)}"><img src="${attr(img(8))}" alt="${esc(businessName)}"></div><div><div class="eyebrow">Om salongen</div><h2 class="h2">${esc(aboutTitle)}</h2>${aboutIntro ? `<p class="lead lg" style="margin-top:22px">${esc(aboutIntro)}</p>` : ''}${salonAboutBlocks ? `<div class="salon-copy-stack">${salonAboutBlocks}</div>` : ''}${salonValues}</div></div></section>` : ''}
+    ${diffSection}
+    ${finalCta}`
+    : `
+    ${pageHero(nc.aboutPageTitle, aboutTitle || `Möt ${businessName}`, aboutIntro || tagline || '', img(1))}
+    ${(aboutItems.length || aboutIntro) ? `<section class="section"><div class="wrap about-split"><img class="photo" src="${attr(img(2))}" alt="${esc(businessName)}"><div class="about-blocks">${aboutBlocks}</div></div></section>` : ''}
     ${values.length ? `<section class="section band-tight"><div class="wrap"><div class="eyebrow">Vad vi står för</div><h2 class="h2">Tryggare känsla hela vägen</h2><div class="grid g-3" style="margin-top:48px">${values.map((v) => `<div class="card"><h3 class="h3">${esc(v.title)}</h3><p style="color:var(--text-muted);margin:14px 0 0">${esc(v.text)}</p></div>`).join('')}</div></div></section>` : ''}
     ${diffSection}
     ${finalCta}`
 
-  const servicesBody = `
+  const servicesBody = isSalon
+    ? `
+    ${pageHero('Behandlingar', 'Våra behandlingar', nc.servicesPageSub, img(0))}
+    <section class="section"><div class="wrap"><div class="salon-section-intro"><div><div class="eyebrow">Behandlingar</div><h2 class="h2">Välj det som passar ditt hår och din vardag</h2><p class="lead lg" style="margin-top:20px">${esc(nc.servicesPageSub)}</p></div><div class="salon-side-note">${esc(tagline || 'Varje behandling ska kännas genomtänkt både i stolen och när du bär resultatet vidare ut genom dörren.')}</div></div>${services.map((s, i) => `<div class="service-row ${i % 2 === 1 ? 'rev' : ''}"><div class="s-media"><img src="${attr(img(i + 1))}" alt="${esc(s.name)}"></div><div><div class="eyebrow">${esc(nc.serviceLabel)} ${String(i + 1).padStart(2, '0')}</div><h2>${esc(s.name)}</h2><p class="lead">${esc(s.description)}</p>${s.when ? `<div class="when"><strong>När passar det?</strong><p>${esc(s.when)}</p></div>` : ''}<div class="btns">${primaryCta}${bookCta}</div></div></div>`).join('')}</div></section>
+    ${faqs.length ? `<section class="section band-tight"><div class="wrap"><div class="eyebrow">Vanliga frågor</div><h2 class="h2">Bra att veta före ditt besök</h2><div style="margin-top:36px;max-width:900px">${faqs.map((f) => `<details class="faq"><summary>${esc(f.question)}</summary><p>${esc(f.answer)}</p></details>`).join('')}</div></div></section>` : ''}
+    ${finalCta}`
+    : `
     ${pageHero('Tjänster', plan.aboutTitle && plan.aboutTitle.length < 60 ? plan.aboutTitle : 'Våra tjänster', nc.servicesPageSub, img(0))}
     <section class="section"><div class="wrap">${services.map((s, i) => `<div class="service-row ${i % 2 === 1 ? 'rev' : ''}"><div class="s-media"><img src="${attr(img(i + 1))}" alt="${esc(s.name)}"></div><div><div class="eyebrow">${esc(nc.serviceLabel)} 0${i + 1}</div><h2>${esc(s.name)}</h2><p class="lead">${esc(s.description)}</p>${s.when ? `<div class="when"><strong>När passar det?</strong><p>${esc(s.when)}</p></div>` : ''}<div class="btns">${primaryCta}</div></div></div>`).join('')}</div></section>
     ${faqs.length ? `<section class="section band-tight"><div class="wrap"><div class="eyebrow">Vanliga frågor</div><h2 class="h2">Bra att veta inför ditt besök</h2><div style="margin-top:40px;max-width:900px">${faqs.map((f) => `<details class="faq"><summary>${esc(f.question)}</summary><p>${esc(f.answer)}</p></details>`).join('')}</div></div></section>` : ''}
@@ -1105,7 +1276,7 @@ function contactSection({ phone, email, address, googleMapsUrl, nc }: { phone: s
     address ? `<div class="contact-item"><strong>Adress</strong><br>${esc(address)}</div>` : '',
   ].filter(Boolean).join('')
   const hasValidMap = googleMapsUrl && /^https:\/\/www\.google\.[^\s"']+\/maps\/embed/i.test(googleMapsUrl)
-  const wrapClass = hasValidMap ? 'wrap contact' : 'wrap'
+  const wrapClass = hasValidMap ? 'wrap contact-grid' : 'wrap'
   const map = hasValidMap
     ? `<iframe class="map" src="${attr(googleMapsUrl!)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>`
     : ''
