@@ -486,16 +486,36 @@ Deno.serve(async (req) => {
     const branding = scraped.branding ?? {}
 
 
-    // Full brand palette (fall back to premium dark when missing)
+    // Niche-specific visual defaults. Preserve scraped brand colors when present,
+    // but never let a salon with incomplete branding inherit the auto-shop palette.
     const bc = branding.colors ?? {}
+    const paletteDefaults = nc.key === 'hair_salon'
+      ? {
+          primary: '#9a5f6a',
+          secondary: '#c7a78a',
+          accent: '#d6b98c',
+          background: '#f7f2ed',
+          surface: '#fffaf6',
+          textPrimary: '#2d2525',
+          textSecondary: '#766a67',
+        }
+      : {
+          primary: '#f97316',
+          secondary: '#0ea5e9',
+          accent: '#f59e0b',
+          background: '#0a0e1a',
+          surface: '#131a2b',
+          textPrimary: '#f1f5f9',
+          textSecondary: '#94a3b8',
+        }
     const brandPalette = {
-      primary: bc.primary || branding.primaryColor || '#f97316',
-      secondary: bc.secondary || bc.accent || '#0ea5e9',
-      accent: bc.accent || bc.secondary || '#f59e0b',
-      background: bc.background || '#0a0e1a',
-      surface: bc.surface || bc.card || '#131a2b',
-      textPrimary: bc.textPrimary || bc.text || '#f1f5f9',
-      textSecondary: bc.textSecondary || bc.muted || '#94a3b8',
+      primary: bc.primary || branding.primaryColor || paletteDefaults.primary,
+      secondary: bc.secondary || bc.accent || paletteDefaults.secondary,
+      accent: bc.accent || bc.secondary || paletteDefaults.accent,
+      background: bc.background || paletteDefaults.background,
+      surface: bc.surface || bc.card || paletteDefaults.surface,
+      textPrimary: bc.textPrimary || bc.text || paletteDefaults.textPrimary,
+      textSecondary: bc.textSecondary || bc.muted || paletteDefaults.textSecondary,
     }
     const brandFonts = Array.isArray(branding.fonts)
       ? branding.fonts.map((f: any) => (typeof f === 'string' ? f : f?.family)).filter(Boolean).slice(0, 4)
@@ -789,7 +809,36 @@ function buildSiteFiles({
   const primaryHref = phone ? `tel:${phone.replace(/\s+/g, '')}` : email ? `mailto:${email}` : null
   const primaryLabel = phone ? 'Ring nu' : email ? 'Mejla oss' : null
   const bookLabel = 'Boka tid'
-  const displayFont = brandFonts[0] || 'Space Grotesk'
+  const displayFont = brandFonts[0] || (nc.key === 'hair_salon' ? 'Cormorant Garamond' : 'Space Grotesk')
+  const bodyFont = nc.key === 'hair_salon' ? 'Manrope' : 'Inter'
+  const nicheStyles = nc.key === 'hair_salon' ? `
+    .theme-salon{--font-body:Manrope,sans-serif}
+    .theme-salon .nav{background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(16px)}
+    .theme-salon .brand{font-family:var(--font-display);font-size:26px;font-weight:600;letter-spacing:.01em}
+    .theme-salon .links a{border-radius:999px;font-weight:600}
+    .theme-salon .nav-cta{color:#fff!important;border-radius:999px;box-shadow:none}
+    .theme-salon .eyebrow{border:0;background:transparent;padding:0;border-radius:0;letter-spacing:.28em}
+    .theme-salon .h1,.theme-salon .h2,.theme-salon .h3{letter-spacing:-.01em}
+    .theme-salon .h1{font-weight:600;line-height:.95}
+    .theme-salon .h1 .accent{font-style:italic;font-weight:500;color:var(--primary)}
+    .theme-salon .hero>img{filter:brightness(.78) saturate(.82)}
+    .theme-salon .hero:after{background:linear-gradient(90deg,color-mix(in srgb,var(--bg) 96%,transparent) 0%,color-mix(in srgb,var(--bg) 80%,transparent) 48%,color-mix(in srgb,var(--bg) 18%,transparent) 100%)}
+    .theme-salon .btn{border-radius:999px;padding:15px 27px}
+    .theme-salon .btn.primary{color:#fff;box-shadow:0 14px 34px color-mix(in srgb,var(--primary) 22%,transparent)}
+    .theme-salon .card{border-radius:2px;box-shadow:0 18px 55px color-mix(in srgb,var(--text) 8%,transparent)}
+    .theme-salon .card:hover{transform:translateY(-2px)}
+    .theme-salon .path-card{border-top:2px solid var(--primary)}
+    .theme-salon .band{background:linear-gradient(145deg,var(--surface),color-mix(in srgb,var(--accent) 13%,var(--bg)))}
+    .theme-salon .band-tight{background:color-mix(in srgb,var(--surface) 72%,var(--bg))}
+    .theme-salon .photo,.theme-salon .service-row img{border-radius:2px;box-shadow:0 24px 70px color-mix(in srgb,var(--text) 12%,transparent)}
+    .theme-salon .scenario{border-radius:2px;box-shadow:0 16px 45px color-mix(in srgb,var(--text) 8%,transparent)}
+    .theme-salon .diff{border-left:0;border-top:2px solid var(--primary);border-radius:0;background:transparent}
+    .theme-salon .cta-band{background:linear-gradient(135deg,var(--primary),color-mix(in srgb,var(--primary) 72%,var(--accent)));color:#fff;border-radius:2px}
+    .theme-salon .cta-band h2{color:#fff}
+    .theme-salon .cta-band .lead{color:rgba(255,255,255,.82)}
+    .theme-salon .cta-band .btn.primary{background:#fff;color:var(--primary);border-color:#fff}
+    .theme-salon footer{background:var(--surface)}
+  ` : ''
 
   const common = (active: 'home' | 'about' | 'services', title: string, body: string) => `<!DOCTYPE html>
 <html lang="sv">
@@ -800,9 +849,9 @@ function buildSiteFiles({
   <meta name="description" content="${esc(plan.tagline || plan.heroSubline || `${businessName} – ${nc.metaDescSuffix}`)}" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=${encodeURIComponent(displayFont).replace(/%20/g, '+')}:wght@500;600;700;800;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=${encodeURIComponent(displayFont).replace(/%20/g, '+')}:wght@500;600;700;800;900&family=Inter:wght@400;500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    :root{--primary:${cssColor(brandPalette.primary,'#f97316')};--secondary:${cssColor(brandPalette.secondary,'#0ea5e9')};--accent:${cssColor(brandPalette.accent,'#f59e0b')};--bg:${cssColor(brandPalette.background,'#0a0e1a')};--surface:${cssColor(brandPalette.surface,'#131a2b')};--surface-2:color-mix(in srgb,var(--surface) 70%,var(--bg));--text:${cssColor(brandPalette.textPrimary,'#f1f5f9')};--text-muted:${cssColor(brandPalette.textSecondary,'#94a3b8')};--border:color-mix(in srgb,var(--text) 10%,transparent);--font-display:'${cssString(displayFont)}',Space Grotesk,sans-serif;--font-body:Inter,sans-serif}
+    :root{--primary:${cssColor(brandPalette.primary,'#f97316')};--secondary:${cssColor(brandPalette.secondary,'#0ea5e9')};--accent:${cssColor(brandPalette.accent,'#f59e0b')};--bg:${cssColor(brandPalette.background,'#0a0e1a')};--surface:${cssColor(brandPalette.surface,'#131a2b')};--surface-2:color-mix(in srgb,var(--surface) 70%,var(--bg));--text:${cssColor(brandPalette.textPrimary,'#f1f5f9')};--text-muted:${cssColor(brandPalette.textSecondary,'#94a3b8')};--border:color-mix(in srgb,var(--text) 10%,transparent);--font-display:'${cssString(displayFont)}',Space Grotesk,sans-serif;--font-body:${cssString(bodyFont)},Inter,sans-serif}
     *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font-body);line-height:1.6;-webkit-font-smoothing:antialiased}a{color:inherit}img{max-width:100%;display:block}
     .nav{position:sticky;top:0;z-index:50;background:color-mix(in srgb,var(--bg) 85%,transparent);backdrop-filter:blur(20px);border-bottom:1px solid var(--border)}
     .nav-inner{max-width:1280px;margin:0 auto;padding:18px 28px;display:flex;align-items:center;justify-content:space-between;gap:24px}
@@ -911,7 +960,8 @@ function buildSiteFiles({
     @media(max-width:900px){.nav-inner{padding:14px 20px}.links a{padding:8px 10px;font-size:13px}.section,.section-sm{padding:70px 20px}.hero{min-height:auto;padding:100px 20px}.g-4,.g-3,.g-2,.about-split,.diff-grid,.contact-grid,.footer-grid{grid-template-columns:1fr}.service-row{grid-template-columns:1fr;gap:32px;padding:60px 0}.service-row.rev>.s-media{order:0}.service-row img,.photo{height:340px}.cta-band{padding:70px 24px;border-radius:20px}}
   </style>
 </head>
-<body>
+<body class="${nc.key === 'hair_salon' ? 'theme-salon' : 'theme-auto'}">
+  <style>${nicheStyles}</style>
   ${nav(active, businessName, primaryHref, primaryLabel, hasContact)}
   ${body}
   ${footer(businessName, plan.tagline, { phone, email, address }, nc)}
