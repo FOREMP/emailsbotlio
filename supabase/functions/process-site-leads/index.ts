@@ -23,11 +23,13 @@ const FIRECRAWL_V2 = 'https://api.firecrawl.dev/v2'
 const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
 
 const AUDIT_PER_TICK = 3    // Firecrawl+Gemini per invocation — keep memory low
-const GEN_PER_TICK = 1      // start one full generation pipeline per tick
+const GEN_PER_TICK = 2      // how many new pipelines may START per tick
+const MAX_CONCURRENT_GEN = 3 // how many leads may be mid-pipeline at once
 const DAILY_GEN_CAP_FALLBACK = 16  // used only if we can't read sender limits
 const OUTREACH_DOMAIN = 'foremp.email'  // sites/day tracks daily send capacity on this domain
 const GHOST_LIST_NAME = 'Site Leads (auto)'
 const STALE_PIPELINE_MINUTES = 30 // never let one dead scrape/generate/deploy block the whole queue
+const ORPHAN_GRACE_MINUTES = 10   // 'generating' with no generated_sites row = dead job
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
