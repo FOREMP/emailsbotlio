@@ -405,11 +405,80 @@ export default function SiteLeads() {
         ))}
       </div>
 
+      <Card className="p-3 flex flex-wrap items-center gap-2">
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Sök företag, email, hemsida…"
+          className="h-9 w-full sm:w-64"
+        />
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="h-9 w-[190px]"><SelectValue placeholder="Status" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Alla statusar</SelectItem>
+            {STATUS_OPTIONS.map((s) => (
+              <SelectItem key={s} value={s}>{s}{counts[s] ? ` (${counts[s]})` : ""}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={nicheFilter} onValueChange={setNicheFilter}>
+          <SelectTrigger className="h-9 w-[190px]"><SelectValue placeholder="Bransch" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Alla branscher</SelectItem>
+            {NICHE_OPTIONS.map((n) => <SelectItem key={n.value} value={n.value}>{n.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={sortBy} onValueChange={setSortBy}>
+          <SelectTrigger className="h-9 w-[190px]"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="created_desc">Nyast först</SelectItem>
+            <SelectItem value="created_asc">Äldst först</SelectItem>
+            <SelectItem value="company">Företag A–Ö</SelectItem>
+            <SelectItem value="audit_asc">Sämst audit först</SelectItem>
+            <SelectItem value="audit_desc">Bäst audit först</SelectItem>
+            <SelectItem value="status">Status</SelectItem>
+          </SelectContent>
+        </Select>
+        <span className="text-xs text-muted-foreground ml-auto">{visible.length} av {leads.length} leads</span>
+      </Card>
+
+      {selected.size > 0 && (
+        <Card className="p-3 flex flex-wrap items-center gap-2 border-primary/40">
+          <span className="text-sm font-medium">{selected.size} valda</span>
+          <Button size="sm" variant="outline" disabled={bulkBusy}
+            onClick={() => bulkSet({ status: "needs_site" }, "Köade för hemsidebygge")}>
+            Köa för hemsida
+          </Button>
+          <Button size="sm" variant="outline" disabled={bulkBusy}
+            onClick={() => bulkSet({ status: "pending_audit" }, "Skickade till ny audit")}>
+            Kör audit igen
+          </Button>
+          <Button size="sm" variant="outline" disabled={bulkBusy}
+            onClick={() => bulkSet({ status: "site_good_enough" }, "Uteslutna från bygget")}>
+            Ta bort från byggkön
+          </Button>
+          <Select disabled={bulkBusy} onValueChange={(v) => bulkSet({ niche: v }, "Bransch uppdaterad")}>
+            <SelectTrigger className="h-9 w-[190px]"><SelectValue placeholder="Byt bransch…" /></SelectTrigger>
+            <SelectContent>
+              {NICHE_OPTIONS.map((n) => <SelectItem key={n.value} value={n.value}>{n.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button size="sm" variant="destructive" disabled={bulkBusy} onClick={bulkDelete} className="gap-1">
+            <Trash2 className="h-4 w-4" /> Radera
+          </Button>
+          <Button size="sm" variant="ghost" disabled={bulkBusy} onClick={() => setSelected(new Set())}>Avmarkera</Button>
+        </Card>
+      )}
+
       <Card className="p-0 overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-muted/50">
             <tr>
+              <th className="p-3 w-8">
+                <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} aria-label="Markera alla" />
+              </th>
               <th className="text-left p-3">Företag</th>
+              <th className="text-left p-3">Bransch</th>
               <th className="text-left p-3">Email</th>
               <th className="text-left p-3">Website</th>
               <th className="text-left p-3">Status</th>
@@ -419,9 +488,15 @@ export default function SiteLeads() {
             </tr>
           </thead>
           <tbody>
-            {leads.map((l) => (
+            {visible.map((l) => (
               <tr key={l.id} className="border-t">
+                <td className="p-3">
+                  <input type="checkbox" checked={selected.has(l.id)} onChange={() => toggleOne(l.id)} aria-label={`Välj ${l.company_name}`} />
+                </td>
                 <td className="p-3 font-medium">{l.company_name}</td>
+                <td className="p-3 text-muted-foreground text-xs">
+                  {NICHE_OPTIONS.find((n) => n.value === l.niche)?.label ?? l.niche ?? "—"}
+                </td>
                 <td className="p-3 text-muted-foreground">{l.email ?? "—"}</td>
                 <td className="p-3 text-muted-foreground truncate max-w-[200px]">
                   {l.website ? <a href={l.website} target="_blank" rel="noreferrer" className="underline">{l.website}</a> : "—"}
@@ -440,8 +515,10 @@ export default function SiteLeads() {
                 </td>
               </tr>
             ))}
-            {leads.length === 0 && (
-              <tr><td colSpan={7} className="p-6 text-center text-muted-foreground">Inga leads än. Ladda upp en CSV för att börja.</td></tr>
+            {visible.length === 0 && (
+              <tr><td colSpan={9} className="p-6 text-center text-muted-foreground">
+                {leads.length === 0 ? "Inga leads än. Ladda upp en CSV för att börja." : "Inga leads matchar filtret."}
+              </td></tr>
             )}
           </tbody>
         </table>
