@@ -20,6 +20,7 @@ type Lead = {
   phone: string | null;
   address: string | null;
   category: string | null;
+  niche: string | null;
   rating: number | null;
   reviews_count: number | null;
   review_snippets: string[] | null;
@@ -104,19 +105,99 @@ export default function SiteLeads() {
   const [editing, setEditing] = useState<Lead | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Grouping / filtering / sorting
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [nicheFilter, setNicheFilter] = useState<string>("all");
+  const [sortBy, setSortBy] = useState<string>("created_desc");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+
   const load = async () => {
     const { data } = await supabase
       .from("site_leads")
-      .select("id, company_name, email, website, phone, address, category, rating, reviews_count, review_snippets, feedback, status, audit_score, demo_url, created_at")
+      .select("id, company_name, email, website, phone, address, category, niche, rating, reviews_count, review_snippets, feedback, status, audit_score, demo_url, created_at")
       .order("created_at", { ascending: false })
       .limit(500);
     setLeads((data ?? []) as Lead[]);
+    setSelected(new Set());
     const c: Record<string, number> = {};
     for (const l of data ?? []) c[l.status] = (c[l.status] ?? 0) + 1;
     setCounts(c);
   };
 
   useEffect(() => { load(); }, []);
+
+  const visible = leads
+    .filter((l) => (statusFilter === "all" ? true : l.status === statusFilter))
+    .filter((l) => (nicheFilter === "all" ? true : (l.niche ?? "") === nicheFilter))
+    .filter((l) => {
+      const q = search.trim().toLowerCase();
+      if (!q) return true;
+      return [l.company_name, l.email, l.website, l.category, l.address]
+        .some((v) => (v ?? "").toLowerCase().includes(q));
+    })
+    .sort((a, b) => {
+      switch (sortBy) {
+        case "created_asc": return a.created_at.localeCompare(b.created_at);
+        case "company": return a.company_name.localeCompare(b.company_name, "sv");
+        case "audit_asc": return (a.audit_score ?? 99) - (b.audit_score ?? 99);
+        case "audit_desc": return (b.audit_score ?? -1) - (a.audit_score ?? -1);
+        case "status": return a.status.localeCompare(b.status);
+        default: return b.created_at.localeCompare(a.created_at);
+      }
+    });
+
+  const allVisibleSelected = visible.length > 0 && visible.every((l) => selected.has(l.id));
+  const toggleAllVisible = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) visible.forEach((l) => next.delete(l.id));
+      else visible.forEach((l) => next.add(l.id));
+      return next;
+    });
+  };
+  const toggleOne = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const bulkDelete = async () => {
+    const ids = Array.from(selected);
+    if (!ids.length) return;
+    if (!confirm(`Radera ${ids.length} leads? Detta går inte att ångra.`)) return;
+    setBulkBusy(true);
+    try {
+      const { error } = await supabase.from("site_leads").delete().in("id", ids);
+      if (error) throw error;
+      toast({ title: `${ids.length} leads raderade` });
+      await load();
+    } catch (err) {
+      toast({ title: "Kunde inte radera", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const bulkSet = async (patch: Record<string, unknown>, label: string) => {
+    const ids = Array.from(selected);
+    if (!ids.length) return;
+    setBulkBusy(true);
+    try {
+      const { error } = await supabase.from("site_leads").update(patch as any).in("id", ids);
+      if (error) throw error;
+      toast({ title: `${ids.length} leads uppdaterade`, description: label });
+      await load();
+    } catch (err) {
+      toast({ title: "Kunde inte uppdatera", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
 
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -211,6 +292,7 @@ export default function SiteLeads() {
           reviews_count: editing.reviews_count,
           review_snippets: snippets.length ? snippets : null,
           feedback: editing.feedback || null,
+          niche: editing.niche || "auto_workshop",
           status,
         })
         .eq("id", editing.id);
@@ -324,11 +406,80 @@ export default function SiteLeads() {
         ))}
       </div>
 
+      <Card className="p-3 flex flex-wrap items-center gap-2">
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Sök företag, email, hemsida…"
+          className="h-9 w-full sm:w-64"
+        />
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="h-9 w-[190px]"><SelectValue placeholder="Status" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Alla statusar</SelectItem>
+            {STATUS_OPTIONS.map((s) => (
+              <SelectItem key={s} value={s}>{s}{counts[s] ? ` (${counts[s]})` : ""}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={nicheFilter} onValueChange={setNicheFilter}>
+          <SelectTrigger className="h-9 w-[190px]"><SelectValue placeholder="Bransch" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Alla branscher</SelectItem>
+            {NICHE_OPTIONS.map((n) => <SelectItem key={n.value} value={n.value}>{n.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={sortBy} onValueChange={setSortBy}>
+          <SelectTrigger className="h-9 w-[190px]"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="created_desc">Nyast först</SelectItem>
+            <SelectItem value="created_asc">Äldst först</SelectItem>
+            <SelectItem value="company">Företag A–Ö</SelectItem>
+            <SelectItem value="audit_asc">Sämst audit först</SelectItem>
+            <SelectItem value="audit_desc">Bäst audit först</SelectItem>
+            <SelectItem value="status">Status</SelectItem>
+          </SelectContent>
+        </Select>
+        <span className="text-xs text-muted-foreground ml-auto">{visible.length} av {leads.length} leads</span>
+      </Card>
+
+      {selected.size > 0 && (
+        <Card className="p-3 flex flex-wrap items-center gap-2 border-primary/40">
+          <span className="text-sm font-medium">{selected.size} valda</span>
+          <Button size="sm" variant="outline" disabled={bulkBusy}
+            onClick={() => bulkSet({ status: "needs_site" }, "Köade för hemsidebygge")}>
+            Köa för hemsida
+          </Button>
+          <Button size="sm" variant="outline" disabled={bulkBusy}
+            onClick={() => bulkSet({ status: "pending_audit" }, "Skickade till ny audit")}>
+            Kör audit igen
+          </Button>
+          <Button size="sm" variant="outline" disabled={bulkBusy}
+            onClick={() => bulkSet({ status: "site_good_enough" }, "Uteslutna från bygget")}>
+            Ta bort från byggkön
+          </Button>
+          <Select disabled={bulkBusy} onValueChange={(v) => bulkSet({ niche: v }, "Bransch uppdaterad")}>
+            <SelectTrigger className="h-9 w-[190px]"><SelectValue placeholder="Byt bransch…" /></SelectTrigger>
+            <SelectContent>
+              {NICHE_OPTIONS.map((n) => <SelectItem key={n.value} value={n.value}>{n.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button size="sm" variant="destructive" disabled={bulkBusy} onClick={bulkDelete} className="gap-1">
+            <Trash2 className="h-4 w-4" /> Radera
+          </Button>
+          <Button size="sm" variant="ghost" disabled={bulkBusy} onClick={() => setSelected(new Set())}>Avmarkera</Button>
+        </Card>
+      )}
+
       <Card className="p-0 overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-muted/50">
             <tr>
+              <th className="p-3 w-8">
+                <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} aria-label="Markera alla" />
+              </th>
               <th className="text-left p-3">Företag</th>
+              <th className="text-left p-3">Bransch</th>
               <th className="text-left p-3">Email</th>
               <th className="text-left p-3">Website</th>
               <th className="text-left p-3">Status</th>
@@ -338,9 +489,15 @@ export default function SiteLeads() {
             </tr>
           </thead>
           <tbody>
-            {leads.map((l) => (
+            {visible.map((l) => (
               <tr key={l.id} className="border-t">
+                <td className="p-3">
+                  <input type="checkbox" checked={selected.has(l.id)} onChange={() => toggleOne(l.id)} aria-label={`Välj ${l.company_name}`} />
+                </td>
                 <td className="p-3 font-medium">{l.company_name}</td>
+                <td className="p-3 text-muted-foreground text-xs">
+                  {NICHE_OPTIONS.find((n) => n.value === l.niche)?.label ?? l.niche ?? "—"}
+                </td>
                 <td className="p-3 text-muted-foreground">{l.email ?? "—"}</td>
                 <td className="p-3 text-muted-foreground truncate max-w-[200px]">
                   {l.website ? <a href={l.website} target="_blank" rel="noreferrer" className="underline">{l.website}</a> : "—"}
@@ -359,8 +516,10 @@ export default function SiteLeads() {
                 </td>
               </tr>
             ))}
-            {leads.length === 0 && (
-              <tr><td colSpan={7} className="p-6 text-center text-muted-foreground">Inga leads än. Ladda upp en CSV för att börja.</td></tr>
+            {visible.length === 0 && (
+              <tr><td colSpan={9} className="p-6 text-center text-muted-foreground">
+                {leads.length === 0 ? "Inga leads än. Ladda upp en CSV för att börja." : "Inga leads matchar filtret."}
+              </td></tr>
             )}
           </tbody>
         </table>
@@ -392,14 +551,24 @@ export default function SiteLeads() {
               <Field label="Feedback / interna anteckningar">
                 <Textarea rows={3} value={editing.feedback ?? ""} onChange={(e) => setEditing({ ...editing, feedback: e.target.value })} />
               </Field>
-              <Field label="Status">
-                <Select value={editing.status} onValueChange={(v) => setEditing({ ...editing, status: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {STATUS_OPTIONS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Bransch / mall">
+                  <Select value={editing.niche ?? ""} onValueChange={(v) => setEditing({ ...editing, niche: v })}>
+                    <SelectTrigger><SelectValue placeholder="Välj bransch…" /></SelectTrigger>
+                    <SelectContent>
+                      {NICHE_OPTIONS.map((n) => <SelectItem key={n.value} value={n.value}>{n.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Status">
+                  <Select value={editing.status} onValueChange={(v) => setEditing({ ...editing, status: v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {STATUS_OPTIONS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </Field>
+              </div>
             </div>
           )}
           <DialogFooter className="flex sm:justify-between gap-2">

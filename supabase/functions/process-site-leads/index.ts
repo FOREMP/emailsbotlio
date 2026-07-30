@@ -23,11 +23,13 @@ const FIRECRAWL_V2 = 'https://api.firecrawl.dev/v2'
 const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
 
 const AUDIT_PER_TICK = 3    // Firecrawl+Gemini per invocation — keep memory low
-const GEN_PER_TICK = 1      // start one full generation pipeline per tick
+const GEN_PER_TICK = 2      // how many new pipelines may START per tick
+const MAX_CONCURRENT_GEN = 3 // how many leads may be mid-pipeline at once
 const DAILY_GEN_CAP_FALLBACK = 16  // used only if we can't read sender limits
 const OUTREACH_DOMAIN = 'foremp.email'  // sites/day tracks daily send capacity on this domain
 const GHOST_LIST_NAME = 'Site Leads (auto)'
 const STALE_PIPELINE_MINUTES = 30 // never let one dead scrape/generate/deploy block the whole queue
+const ORPHAN_GRACE_MINUTES = 10   // 'generating' with no generated_sites row = dead job
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
@@ -94,18 +96,19 @@ Deno.serve(async (req) => {
     report.capacity = capacity
 
     if (capacity > 0) {
-      // Serial pipeline: only start a new lead if none are currently in flight.
-      // A lead is "in flight" while its status='generating' (scrape → generate
-      // → deploy has not yet reached awaiting_approval / failed).
+      // Bounded-concurrency pipeline: keep up to MAX_CONCURRENT_GEN leads
+      // mid-flight so the daily quota can actually be reached, instead of the
+      // old strictly-serial gate where one lead blocked the whole queue.
       const { count: inFlight } = await supabase
         .from('site_leads')
         .select('id', { count: 'exact', head: true })
         .eq('status', 'generating')
 
-      if ((inFlight ?? 0) > 0) {
+      const slots = Math.max(0, MAX_CONCURRENT_GEN - (inFlight ?? 0))
+      if (slots === 0) {
         report.errors.push(`skip generate: ${inFlight} lead(s) still in flight`)
       } else {
-        const take = Math.min(GEN_PER_TICK, capacity)
+        const take = Math.min(GEN_PER_TICK, capacity, slots)
         const { data: needsSite } = await supabase
           .from('site_leads')
           .select('id, user_id, company_name, website, email, phone, address, category, niche, rating, review_snippets, audit_reason, audit_details, feedback')
@@ -114,6 +117,12 @@ Deno.serve(async (req) => {
           .not('email', 'is', null)
           .order('audit_score', { ascending: true, nullsFirst: false })
           .limit(take)
+
+        if (!needsSite?.length) {
+          // Nothing to build right now — the tick simply idles and picks up
+          // new needs_site leads as soon as the audit phase produces them.
+          report.errors.push('idle: no needs_site leads ready')
+        }
 
         for (const lead of needsSite ?? []) {
           try {
@@ -147,6 +156,28 @@ async function recoverStuckGenerations(
 ): Promise<number> {
   const cutoffMs = Date.now() - STALE_PIPELINE_MINUTES * 60_000
 
+  // 1a. Orphans: status='generating' but no generated_sites row was ever
+  // linked (the start-generation call died mid-way). These used to be
+  // invisible to the watchdog and permanently blocked the queue.
+  const orphanCutoff = new Date(Date.now() - ORPHAN_GRACE_MINUTES * 60_000).toISOString()
+  const { data: orphans } = await supabase
+    .from('site_leads')
+    .select('id')
+    .eq('status', 'generating')
+    .is('generated_site_id', null)
+    .lt('updated_at', orphanCutoff)
+    .limit(50)
+
+  let orphanFixed = 0
+  if (orphans?.length) {
+    const { error: orphanErr } = await supabase
+      .from('site_leads')
+      .update({ status: 'needs_site', updated_at: new Date().toISOString() })
+      .in('id', orphans.map((o: any) => o.id))
+    if (orphanErr) report.errors.push(`recover orphans: ${orphanErr.message}`)
+    else orphanFixed = orphans.length
+  }
+
   const { data: leads, error: leadErr } = await supabase
     .from('site_leads')
     .select('id, generated_site_id')
@@ -155,12 +186,12 @@ async function recoverStuckGenerations(
     .limit(50)
   if (leadErr) {
     report.errors.push(`recover lead read: ${leadErr.message}`)
-    return 0
+    return orphanFixed
   }
-  if (!leads?.length) return 0
+  if (!leads?.length) return orphanFixed
 
   const ids = leads.map((l: any) => l.generated_site_id).filter(Boolean)
-  if (!ids.length) return 0
+  if (!ids.length) return orphanFixed
 
   const { data: sites, error: siteErr } = await supabase
     .from('generated_sites')
@@ -168,11 +199,11 @@ async function recoverStuckGenerations(
     .in('id', ids)
   if (siteErr) {
     report.errors.push(`recover site read: ${siteErr.message}`)
-    return 0
+    return orphanFixed
   }
 
   const byId = new Map((sites ?? []).map((s: any) => [s.id, s]))
-  let recovered = 0
+  let recovered = orphanFixed
 
   for (const lead of leads as any[]) {
     const gs = byId.get(lead.generated_site_id)
