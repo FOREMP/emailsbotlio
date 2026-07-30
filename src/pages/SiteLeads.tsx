@@ -20,6 +20,7 @@ type Lead = {
   phone: string | null;
   address: string | null;
   category: string | null;
+  niche: string | null;
   rating: number | null;
   reviews_count: number | null;
   review_snippets: string[] | null;
