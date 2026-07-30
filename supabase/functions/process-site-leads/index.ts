@@ -96,18 +96,19 @@ Deno.serve(async (req) => {
     report.capacity = capacity
 
     if (capacity > 0) {
-      // Serial pipeline: only start a new lead if none are currently in flight.
-      // A lead is "in flight" while its status='generating' (scrape → generate
-      // → deploy has not yet reached awaiting_approval / failed).
+      // Bounded-concurrency pipeline: keep up to MAX_CONCURRENT_GEN leads
+      // mid-flight so the daily quota can actually be reached, instead of the
+      // old strictly-serial gate where one lead blocked the whole queue.
       const { count: inFlight } = await supabase
         .from('site_leads')
         .select('id', { count: 'exact', head: true })
         .eq('status', 'generating')
 
-      if ((inFlight ?? 0) > 0) {
+      const slots = Math.max(0, MAX_CONCURRENT_GEN - (inFlight ?? 0))
+      if (slots === 0) {
         report.errors.push(`skip generate: ${inFlight} lead(s) still in flight`)
       } else {
-        const take = Math.min(GEN_PER_TICK, capacity)
+        const take = Math.min(GEN_PER_TICK, capacity, slots)
         const { data: needsSite } = await supabase
           .from('site_leads')
           .select('id, user_id, company_name, website, email, phone, address, category, niche, rating, review_snippets, audit_reason, audit_details, feedback')
@@ -116,6 +117,12 @@ Deno.serve(async (req) => {
           .not('email', 'is', null)
           .order('audit_score', { ascending: true, nullsFirst: false })
           .limit(take)
+
+        if (!needsSite?.length) {
+          // Nothing to build right now — the tick simply idles and picks up
+          // new needs_site leads as soon as the audit phase produces them.
+          report.errors.push('idle: no needs_site leads ready')
+        }
 
         for (const lead of needsSite ?? []) {
           try {
