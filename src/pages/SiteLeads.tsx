@@ -551,14 +551,24 @@ export default function SiteLeads() {
               <Field label="Feedback / interna anteckningar">
                 <Textarea rows={3} value={editing.feedback ?? ""} onChange={(e) => setEditing({ ...editing, feedback: e.target.value })} />
               </Field>
-              <Field label="Status">
-                <Select value={editing.status} onValueChange={(v) => setEditing({ ...editing, status: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {STATUS_OPTIONS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Bransch / mall">
+                  <Select value={editing.niche ?? ""} onValueChange={(v) => setEditing({ ...editing, niche: v })}>
+                    <SelectTrigger><SelectValue placeholder="Välj bransch…" /></SelectTrigger>
+                    <SelectContent>
+                      {NICHE_OPTIONS.map((n) => <SelectItem key={n.value} value={n.value}>{n.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Status">
+                  <Select value={editing.status} onValueChange={(v) => setEditing({ ...editing, status: v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {STATUS_OPTIONS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </Field>
+              </div>
             </div>
           )}
           <DialogFooter className="flex sm:justify-between gap-2">
