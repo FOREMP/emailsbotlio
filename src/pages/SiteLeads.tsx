@@ -105,19 +105,99 @@ export default function SiteLeads() {
   const [editing, setEditing] = useState<Lead | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Grouping / filtering / sorting
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [nicheFilter, setNicheFilter] = useState<string>("all");
+  const [sortBy, setSortBy] = useState<string>("created_desc");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+
   const load = async () => {
     const { data } = await supabase
       .from("site_leads")
-      .select("id, company_name, email, website, phone, address, category, rating, reviews_count, review_snippets, feedback, status, audit_score, demo_url, created_at")
+      .select("id, company_name, email, website, phone, address, category, niche, rating, reviews_count, review_snippets, feedback, status, audit_score, demo_url, created_at")
       .order("created_at", { ascending: false })
       .limit(500);
     setLeads((data ?? []) as Lead[]);
+    setSelected(new Set());
     const c: Record<string, number> = {};
     for (const l of data ?? []) c[l.status] = (c[l.status] ?? 0) + 1;
     setCounts(c);
   };
 
   useEffect(() => { load(); }, []);
+
+  const visible = leads
+    .filter((l) => (statusFilter === "all" ? true : l.status === statusFilter))
+    .filter((l) => (nicheFilter === "all" ? true : (l.niche ?? "") === nicheFilter))
+    .filter((l) => {
+      const q = search.trim().toLowerCase();
+      if (!q) return true;
+      return [l.company_name, l.email, l.website, l.category, l.address]
+        .some((v) => (v ?? "").toLowerCase().includes(q));
+    })
+    .sort((a, b) => {
+      switch (sortBy) {
+        case "created_asc": return a.created_at.localeCompare(b.created_at);
+        case "company": return a.company_name.localeCompare(b.company_name, "sv");
+        case "audit_asc": return (a.audit_score ?? 99) - (b.audit_score ?? 99);
+        case "audit_desc": return (b.audit_score ?? -1) - (a.audit_score ?? -1);
+        case "status": return a.status.localeCompare(b.status);
+        default: return b.created_at.localeCompare(a.created_at);
+      }
+    });
+
+  const allVisibleSelected = visible.length > 0 && visible.every((l) => selected.has(l.id));
+  const toggleAllVisible = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) visible.forEach((l) => next.delete(l.id));
+      else visible.forEach((l) => next.add(l.id));
+      return next;
+    });
+  };
+  const toggleOne = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const bulkDelete = async () => {
+    const ids = Array.from(selected);
+    if (!ids.length) return;
+    if (!confirm(`Radera ${ids.length} leads? Detta går inte att ångra.`)) return;
+    setBulkBusy(true);
+    try {
+      const { error } = await supabase.from("site_leads").delete().in("id", ids);
+      if (error) throw error;
+      toast({ title: `${ids.length} leads raderade` });
+      await load();
+    } catch (err) {
+      toast({ title: "Kunde inte radera", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const bulkSet = async (patch: Record<string, unknown>, label: string) => {
+    const ids = Array.from(selected);
+    if (!ids.length) return;
+    setBulkBusy(true);
+    try {
+      const { error } = await supabase.from("site_leads").update(patch as any).in("id", ids);
+      if (error) throw error;
+      toast({ title: `${ids.length} leads uppdaterade`, description: label });
+      await load();
+    } catch (err) {
+      toast({ title: "Kunde inte uppdatera", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
 
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
