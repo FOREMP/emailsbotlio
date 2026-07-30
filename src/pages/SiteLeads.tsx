@@ -292,6 +292,7 @@ export default function SiteLeads() {
           reviews_count: editing.reviews_count,
           review_snippets: snippets.length ? snippets : null,
           feedback: editing.feedback || null,
+          niche: editing.niche || "auto_workshop",
           status,
         })
         .eq("id", editing.id);
