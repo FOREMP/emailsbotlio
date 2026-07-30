@@ -199,11 +199,11 @@ async function recoverStuckGenerations(
     .in('id', ids)
   if (siteErr) {
     report.errors.push(`recover site read: ${siteErr.message}`)
-    return 0
+    return orphanFixed
   }
 
   const byId = new Map((sites ?? []).map((s: any) => [s.id, s]))
-  let recovered = 0
+  let recovered = orphanFixed
 
   for (const lead of leads as any[]) {
     const gs = byId.get(lead.generated_site_id)
