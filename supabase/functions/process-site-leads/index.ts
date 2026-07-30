@@ -156,6 +156,28 @@ async function recoverStuckGenerations(
 ): Promise<number> {
   const cutoffMs = Date.now() - STALE_PIPELINE_MINUTES * 60_000
 
+  // 1a. Orphans: status='generating' but no generated_sites row was ever
+  // linked (the start-generation call died mid-way). These used to be
+  // invisible to the watchdog and permanently blocked the queue.
+  const orphanCutoff = new Date(Date.now() - ORPHAN_GRACE_MINUTES * 60_000).toISOString()
+  const { data: orphans } = await supabase
+    .from('site_leads')
+    .select('id')
+    .eq('status', 'generating')
+    .is('generated_site_id', null)
+    .lt('updated_at', orphanCutoff)
+    .limit(50)
+
+  let orphanFixed = 0
+  if (orphans?.length) {
+    const { error: orphanErr } = await supabase
+      .from('site_leads')
+      .update({ status: 'needs_site', updated_at: new Date().toISOString() })
+      .in('id', orphans.map((o: any) => o.id))
+    if (orphanErr) report.errors.push(`recover orphans: ${orphanErr.message}`)
+    else orphanFixed = orphans.length
+  }
+
   const { data: leads, error: leadErr } = await supabase
     .from('site_leads')
     .select('id, generated_site_id')
@@ -164,12 +186,12 @@ async function recoverStuckGenerations(
     .limit(50)
   if (leadErr) {
     report.errors.push(`recover lead read: ${leadErr.message}`)
-    return 0
+    return orphanFixed
   }
-  if (!leads?.length) return 0
+  if (!leads?.length) return orphanFixed
 
   const ids = leads.map((l: any) => l.generated_site_id).filter(Boolean)
-  if (!ids.length) return 0
+  if (!ids.length) return orphanFixed
 
   const { data: sites, error: siteErr } = await supabase
     .from('generated_sites')
