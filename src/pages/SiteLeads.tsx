@@ -462,6 +462,40 @@ export default function SiteLeads() {
         </Card>
       )}
 
+      <Card className="p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="font-semibold">Hemsidegenerering</div>
+            <p className="text-xs text-muted-foreground">
+              Styr om systemet automatiskt får bygga nya hemsidor. Pågående jobb slutförs alltid.
+            </p>
+          </div>
+          <Badge className={
+            autoState === "running" ? "bg-emerald-500" : autoState === "paused" ? "bg-amber-500" : "bg-red-500"
+          }>
+            {autoState === "running" ? "Igång" : autoState === "paused" ? "Pausad" : "Stoppad"}
+          </Badge>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant={autoState === "running" ? "default" : "outline"} className="gap-1"
+            disabled={autoBusy || autoState === "running"} onClick={() => changeAutoState("running")}>
+            <Play className="h-4 w-4" /> Starta
+          </Button>
+          <Button size="sm" variant={autoState === "paused" ? "default" : "outline"} className="gap-1"
+            disabled={autoBusy || autoState === "paused"} onClick={() => changeAutoState("paused")}>
+            <Pause className="h-4 w-4" /> Pausa
+          </Button>
+          <Button size="sm" variant={autoState === "stopped" ? "destructive" : "outline"} className="gap-1"
+            disabled={autoBusy || autoState === "stopped"} onClick={() => changeAutoState("stopped")}>
+            <StopCircle className="h-4 w-4" /> Stoppa
+          </Button>
+          <Button size="sm" variant="secondary" className="gap-1 ml-auto" disabled={autoBusy} onClick={runPipelineNow}>
+            <RefreshCw className="h-4 w-4" /> Kör pipeline nu
+          </Button>
+        </div>
+      </Card>
+
+
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {Object.entries(counts).map(([k, v]) => (
           <Card key={k} className="p-4">
