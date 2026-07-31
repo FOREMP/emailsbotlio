@@ -113,6 +113,70 @@ export default function SiteLeads() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
 
+  // Automation switch + manual override (moved here from the old Sites page)
+  const [autoState, setAutoState] = useState<"running" | "paused" | "stopped">("running");
+  const [autoBusy, setAutoBusy] = useState(false);
+
+  const loadAutoState = async () => {
+    const { data } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("key", "site_generation_state")
+      .maybeSingle();
+    setAutoState(((data?.value as any)?.state ?? "running") as "running" | "paused" | "stopped");
+  };
+
+  const changeAutoState = async (state: "running" | "paused" | "stopped") => {
+    setAutoBusy(true);
+    try {
+      const { error } = await supabase
+        .from("app_settings")
+        .upsert({ key: "site_generation_state", value: { state } as any, updated_at: new Date().toISOString() });
+      if (error) throw error;
+      setAutoState(state);
+      toast({ title: `Automation: ${state === "running" ? "Igång" : state === "paused" ? "Pausad" : "Stoppad"}` });
+    } catch (err) {
+      toast({ title: "Kunde inte ändra automation", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setAutoBusy(false);
+    }
+  };
+
+  const runPipelineNow = async () => {
+    setAutoBusy(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("process-site-leads", { body: {} });
+      if (error) throw error;
+      toast({ title: "Pipeline körd", description: `Auditerade ${data?.audited ?? 0}, startade ${data?.generated ?? 0} bygg.` });
+      await load();
+    } catch (err) {
+      toast({ title: "Pipeline misslyckades", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setAutoBusy(false);
+    }
+  };
+
+  const forceBuildSelected = async () => {
+    const ids = Array.from(selected).slice(0, 20);
+    if (!ids.length) return;
+    setBulkBusy(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("process-site-leads", {
+        body: { force: true, lead_ids: ids },
+      });
+      if (error) throw error;
+      toast({
+        title: `Bygger ${data?.generated ?? 0} hemsida(or) nu`,
+        description: data?.errors?.length ? String(data.errors[0]) : "Override — ignorerar dagsgräns och pausläge.",
+      });
+      await load();
+    } catch (err) {
+      toast({ title: "Kunde inte starta bygge", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   const load = async () => {
     const { data } = await supabase
       .from("site_leads")
@@ -126,7 +190,8 @@ export default function SiteLeads() {
     setCounts(c);
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); loadAutoState(); }, []);
+
 
   const visible = leads
     .filter((l) => (statusFilter === "all" ? true : l.status === statusFilter))
