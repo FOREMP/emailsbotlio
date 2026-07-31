@@ -426,6 +426,14 @@ async function startGeneration(
   serviceKey: string,
   lead: any,
 ) {
+  // Resolve the niche up-front: it is used both on the ghost contact and on
+  // the generated_sites row (previously declared after first use -> TDZ crash).
+  const niche = inferLeadNiche(lead)
+  const nicheTemplate = ({
+    auto_workshop: 'auto_workshop_v1',
+    hair_salon: 'hair_salon_v1',
+  } as Record<string, string>)[niche]
+
   // Ensure ghost list for this user
   const { data: list } = await supabase
     .from('contact_lists')
@@ -485,11 +493,6 @@ async function startGeneration(
 
   // Create the generated_sites row wired to the lead. Template is picked
   // from the lead's niche tag so the AI knows which layout to build.
-  const niche = inferLeadNiche(lead)
-  const nicheTemplate = ({
-    auto_workshop: 'auto_workshop_v1',
-    hair_salon: 'hair_salon_v1',
-  } as Record<string, string>)[niche]
   const { data: gs, error: gsErr } = await supabase
     .from('generated_sites')
     .insert({
