@@ -514,15 +514,20 @@ Deno.serve(async (req) => {
           textPrimary: '#f1f5f9',
           textSecondary: '#94a3b8',
         }
+    // Derive the real brand hue from everything Firecrawl saw (button fills,
+    // primary/accent/link, pale brand tints) instead of trusting bc.primary,
+    // which is often the browser default link blue.
+    const derived = deriveBrandColors(branding, paletteDefaults)
     const brandPalette = buildAccessiblePalette({
-      primary: bc.primary || branding.primaryColor || paletteDefaults.primary,
-      secondary: bc.secondary || bc.accent || paletteDefaults.secondary,
-      accent: bc.accent || bc.secondary || paletteDefaults.accent,
-      background: bc.background || paletteDefaults.background,
-      surface: bc.surface || bc.card || paletteDefaults.surface,
-      textPrimary: bc.textPrimary || bc.text || paletteDefaults.textPrimary,
-      textSecondary: bc.textSecondary || bc.muted || paletteDefaults.textSecondary,
+      primary: derived.primary || bc.primary || paletteDefaults.primary,
+      secondary: derived.secondary || paletteDefaults.secondary,
+      accent: derived.accent || paletteDefaults.accent,
+      background: derived.background || paletteDefaults.background,
+      surface: derived.surface || paletteDefaults.surface,
+      textPrimary: derived.textPrimary || paletteDefaults.textPrimary,
+      textSecondary: derived.textSecondary || paletteDefaults.textSecondary,
     }, paletteDefaults)
+
     const brandFonts = Array.isArray(branding.fonts)
       ? branding.fonts.map((f: any) => (typeof f === 'string' ? f : f?.family)).filter(Boolean).slice(0, 4)
       : []
