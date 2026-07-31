@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { FileSpreadsheet, Upload, Pencil, Trash2 } from "lucide-react";
+import { FileSpreadsheet, Upload, Pencil, Trash2, Play, Pause, StopCircle, Wand2, RefreshCw } from "lucide-react";
 import * as XLSX from "xlsx";
 
 type Lead = {
@@ -113,6 +113,70 @@ export default function SiteLeads() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
 
+  // Automation switch + manual override (moved here from the old Sites page)
+  const [autoState, setAutoState] = useState<"running" | "paused" | "stopped">("running");
+  const [autoBusy, setAutoBusy] = useState(false);
+
+  const loadAutoState = async () => {
+    const { data } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("key", "site_generation_state")
+      .maybeSingle();
+    setAutoState(((data?.value as any)?.state ?? "running") as "running" | "paused" | "stopped");
+  };
+
+  const changeAutoState = async (state: "running" | "paused" | "stopped") => {
+    setAutoBusy(true);
+    try {
+      const { error } = await supabase
+        .from("app_settings")
+        .upsert({ key: "site_generation_state", value: { state } as any, updated_at: new Date().toISOString() });
+      if (error) throw error;
+      setAutoState(state);
+      toast({ title: `Automation: ${state === "running" ? "Igång" : state === "paused" ? "Pausad" : "Stoppad"}` });
+    } catch (err) {
+      toast({ title: "Kunde inte ändra automation", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setAutoBusy(false);
+    }
+  };
+
+  const runPipelineNow = async () => {
+    setAutoBusy(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("process-site-leads", { body: {} });
+      if (error) throw error;
+      toast({ title: "Pipeline körd", description: `Auditerade ${data?.audited ?? 0}, startade ${data?.generated ?? 0} bygg.` });
+      await load();
+    } catch (err) {
+      toast({ title: "Pipeline misslyckades", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setAutoBusy(false);
+    }
+  };
+
+  const forceBuildSelected = async () => {
+    const ids = Array.from(selected).slice(0, 20);
+    if (!ids.length) return;
+    setBulkBusy(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("process-site-leads", {
+        body: { force: true, lead_ids: ids },
+      });
+      if (error) throw error;
+      toast({
+        title: `Bygger ${data?.generated ?? 0} hemsida(or) nu`,
+        description: data?.errors?.length ? String(data.errors[0]) : "Override — ignorerar dagsgräns och pausläge.",
+      });
+      await load();
+    } catch (err) {
+      toast({ title: "Kunde inte starta bygge", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   const load = async () => {
     const { data } = await supabase
       .from("site_leads")
@@ -126,7 +190,8 @@ export default function SiteLeads() {
     setCounts(c);
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); loadAutoState(); }, []);
+
 
   const visible = leads
     .filter((l) => (statusFilter === "all" ? true : l.status === statusFilter))
@@ -397,6 +462,40 @@ export default function SiteLeads() {
         </Card>
       )}
 
+      <Card className="p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="font-semibold">Hemsidegenerering</div>
+            <p className="text-xs text-muted-foreground">
+              Styr om systemet automatiskt får bygga nya hemsidor. Pågående jobb slutförs alltid.
+            </p>
+          </div>
+          <Badge className={
+            autoState === "running" ? "bg-emerald-500" : autoState === "paused" ? "bg-amber-500" : "bg-red-500"
+          }>
+            {autoState === "running" ? "Igång" : autoState === "paused" ? "Pausad" : "Stoppad"}
+          </Badge>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant={autoState === "running" ? "default" : "outline"} className="gap-1"
+            disabled={autoBusy || autoState === "running"} onClick={() => changeAutoState("running")}>
+            <Play className="h-4 w-4" /> Starta
+          </Button>
+          <Button size="sm" variant={autoState === "paused" ? "default" : "outline"} className="gap-1"
+            disabled={autoBusy || autoState === "paused"} onClick={() => changeAutoState("paused")}>
+            <Pause className="h-4 w-4" /> Pausa
+          </Button>
+          <Button size="sm" variant={autoState === "stopped" ? "destructive" : "outline"} className="gap-1"
+            disabled={autoBusy || autoState === "stopped"} onClick={() => changeAutoState("stopped")}>
+            <StopCircle className="h-4 w-4" /> Stoppa
+          </Button>
+          <Button size="sm" variant="secondary" className="gap-1 ml-auto" disabled={autoBusy} onClick={runPipelineNow}>
+            <RefreshCw className="h-4 w-4" /> Kör pipeline nu
+          </Button>
+        </div>
+      </Card>
+
+
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {Object.entries(counts).map(([k, v]) => (
           <Card key={k} className="p-4">
@@ -450,6 +549,10 @@ export default function SiteLeads() {
             onClick={() => bulkSet({ status: "needs_site" }, "Köade för hemsidebygge")}>
             Köa för hemsida
           </Button>
+          <Button size="sm" variant="default" className="gap-1" disabled={bulkBusy} onClick={forceBuildSelected}>
+            <Wand2 className="h-4 w-4" /> Bygg nu (override)
+          </Button>
+
           <Button size="sm" variant="outline" disabled={bulkBusy}
             onClick={() => bulkSet({ status: "pending_audit" }, "Skickade till ny audit")}>
             Kör audit igen

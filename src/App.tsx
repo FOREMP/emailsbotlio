@@ -16,7 +16,7 @@ import Domains from "./pages/Domains.tsx";
 import Sequences from "./pages/Sequences.tsx";
 import SequenceCanvas from "./pages/SequenceCanvas.tsx";
 import Analytics from "./pages/Analytics.tsx";
-import Sites from "./pages/Sites.tsx";
+
 import SiteLeads from "./pages/SiteLeads.tsx";
 import SiteApprovals from "./pages/SiteApprovals.tsx";
 import SiteOutreach from "./pages/SiteOutreach.tsx";
@@ -51,7 +51,7 @@ const App = () => (
             <Route path="/sequences" element={protect(<Sequences />)} />
             <Route path="/sequences/:id" element={protect(<SequenceCanvas />, true)} />
             <Route path="/analytics" element={protect(<Analytics />)} />
-            <Route path="/sites" element={protect(<Sites />)} />
+            
             <Route path="/site-leads" element={protect(<SiteLeads />)} />
             <Route path="/site-approvals" element={protect(<SiteApprovals />)} />
             <Route path="/site-outreach" element={protect(<SiteOutreach />)} />

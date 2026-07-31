@@ -18,10 +18,10 @@ const primaryTabs = [
 ];
 
 const websiteTabs = [
-  { to: "/site-leads", label: "Leads", icon: Target },
+  { to: "/site-leads", label: "Leads & Generator", icon: Target },
   { to: "/site-approvals", label: "Approvals", icon: CheckCircle2 },
-  { to: "/sites", label: "Generator", icon: Sparkles },
   { to: "/site-outreach", label: "Demo Outreach", icon: Rocket },
+
 ];
 
 const trailingTabs = [
