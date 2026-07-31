@@ -493,11 +493,6 @@ async function startGeneration(
 
   // Create the generated_sites row wired to the lead. Template is picked
   // from the lead's niche tag so the AI knows which layout to build.
-  const niche = inferLeadNiche(lead)
-  const nicheTemplate = ({
-    auto_workshop: 'auto_workshop_v1',
-    hair_salon: 'hair_salon_v1',
-  } as Record<string, string>)[niche]
   const { data: gs, error: gsErr } = await supabase
     .from('generated_sites')
     .insert({
