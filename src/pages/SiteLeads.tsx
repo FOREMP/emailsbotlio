@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { FileSpreadsheet, Upload, Pencil, Trash2 } from "lucide-react";
+import { FileSpreadsheet, Upload, Pencil, Trash2, Play, Pause, StopCircle, Wand2, RefreshCw } from "lucide-react";
 import * as XLSX from "xlsx";
 
 type Lead = {
