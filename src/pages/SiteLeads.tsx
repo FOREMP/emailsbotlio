@@ -549,6 +549,10 @@ export default function SiteLeads() {
             onClick={() => bulkSet({ status: "needs_site" }, "Köade för hemsidebygge")}>
             Köa för hemsida
           </Button>
+          <Button size="sm" variant="default" className="gap-1" disabled={bulkBusy} onClick={forceBuildSelected}>
+            <Wand2 className="h-4 w-4" /> Bygg nu (override)
+          </Button>
+
           <Button size="sm" variant="outline" disabled={bulkBusy}
             onClick={() => bulkSet({ status: "pending_audit" }, "Skickade till ny audit")}>
             Kör audit igen
