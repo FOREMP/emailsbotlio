@@ -39,10 +39,39 @@ Deno.serve(async (req) => {
 
   const report = { reconciled: 0, recovered: 0, audited: 0, generated: 0, capacity: 0, errors: [] as string[] }
 
+  // Manual override from the Site Leads UI: build these leads right now,
+  // ignoring the automation switch and the daily cap.
+  let overrideIds: string[] = []
+  if (req.method === 'POST') {
+    try {
+      const body = await req.json()
+      if (body?.force && Array.isArray(body?.lead_ids)) {
+        overrideIds = body.lead_ids.filter((v: unknown) => typeof v === 'string').slice(0, 20)
+      }
+    } catch { /* no body — normal cron tick */ }
+  }
+
   try {
+    if (overrideIds.length > 0) {
+      const { data: forced } = await supabase
+        .from('site_leads')
+        .select('id, user_id, company_name, website, email, phone, address, category, niche, rating, review_snippets, audit_reason, audit_details, feedback')
+        .in('id', overrideIds)
+      for (const lead of forced ?? []) {
+        try {
+          await startGeneration(supabase, supabaseUrl, serviceKey, lead as any)
+          report.generated++
+        } catch (e) {
+          report.errors.push(`force ${lead.id}: ${(e as Error).message}`)
+        }
+      }
+      return json({ ok: true, forced: true, ...report })
+    }
+
     // ---------------- 1. RECONCILE ----------------
     report.reconciled = await reconcile(supabase, supabaseUrl, serviceKey, report)
     report.recovered = await recoverStuckGenerations(supabase, supabaseUrl, serviceKey, report)
+
 
     // ---------------- 2. AUDIT --------------------
     const { data: auditRows } = await supabase
