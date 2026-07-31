@@ -514,15 +514,20 @@ Deno.serve(async (req) => {
           textPrimary: '#f1f5f9',
           textSecondary: '#94a3b8',
         }
+    // Derive the real brand hue from everything Firecrawl saw (button fills,
+    // primary/accent/link, pale brand tints) instead of trusting bc.primary,
+    // which is often the browser default link blue.
+    const derived = deriveBrandColors(branding, paletteDefaults)
     const brandPalette = buildAccessiblePalette({
-      primary: bc.primary || branding.primaryColor || paletteDefaults.primary,
-      secondary: bc.secondary || bc.accent || paletteDefaults.secondary,
-      accent: bc.accent || bc.secondary || paletteDefaults.accent,
-      background: bc.background || paletteDefaults.background,
-      surface: bc.surface || bc.card || paletteDefaults.surface,
-      textPrimary: bc.textPrimary || bc.text || paletteDefaults.textPrimary,
-      textSecondary: bc.textSecondary || bc.muted || paletteDefaults.textSecondary,
+      primary: derived.primary || bc.primary || paletteDefaults.primary,
+      secondary: derived.secondary || paletteDefaults.secondary,
+      accent: derived.accent || paletteDefaults.accent,
+      background: derived.background || paletteDefaults.background,
+      surface: derived.surface || paletteDefaults.surface,
+      textPrimary: derived.textPrimary || paletteDefaults.textPrimary,
+      textSecondary: derived.textSecondary || paletteDefaults.textSecondary,
     }, paletteDefaults)
+
     const brandFonts = Array.isArray(branding.fonts)
       ? branding.fonts.map((f: any) => (typeof f === 'string' ? f : f?.family)).filter(Boolean).slice(0, 4)
       : []
@@ -1350,7 +1355,142 @@ function cssColor(value: string, fallback: string): string {
   return /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v) || /^rgb(a)?\([^)]+\)$/i.test(v) || /^[a-z]+$/i.test(v) ? v : fallback
 }
 
+// ---- Brand colour extraction from Firecrawl branding ----------------------
+// Firecrawl frequently reports junk as "primary": the default browser link blue
+// (#0000EE), a Tailwind slate, pure black/white, or a near-white background
+// tint. Feeding that straight into the CSS vars is why a pink salon site came
+// out blue. We instead score every colour Firecrawl saw and pick the real
+// brand hue, then build the whole theme around that hue.
+
+const JUNK_COLORS = new Set([
+  '#0000ee', '#0000ff', '#551a8b', '#ee0000', '#1a0dab', '#0d6efd', '#007bff',
+  '#334155', '#000000', '#ffffff', '#0066cc', '#0645ad', '#2563eb',
+])
+
+function toHex(color: string): string | null {
+  const rgb = parseCssColor(color)
+  if (!rgb) return null
+  return `#${[rgb.r, rgb.g, rgb.b].map((v) => v.toString(16).padStart(2, '0')).join('')}`
+}
+
+function rgbToHsl(color: string): { h: number; s: number; l: number } | null {
+  const rgb = parseCssColor(color)
+  if (!rgb) return null
+  const r = rgb.r / 255, g = rgb.g / 255, b = rgb.b / 255
+  const max = Math.max(r, g, b), min = Math.min(r, g, b)
+  const l = (max + min) / 2
+  const d = max - min
+  let h = 0
+  let s = 0
+  if (d !== 0) {
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0))
+    else if (max === g) h = (b - r) / d + 2
+    else h = (r - g) / d + 4
+    h *= 60
+  }
+  return { h, s, l }
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  const hh = ((h % 360) + 360) % 360
+  const ss = Math.max(0, Math.min(1, s))
+  const ll = Math.max(0, Math.min(1, l))
+  const c = (1 - Math.abs(2 * ll - 1)) * ss
+  const x = c * (1 - Math.abs(((hh / 60) % 2) - 1))
+  const m = ll - c / 2
+  const seg = Math.floor(hh / 60) % 6
+  const rgb = [
+    [c, x, 0], [x, c, 0], [0, c, x], [0, x, c], [x, 0, c], [c, 0, x],
+  ][seg]
+  return `#${rgb.map((v) => Math.round((v + m) * 255).toString(16).padStart(2, '0')).join('')}`
+}
+
+// A usable brand colour: saturated enough to read as a choice, not too pale,
+// not a browser/framework default.
+function isBrandish(color: string): boolean {
+  const hex = toHex(color)
+  if (!hex || JUNK_COLORS.has(hex)) return false
+  const hsl = rgbToHsl(hex)
+  if (!hsl) return false
+  return hsl.s >= 0.16 && hsl.l >= 0.12 && hsl.l <= 0.82
+}
+
+// Pale but tinted (e.g. #F5EAE2) — not a primary, but it tells us the brand hue.
+function isTinted(color: string): boolean {
+  const hsl = rgbToHsl(color)
+  return !!hsl && hsl.s >= 0.06 && hsl.l > 0.8
+}
+
+function deriveBrandColors(
+  branding: Record<string, any>,
+  defaults: Record<string, string>,
+): Record<string, string> {
+  const bc = (branding?.colors ?? {}) as Record<string, string>
+  const comp = (branding?.components ?? {}) as Record<string, any>
+
+  const raw = [
+    comp?.buttonPrimary?.background,
+    bc.primary,
+    bc.accent,
+    bc.link,
+    bc.secondary,
+    comp?.buttonSecondary?.background,
+    bc.brand,
+  ].filter((c): c is string => typeof c === 'string' && !!toHex(c)).map((c) => toHex(c)!)
+
+  // Distinct brand-worthy colours, deduped by hue
+  const brandish: string[] = []
+  for (const c of raw) {
+    if (!isBrandish(c)) continue
+    const hsl = rgbToHsl(c)!
+    const dup = brandish.some((b) => {
+      const o = rgbToHsl(b)!
+      const dh = Math.abs(o.h - hsl.h)
+      return Math.min(dh, 360 - dh) < 14
+    })
+    if (!dup) brandish.push(c)
+  }
+
+  // No strong colour? Fall back to the hue of a pale brand tint (beige salons).
+  let primary = brandish[0]
+  if (!primary) {
+    const tint = raw.find(isTinted)
+    if (tint) {
+      const h = rgbToHsl(tint)!
+      primary = hslToHex(h.h, Math.max(0.34, h.s), 0.42)
+    }
+  }
+  if (!primary) return { ...defaults }
+
+  const ph = rgbToHsl(primary)!
+  const secondary = brandish[1] ?? hslToHex(ph.h + 24, Math.max(0.22, ph.s * 0.85), Math.min(0.62, ph.l + 0.14))
+  const accent = brandish[2] ?? brandish[1] ?? hslToHex(ph.h - 18, Math.max(0.3, ph.s * 0.9), Math.min(0.7, ph.l + 0.2))
+
+  // Theme mode: follow the source site, defaulting to the niche default's mode.
+  const scrapedBg = toHex(bc.background || '')
+  const defaultsLight = isLightColor(defaults.background)
+  const dark = branding?.colorScheme === 'dark'
+    ? true
+    : scrapedBg
+      ? !isLightColor(scrapedBg)
+      : !defaultsLight
+
+  const background = dark ? hslToHex(ph.h, 0.20, 0.07) : hslToHex(ph.h, Math.min(0.32, ph.s * 0.5 + 0.06), 0.968)
+  const surface = dark ? hslToHex(ph.h, 0.18, 0.12) : hslToHex(ph.h, Math.min(0.22, ph.s * 0.35 + 0.03), 0.995)
+  const textPrimary = dark ? hslToHex(ph.h, 0.10, 0.96) : hslToHex(ph.h, 0.14, 0.14)
+  const textSecondary = dark ? hslToHex(ph.h, 0.10, 0.76) : hslToHex(ph.h, 0.09, 0.42)
+
+  // Keep the primary usable as a button fill: nudge very light/dark hues.
+  const usablePrimary = ph.l > 0.78 || ph.l < 0.14
+    ? hslToHex(ph.h, Math.max(0.32, ph.s), dark ? 0.58 : 0.42)
+    : primary
+
+  return { primary: usablePrimary, secondary, accent, background, surface, textPrimary, textSecondary }
+}
+
 function buildAccessiblePalette(
+
   raw: Record<string, string>,
   defaults: {
     primary: string
