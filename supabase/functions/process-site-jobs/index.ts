@@ -748,8 +748,19 @@ Deno.serve(async (req) => {
     // this long-running job in Supabase Edge.
     const runGeneration = async () => {
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 60_000)
+      const timeoutId = setTimeout(() => controller.abort(), 75_000)
+      // Heartbeat while the model is thinking, so the reaper never marks a
+      // still-running job as "worker died".
+      const heartbeat = setInterval(() => {
+        supabase.from('generated_sites')
+          .update({ updated_at: new Date().toISOString() })
+          .eq('id', generated_site_id)
+          .then(() => {}, () => {})
+      }, 60_000)
       try {
+        const systemPrompt = SKIP_POLISH
+          ? `${nc.systemPrompt}\n\n--- SPRÅKKRAV (skriv färdig, publicerbar copy direkt) ---\n${nc.polishSystemPrompt}`
+          : nc.systemPrompt
         const aiResp = await fetch(OPENROUTER_URL, {
           method: 'POST',
           signal: controller.signal,
@@ -762,7 +773,7 @@ Deno.serve(async (req) => {
           body: JSON.stringify({
             model: chosenModel,
             messages: [
-              { role: 'system', content: nc.systemPrompt },
+              { role: 'system', content: systemPrompt },
               { role: 'user', content: userContent },
             ],
             temperature: 0.6,
@@ -798,22 +809,22 @@ Deno.serve(async (req) => {
           return
         }
 
-        // Heartbeat between the two AI calls so the reaper doesn't false-positive
-        await supabase.from('generated_sites').update({ updated_at: new Date().toISOString() }).eq('id', generated_site_id)
-
         // Re-label the template with the business profile the model derived, so a
         // non-hair business under the salon tag gets matching wording everywhere.
         const ncFinal = adaptNicheConfig(nc, parsed)
 
-        const polished = await polishCopyWithClaude({
-          plan: parsed,
-          facts,
-          openrouterKey,
-          nc: ncFinal,
-        }).catch((e) => {
-          console.warn('copy polish failed, using DeepSeek plan:', (e as Error).message)
-          return parsed!
-        })
+        const polished = SKIP_POLISH
+          ? parsed
+          : await polishCopyWithClaude({
+              plan: parsed,
+              facts,
+              openrouterKey,
+              nc: ncFinal,
+            }).catch((e) => {
+              console.warn('copy polish failed, using plan as-is:', (e as Error).message)
+              return parsed!
+            })
+
 
         const files = buildSiteFiles({
           plan: polished,
