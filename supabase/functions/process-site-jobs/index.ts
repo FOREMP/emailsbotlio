@@ -716,17 +716,17 @@ Deno.serve(async (req) => {
       `Titel: ${pages.home?.title || scraped.title || ''}`,
       `Beskrivning: ${pages.home?.description || scraped.description || ''}`,
       `Sammanfattning: ${pages.home?.summary || scraped.summary || ''}`,
-      'Markdown (första 1800 tecken):',
-      (pages.home?.markdown || homeMd).slice(0, 1800),
+      'Markdown (första 1200 tecken):',
+      (pages.home?.markdown || homeMd).slice(0, 1200),
       '',
       `--- KÄLLDATA: OM-OSS-SIDAN ${pages.about ? `(${pages.about.url})` : '(hittades ej)'} ---`,
       pages.about
-        ? `Titel: ${pages.about.title}\nMarkdown (första 1400 tecken):\n${pages.about.markdown.slice(0, 1400)}`
+        ? `Titel: ${pages.about.title}\nMarkdown (första 900 tecken):\n${pages.about.markdown.slice(0, 900)}`
         : '[Ingen separat about-sida. Använd HEM-sidans markdown. Inga påhittade fakta.]',
       '',
       `--- KÄLLDATA: TJÄNSTER-SIDAN ${pages.services ? `(${pages.services.url})` : '(hittades ej)'} ---`,
       pages.services
-        ? `Titel: ${pages.services.title}\nMarkdown (första 1800 tecken):\n${pages.services.markdown.slice(0, 1800)}`
+        ? `Titel: ${pages.services.title}\nMarkdown (första 1200 tecken):\n${pages.services.markdown.slice(0, 1200)}`
         : '[Ingen separat tjänster-sida. Extrahera från HEM-sidans markdown. Om oklart, använd branschstandard utan påhittade priser.]',
       '',
       screenshotUrl
