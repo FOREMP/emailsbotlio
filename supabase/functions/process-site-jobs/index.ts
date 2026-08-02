@@ -845,12 +845,16 @@ Deno.serve(async (req) => {
       } catch (err) {
         clearTimeout(timeoutId)
         const msg = (err as Error).name === 'AbortError'
-          ? 'Timed out after 60s — model took too long.'
+          ? 'Timed out after 75s — model took too long.'
           : `Error: ${(err as Error).message}`
         console.error('generate error', err)
         await failOrRetry(supabase, generated_site_id, nextAttempts, msg)
+      } finally {
+        clearTimeout(timeoutId)
+        clearInterval(heartbeat)
       }
     }
+
 
     await runGeneration()
     return json({ ok: true, status: 'generated', model: chosenModel, niche: nc.key })
