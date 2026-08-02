@@ -72,6 +72,7 @@ interface NicheConfig {
   metaDescSuffix: string
   systemPromptTopic: string
   serviceLabel: string                 // "Tjänst" | "Behandling"
+  serviceLabelPlural: string           // "Tjänster" | "Behandlingar"
   useLeadImages: boolean               // false → only curated Unsplash
   stockImages: string[]
   heroLine1Default: (city: string) => string
@@ -108,6 +109,7 @@ const NICHE_CONFIG: Record<'auto_workshop' | 'hair_salon', NicheConfig> = {
     metaDescSuffix: 'bilverkstad',
     systemPromptTopic: 'bilverkstadssajter',
     serviceLabel: 'Tjänst',
+    serviceLabelPlural: 'Tjänster',
     useLeadImages: true,
     stockImages: [
       'https://images.unsplash.com/photo-1487754180451-c456f719a1fc?w=1600&q=80',
@@ -237,6 +239,7 @@ ABSOLUTA REGLER:
     metaDescSuffix: 'frisörsalong',
     systemPromptTopic: 'frisörsalongssajter',
     serviceLabel: 'Behandling',
+    serviceLabelPlural: 'Behandlingar',
     useLeadImages: false, // Skip lead-scraped images — too much risk of broken/blocked thumbnails
     stockImages: [
       // Curated Unsplash — premium salon interiors first (used as hero via img(0)),
@@ -451,6 +454,7 @@ function adaptNicheConfig(nc: NicheConfig, plan: SitePlan): NicheConfig {
     aboutPageTitle: venue ? `Om ${venue}` : nc.aboutPageTitle,
     aboutShort: venue || nc.aboutShort,
     serviceLabel: service ? cap(service) : nc.serviceLabel,
+    serviceLabelPlural: servicePl ? cap(servicePl) : t(nc.serviceLabelPlural),
     heroLine1Default: (city: string) => t(nc.heroLine1Default(city)),
     heroLine2Default: t(nc.heroLine2Default),
     heroEyebrowDefault: (city: string) =>
@@ -1227,7 +1231,7 @@ function buildSiteFiles({
 
   const aboutItems = [
     { title: 'Före besöket', text: cleanText(plan.aboutBefore || '') },
-    { title: 'Under behandlingen', text: cleanText(plan.aboutDuring || '') },
+    { title: `Under ${nc.serviceLabel.toLowerCase()}en`, text: cleanText(plan.aboutDuring || '') },
     { title: 'Efter besöket', text: cleanText(plan.aboutAfter || '') },
   ].filter((item) => item.text)
 
@@ -1319,7 +1323,7 @@ function buildSiteFiles({
   const aboutBody = isSalon
     ? `
     ${pageHero(nc.aboutPageTitle, aboutTitle || `Möt ${businessName}`, aboutIntro || tagline || '', img(1))}
-    ${(aboutItems.length || aboutIntro || values.length) ? `<section class="section"><div class="wrap salon-manifesto-grid"><div class="salon-image-stack"><img class="tall" src="${attr(img(2))}" alt="${esc(businessName)}"><img src="${attr(img(7))}" alt="${esc(businessName)}"><img src="${attr(img(8))}" alt="${esc(businessName)}"></div><div><div class="eyebrow">Om salongen</div><h2 class="h2">${esc(aboutTitle)}</h2>${aboutIntro ? `<p class="lead lg" style="margin-top:22px">${esc(aboutIntro)}</p>` : ''}${salonAboutBlocks ? `<div class="salon-copy-stack">${salonAboutBlocks}</div>` : ''}${salonValues}</div></div></section>` : ''}
+    ${(aboutItems.length || aboutIntro || values.length) ? `<section class="section"><div class="wrap salon-manifesto-grid"><div class="salon-image-stack"><img class="tall" src="${attr(img(2))}" alt="${esc(businessName)}"><img src="${attr(img(7))}" alt="${esc(businessName)}"><img src="${attr(img(8))}" alt="${esc(businessName)}"></div><div><div class="eyebrow">${esc(nc.aboutPageTitle)}</div><h2 class="h2">${esc(aboutTitle)}</h2>${aboutIntro ? `<p class="lead lg" style="margin-top:22px">${esc(aboutIntro)}</p>` : ''}${salonAboutBlocks ? `<div class="salon-copy-stack">${salonAboutBlocks}</div>` : ''}${salonValues}</div></div></section>` : ''}
     ${diffSection}
     ${finalCta}`
     : `
@@ -1331,8 +1335,8 @@ function buildSiteFiles({
 
   const servicesBody = isSalon
     ? `
-    ${pageHero('Behandlingar', 'Våra behandlingar', nc.servicesPageSub, img(0))}
-    <section class="section"><div class="wrap"><div class="salon-section-intro"><div><div class="eyebrow">Behandlingar</div><h2 class="h2">Välj det som passar ditt hår och din vardag</h2><p class="lead lg" style="margin-top:20px">${esc(nc.servicesPageSub)}</p></div><div class="salon-side-note">${esc(tagline || 'Varje behandling ska kännas genomtänkt både i stolen och när du bär resultatet vidare ut genom dörren.')}</div></div>${services.map((s, i) => `<div class="service-row ${i % 2 === 1 ? 'rev' : ''}"><div class="s-media"><img src="${attr(img(i + 1))}" alt="${esc(s.name)}"></div><div><div class="eyebrow">${esc(nc.serviceLabel)} ${String(i + 1).padStart(2, '0')}</div><h2>${esc(s.name)}</h2><p class="lead">${esc(s.description)}</p>${s.when ? `<div class="when"><strong>När passar det?</strong><p>${esc(s.when)}</p></div>` : ''}<div class="btns">${primaryCta}${bookCta}</div></div></div>`).join('')}</div></section>
+    ${pageHero(nc.serviceLabelPlural, `Våra ${nc.serviceLabelPlural.toLowerCase()}`, nc.servicesPageSub, img(0))}
+    <section class="section"><div class="wrap"><div class="salon-section-intro"><div><div class="eyebrow">${esc(nc.serviceLabelPlural)}</div><h2 class="h2">${esc(`Välj det som passar dig och din vardag`)}</h2><p class="lead lg" style="margin-top:20px">${esc(nc.servicesPageSub)}</p></div><div class="salon-side-note">${esc(tagline || `Varje ${nc.serviceLabel.toLowerCase()} ska kännas genomtänkt både på plats och när du bär resultatet vidare ut genom dörren.`)}</div></div>${services.map((s, i) => `<div class="service-row ${i % 2 === 1 ? 'rev' : ''}"><div class="s-media"><img src="${attr(img(i + 1))}" alt="${esc(s.name)}"></div><div><div class="eyebrow">${esc(nc.serviceLabel)} ${String(i + 1).padStart(2, '0')}</div><h2>${esc(s.name)}</h2><p class="lead">${esc(s.description)}</p>${s.when ? `<div class="when"><strong>När passar det?</strong><p>${esc(s.when)}</p></div>` : ''}<div class="btns">${primaryCta}${bookCta}</div></div></div>`).join('')}</div></section>
     ${faqs.length ? `<section class="section band-tight"><div class="wrap"><div class="eyebrow">Vanliga frågor</div><h2 class="h2">Bra att veta före ditt besök</h2><div style="margin-top:36px;max-width:900px">${faqs.map((f) => `<details class="faq"><summary>${esc(f.question)}</summary><p>${esc(f.answer)}</p></details>`).join('')}</div></div></section>` : ''}
     ${finalCta}`
     : `
