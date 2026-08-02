@@ -28,6 +28,14 @@ interface ScenarioItem { category: string; title: string; description: string; d
 interface ProcessStep { title: string; description: string; outcome?: string }
 interface SitePlan {
   businessName?: string
+  // Business profile: what the AI concluded the company ACTUALLY does, used to
+  // re-label the niche template so a nail studio/spa under the salon tag doesn't
+  // get hair-specific wording.
+  businessType?: string        // "Nagelsalong", "Hudvårdsklinik", "Frisörsalong"
+  venueNoun?: string           // definite form: "studion", "kliniken", "salongen"
+  serviceNoun?: string         // "behandling"
+  serviceNounPlural?: string   // "behandlingar"
+  staffNoun?: string           // "nageltekniker", "frisörer", "terapeuter"
   tagline?: string
   heroEyebrow?: string
   heroLine1?: string
@@ -298,8 +306,13 @@ VIKTIGT: Skriv INTE HTML. Returnera bara giltig JSON enligt schemat nedan. HTML 
 RETURFORMAT — endast JSON, ingen markdown, inga kommentarer:
 {
   "businessName": "...",
+  "businessType": "vad verksamheten FAKTISKT är, ett svenskt substantiv, t.ex. 'Frisörsalong', 'Nagelsalong', 'Hudvårdsklinik', 'Massage & spa', 'Barbershop'",
+  "venueNoun": "bestämd form av lokalen, t.ex. 'salongen', 'studion', 'kliniken'",
+  "serviceNoun": "vad ett besök kallas i singular, t.ex. 'behandling', 'klippning', 'tid'",
+  "serviceNounPlural": "plural av ovanstående, t.ex. 'behandlingar'",
+  "staffNoun": "vad personalen kallas i plural, t.ex. 'frisörer', 'nageltekniker', 'hudterapeuter'",
   "tagline": "kort premium tagline, 3–7 ord",
-  "heroEyebrow": "kort label, t.ex. 'Frisörsalong i {ort}'",
+  "heroEyebrow": "kort label, t.ex. '{businessType} i {ort}'",
   "heroLine1": "första raden (3–6 ord, editoriell)",
   "heroLine2": "andra raden (3–7 ord, kontrast/löfte)",
   "heroSubline": "2 meningar som förklarar värdet konkret och känns skrivna för just salongen",
@@ -339,17 +352,21 @@ RETURFORMAT — endast JSON, ingen markdown, inga kommentarer:
   "ctaText": "1–2 meningar som får kunden att boka utan att låta säljig"
 }
 
+STEG 0 — AVGÖR VERKSAMHETEN INNAN DU SKRIVER:
+Läs källdatan (titel, beskrivning, kategori, tjänster, om-text) och avgör vad företaget FAKTISKT gör. Alla leads i den här mallen är inte frisörsalonger — det kan lika gärna vara nagelsalong, hudvård, massage, spa, fransar/bryn, barbershop eller en kombination. Sätt businessType/venueNoun/serviceNoun/staffNoun efter det du faktiskt ser, och skriv sedan ALL copy för DEN verksamheten. Använd aldrig hår-, klipp- eller färgspråk om företaget inte gör hår. Om källdatan är tvetydig: välj den bredare formuleringen ("behandling", "besök") i stället för att gissa hårspecifikt.
+
 ABSOLUTA REGLER:
 1. Hitta ALDRIG på adresser, telefon, priser, öppettider, årtal, statistik, certifieringar, kundnamn eller citat.
-2. "scenarios" = TYPISKA besök salongen tar emot — inte påhittade referenser. Skriv aldrig kundnamn.
+2. "scenarios" = TYPISKA besök verksamheten tar emot — inte påhittade referenser. Skriv aldrig kundnamn.
 3. Om ett fält saknar grund, utelämna det.
 4. Om business_name saknas eller ser ut som HTTP-fel/domän utan namn, returnera {"error":"invalid business name"}.
-5. Extrahera 4–7 verkliga behandlingar från källdatan. Vid oklarhet: standard frisör­behandlingar (klippning, färg, slingor, styling) utan pris.
+5. Extrahera 4–7 verkliga tjänster/behandlingar från källdatan. Vid oklarhet: branschstandard för DEN verksamhetstyp du identifierat i steg 0, utan pris.
 6. Language = svenska. Ton = editoriell, taktil, självsäker — undvik "vi erbjuder marknadens bästa".
 7. heroLine1 + heroLine2 = premium headline tillsammans.
 8. Undvik generiska ord som "professionell", "hög kvalitet" och "marknadsledande" om de inte följs av konkret mening.
 9. Skriv hellre tät, egen copy än långa stycken som bara fyller ut.
 10. Undvik barber-, barbershop- och maskulint clipper-språk om inte källdatan tydligt visar att det är just den typen av salong.
+11. Alla rubriker, pathways, tjänster, FAQ och CTA måste matcha businessType — inga hårrelaterade ord för en verksamhet som inte gör hår.
 11. Max 4500 tokens totalt.`,
     polishSystemPrompt: `Du är en senior svensk copywriter för premium frisörsalongssajter.
 
@@ -376,6 +393,95 @@ function nicheFromTemplate(template: string | null | undefined, hints: Array<unk
 
   if (template === 'hair_salon_v1' || looksSalon) return NICHE_CONFIG.hair_salon
   return NICHE_CONFIG.auto_workshop
+}
+
+const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s)
+
+/**
+ * Re-label a niche config using the business profile the AI derived from the
+ * source data. Keeps the same visual template but swaps hair-salon vocabulary
+ * for whatever the company actually is (nail studio, skin clinic, spa, ...).
+ */
+function adaptNicheConfig(nc: NicheConfig, plan: SitePlan): NicheConfig {
+  if (nc.key !== 'hair_salon') return nc
+  const type = (plan.businessType || '').trim()
+  const venue = (plan.venueNoun || '').trim().toLowerCase()
+  const service = (plan.serviceNoun || '').trim().toLowerCase()
+  const servicePl = (plan.serviceNounPlural || '').trim().toLowerCase()
+  const staff = (plan.staffNoun || '').trim().toLowerCase()
+  if (!type && !venue && !service) return nc
+  const isHair = /fris[öo]r|hair|barber/i.test(type)
+  if (isHair && !venue && !service) return nc
+
+  const pairs: Array<[RegExp, string]> = []
+  if (type) {
+    pairs.push([/Frisörsalong/g, cap(type)], [/frisörsalong/g, type.toLowerCase()])
+  }
+  if (venue) {
+    pairs.push([/salongsbesök/g, `besök hos ${venue}`], [/Salongsbesök/g, `Besök hos ${venue}`])
+    pairs.push([/salongen/g, venue], [/Salongen/g, cap(venue)])
+    pairs.push([/salongs/g, venue.replace(/(en|n)$/, '') + 's'])
+  }
+  if (service) {
+    pairs.push([/behandlingen/g, service + 'en'], [/behandling/g, service], [/Behandling/g, cap(service)])
+  }
+  if (servicePl) {
+    pairs.push([/behandlingar/g, servicePl], [/Behandlingar/g, cap(servicePl)])
+  }
+  if (staff) {
+    pairs.push([/frisörer/g, staff], [/Frisörer/g, cap(staff)])
+  }
+
+  const t = (v: string): string => {
+    let out = v
+    // plural rules first so "behandlingar" isn't half-replaced by the singular rule
+    for (const [re, rep] of pairs.filter(([r]) => /ar\//.test(String(r)) || /ingar/.test(String(r)))) out = out.replace(re, rep)
+    for (const [re, rep] of pairs) out = out.replace(re, rep)
+    return out
+  }
+  const tItems = <T extends Record<string, any>>(items: T[]): T[] =>
+    items.map((it) => {
+      const copy: any = { ...it }
+      for (const k of Object.keys(copy)) if (typeof copy[k] === 'string') copy[k] = t(copy[k])
+      return copy as T
+    })
+
+  return {
+    ...nc,
+    label: type ? cap(type) : nc.label,
+    metaDescSuffix: type ? type.toLowerCase() : nc.metaDescSuffix,
+    aboutPageTitle: venue ? `Om ${venue}` : nc.aboutPageTitle,
+    aboutShort: venue || nc.aboutShort,
+    serviceLabel: service ? cap(service) : nc.serviceLabel,
+    heroLine1Default: (city: string) => t(nc.heroLine1Default(city)),
+    heroLine2Default: t(nc.heroLine2Default),
+    heroEyebrowDefault: (city: string) =>
+      type ? (city ? `${cap(type)} i ${city}` : cap(type)) : nc.heroEyebrowDefault(city),
+    heroSublineDefault: t(nc.heroSublineDefault),
+    aboutTitleDefault: t(nc.aboutTitleDefault),
+    aboutEyebrow: t(nc.aboutEyebrow),
+    pathwaysHeading: t(nc.pathwaysHeading),
+    scenariosHeading: t(nc.scenariosHeading),
+    scenariosIntro: t(nc.scenariosIntro),
+    processHeading: t(nc.processHeading),
+    diffHeading: t(nc.diffHeading),
+    ctaTitleDefault: t(nc.ctaTitleDefault),
+    ctaTextDefault: t(nc.ctaTextDefault),
+    contactHeadline: t(nc.contactHeadline),
+    contactSubline: t(nc.contactSubline),
+    servicesPageSub: t(nc.servicesPageSub),
+    footerTagline: t(nc.footerTagline),
+    fallbackServices: tItems(nc.fallbackServices),
+    fallbackValues: tItems(nc.fallbackValues),
+    fallbackFaqs: tItems(nc.fallbackFaqs),
+    fallbackPathways: tItems(nc.fallbackPathways),
+    polishSystemPrompt: type
+      ? nc.polishSystemPrompt.replace(
+          /premium frisörsalongssajter/,
+          `premium ${type.toLowerCase()}-sajter`,
+        ) + `\n9. Verksamheten är en ${type.toLowerCase()}. All text måste passa den verksamheten — inga hårrelaterade ord om det inte är en frisörverksamhet.`
+      : nc.polishSystemPrompt,
+  }
 }
 
 Deno.serve(async (req) => {
