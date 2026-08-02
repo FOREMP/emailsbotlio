@@ -14,9 +14,16 @@ const corsHeaders = {
 }
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
-const MODEL = 'deepseek/deepseek-chat-v3.1'
+// Fast model for the content plan. DeepSeek V3.1 was frequently queued on
+// OpenRouter for 60s+, which is what killed most generations.
+const MODEL = 'openai/gpt-4.1-mini'
+const POLISH_MODEL = 'openai/gpt-4.1-mini'
+// When plan + polish use the same model we merge them into ONE call — the
+// second round-trip roughly doubled wall time for no measurable gain.
+const SKIP_POLISH = MODEL === POLISH_MODEL
 const MAX_ATTEMPTS = 3
 const STUCK_MINUTES = 10
+
 const CURRENT_YEAR = new Date().getFullYear()
 
 interface ServiceItem { name: string; description: string; when?: string }
@@ -709,17 +716,17 @@ Deno.serve(async (req) => {
       `Titel: ${pages.home?.title || scraped.title || ''}`,
       `Beskrivning: ${pages.home?.description || scraped.description || ''}`,
       `Sammanfattning: ${pages.home?.summary || scraped.summary || ''}`,
-      'Markdown (första 1800 tecken):',
-      (pages.home?.markdown || homeMd).slice(0, 1800),
+      'Markdown (första 1200 tecken):',
+      (pages.home?.markdown || homeMd).slice(0, 1200),
       '',
       `--- KÄLLDATA: OM-OSS-SIDAN ${pages.about ? `(${pages.about.url})` : '(hittades ej)'} ---`,
       pages.about
-        ? `Titel: ${pages.about.title}\nMarkdown (första 1400 tecken):\n${pages.about.markdown.slice(0, 1400)}`
+        ? `Titel: ${pages.about.title}\nMarkdown (första 900 tecken):\n${pages.about.markdown.slice(0, 900)}`
         : '[Ingen separat about-sida. Använd HEM-sidans markdown. Inga påhittade fakta.]',
       '',
       `--- KÄLLDATA: TJÄNSTER-SIDAN ${pages.services ? `(${pages.services.url})` : '(hittades ej)'} ---`,
       pages.services
-        ? `Titel: ${pages.services.title}\nMarkdown (första 1800 tecken):\n${pages.services.markdown.slice(0, 1800)}`
+        ? `Titel: ${pages.services.title}\nMarkdown (första 1200 tecken):\n${pages.services.markdown.slice(0, 1200)}`
         : '[Ingen separat tjänster-sida. Extrahera från HEM-sidans markdown. Om oklart, använd branschstandard utan påhittade priser.]',
       '',
       screenshotUrl
@@ -741,8 +748,19 @@ Deno.serve(async (req) => {
     // this long-running job in Supabase Edge.
     const runGeneration = async () => {
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 60_000)
+      const timeoutId = setTimeout(() => controller.abort(), 75_000)
+      // Heartbeat while the model is thinking, so the reaper never marks a
+      // still-running job as "worker died".
+      const heartbeat = setInterval(() => {
+        supabase.from('generated_sites')
+          .update({ updated_at: new Date().toISOString() })
+          .eq('id', generated_site_id)
+          .then(() => {}, () => {})
+      }, 60_000)
       try {
+        const systemPrompt = SKIP_POLISH
+          ? `${nc.systemPrompt}\n\n--- SPRÅKKRAV (skriv färdig, publicerbar copy direkt) ---\n${nc.polishSystemPrompt}`
+          : nc.systemPrompt
         const aiResp = await fetch(OPENROUTER_URL, {
           method: 'POST',
           signal: controller.signal,
@@ -755,7 +773,7 @@ Deno.serve(async (req) => {
           body: JSON.stringify({
             model: chosenModel,
             messages: [
-              { role: 'system', content: nc.systemPrompt },
+              { role: 'system', content: systemPrompt },
               { role: 'user', content: userContent },
             ],
             temperature: 0.6,
@@ -791,22 +809,22 @@ Deno.serve(async (req) => {
           return
         }
 
-        // Heartbeat between the two AI calls so the reaper doesn't false-positive
-        await supabase.from('generated_sites').update({ updated_at: new Date().toISOString() }).eq('id', generated_site_id)
-
         // Re-label the template with the business profile the model derived, so a
         // non-hair business under the salon tag gets matching wording everywhere.
         const ncFinal = adaptNicheConfig(nc, parsed)
 
-        const polished = await polishCopyWithClaude({
-          plan: parsed,
-          facts,
-          openrouterKey,
-          nc: ncFinal,
-        }).catch((e) => {
-          console.warn('copy polish failed, using DeepSeek plan:', (e as Error).message)
-          return parsed!
-        })
+        const polished = SKIP_POLISH
+          ? parsed
+          : await polishCopyWithClaude({
+              plan: parsed,
+              facts,
+              openrouterKey,
+              nc: ncFinal,
+            }).catch((e) => {
+              console.warn('copy polish failed, using plan as-is:', (e as Error).message)
+              return parsed!
+            })
+
 
         const files = buildSiteFiles({
           plan: polished,
@@ -827,12 +845,16 @@ Deno.serve(async (req) => {
       } catch (err) {
         clearTimeout(timeoutId)
         const msg = (err as Error).name === 'AbortError'
-          ? 'Timed out after 60s — model took too long.'
+          ? 'Timed out after 75s — model took too long.'
           : `Error: ${(err as Error).message}`
         console.error('generate error', err)
         await failOrRetry(supabase, generated_site_id, nextAttempts, msg)
+      } finally {
+        clearTimeout(timeoutId)
+        clearInterval(heartbeat)
       }
     }
+
 
     await runGeneration()
     return json({ ok: true, status: 'generated', model: chosenModel, niche: nc.key })
