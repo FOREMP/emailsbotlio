@@ -422,11 +422,11 @@ function adaptNicheConfig(nc: NicheConfig, plan: SitePlan): NicheConfig {
     pairs.push([/salongen/g, venue], [/Salongen/g, cap(venue)])
     pairs.push([/salongs/g, venue.replace(/(en|n)$/, '') + 's'])
   }
-  if (service) {
-    pairs.push([/behandlingen/g, service + 'en'], [/behandling/g, service], [/Behandling/g, cap(service)])
-  }
   if (servicePl) {
     pairs.push([/behandlingar/g, servicePl], [/Behandlingar/g, cap(servicePl)])
+  }
+  if (service) {
+    pairs.push([/behandlingen/g, service + 'en'], [/behandling/g, service], [/Behandling/g, cap(service)])
   }
   if (staff) {
     pairs.push([/frisörer/g, staff], [/Frisörer/g, cap(staff)])
@@ -434,8 +434,6 @@ function adaptNicheConfig(nc: NicheConfig, plan: SitePlan): NicheConfig {
 
   const t = (v: string): string => {
     let out = v
-    // plural rules first so "behandlingar" isn't half-replaced by the singular rule
-    for (const [re, rep] of pairs.filter(([r]) => /ar\//.test(String(r)) || /ingar/.test(String(r)))) out = out.replace(re, rep)
     for (const [re, rep] of pairs) out = out.replace(re, rep)
     return out
   }
@@ -694,7 +692,8 @@ Deno.serve(async (req) => {
       : null
 
     const userTextParts = [
-      `Skapa en kompakt innehållsplan för en 3-sidig premium-sajt för denna ${nc.label.toLowerCase()}. Skriv ENDAST JSON enligt schemat.`,
+      `Skapa en kompakt innehållsplan för en 3-sidig premium-sajt. Utgångspunkt: ${nc.label.toLowerCase()}, men LÄS källdatan först och skriv för det verksamheten FAKTISKT gör. Skriv ENDAST JSON enligt schemat.`,
+      siteLead?.category ? `Kategori enligt lead-datan: ${siteLead.category}` : '',
       '',
       regenFeedback
         ? `--- ANVÄNDARENS FEEDBACK FÖR REGENERERING (HÖGSTA PRIORITET) ---\n${regenFeedback}\n`
@@ -791,11 +790,15 @@ Deno.serve(async (req) => {
         // Heartbeat between the two AI calls so the reaper doesn't false-positive
         await supabase.from('generated_sites').update({ updated_at: new Date().toISOString() }).eq('id', generated_site_id)
 
+        // Re-label the template with the business profile the model derived, so a
+        // non-hair business under the salon tag gets matching wording everywhere.
+        const ncFinal = adaptNicheConfig(nc, parsed)
+
         const polished = await polishCopyWithClaude({
           plan: parsed,
           facts,
           openrouterKey,
-          nc,
+          nc: ncFinal,
         }).catch((e) => {
           console.warn('copy polish failed, using DeepSeek plan:', (e as Error).message)
           return parsed!
@@ -808,7 +811,7 @@ Deno.serve(async (req) => {
           brandFonts,
           imagePool,
           googleMapsUrl,
-          nc,
+          nc: ncFinal,
         })
 
         await supabase.from('generated_sites').update({
