@@ -14,9 +14,16 @@ const corsHeaders = {
 }
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
-const MODEL = 'deepseek/deepseek-chat-v3.1'
+// Fast model for the content plan. DeepSeek V3.1 was frequently queued on
+// OpenRouter for 60s+, which is what killed most generations.
+const MODEL = 'openai/gpt-4.1-mini'
+const POLISH_MODEL = 'openai/gpt-4.1-mini'
+// When plan + polish use the same model we merge them into ONE call — the
+// second round-trip roughly doubled wall time for no measurable gain.
+const SKIP_POLISH = MODEL === POLISH_MODEL
 const MAX_ATTEMPTS = 3
 const STUCK_MINUTES = 10
+
 const CURRENT_YEAR = new Date().getFullYear()
 
 interface ServiceItem { name: string; description: string; when?: string }
