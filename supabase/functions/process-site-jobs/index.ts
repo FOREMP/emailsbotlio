@@ -72,7 +72,7 @@ interface SitePlan {
 // nicheFromTemplate() below.
 // ---------------------------------------------------------------------------
 interface NicheConfig {
-  key: 'auto_workshop' | 'hair_salon'
+  key: 'auto_workshop' | 'hair_salon' | 'construction'
   label: string                        // "Bilverkstad" | "Frisörsalong"
   aboutPageTitle: string               // "Om verkstaden" | "Om salongen"
   aboutShort: string                   // "verkstaden" | "salongen"
@@ -107,7 +107,7 @@ interface NicheConfig {
   polishSystemPrompt: string
 }
 
-const NICHE_CONFIG: Record<'auto_workshop' | 'hair_salon', NicheConfig> = {
+const NICHE_CONFIG: Record<'auto_workshop' | 'hair_salon' | 'construction', NicheConfig> = {
   auto_workshop: {
     key: 'auto_workshop',
     label: 'Bilverkstad',
@@ -392,6 +392,153 @@ ABSOLUTA REGLER:
 7. Om ett fält är tomt — låt det vara tomt.
 8. Svara med ENBART det uppdaterade JSON-objektet.`,
   },
+  construction: {
+    key: 'construction',
+    label: 'Byggföretag',
+    aboutPageTitle: 'Om företaget',
+    aboutShort: 'företaget',
+    metaDescSuffix: 'byggföretag',
+    systemPromptTopic: 'byggföretagssajter',
+    serviceLabel: 'Tjänst',
+    serviceLabelPlural: 'Tjänster',
+    useLeadImages: false, // Byggföretags egna bilder är oftast lågupplösta — sänker intrycket
+    stockImages: [
+      'https://images.unsplash.com/photo-1503387762-592deb58ef4e?w=1600&q=80', // arkitektonisk byggnad i bra ljus
+      'https://images.unsplash.com/photo-1541888946425-d81bb19240f5?w=1600&q=80', // färdig renovering, interiör
+      'https://images.unsplash.com/photo-1504307651254-35680f356dfd?w=1600&q=80', // byggarbetare på plats
+      'https://images.unsplash.com/photo-1581094794329-c8112a89af12?w=1600&q=80', // planering / ritning på plats
+      'https://images.unsplash.com/photo-1503389152951-9f343605f61e?w=1600&q=80', // stomme / trä
+      'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=1600&q=80', // färdigt hem, ljus interiör
+      'https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?w=1600&q=80', // renoverat kök
+      'https://images.unsplash.com/photo-1584622650111-993a426fbf0a?w=1600&q=80', // badrum
+      'https://images.unsplash.com/photo-1621905251189-08b45d6a269e?w=1600&q=80', // snickeri / verktyg
+      'https://images.unsplash.com/photo-1590986701608-1ba9a4d8f4b1?w=1600&q=80', // takarbete
+      'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=1600&q=80', // exteriör villa
+      'https://images.unsplash.com/photo-1523413651479-597eb2da0ad6?w=1600&q=80', // detalj material
+    ],
+    heroLine1Default: (city) => `Byggarbete som håller${city ? ' i ' + city : ''}.`,
+    heroLine2Default: 'Tidplan, pris och kvalitet i takt.',
+    heroEyebrowDefault: (city) => city ? `Byggföretag i ${city}` : 'Byggföretag',
+    heroSublineDefault: 'Från första platsbesök till slutbesiktning har du en kontaktperson, en tidplan och ett underlag du kan lita på. Vi bygger, renoverar och tar ansvar hela vägen.',
+    aboutTitleDefault: 'Ett bygge blir bra när planeringen är det',
+    aboutEyebrow: 'Yrkeskunnande',
+    pathwaysHeading: 'Vad ska byggas? Börja här',
+    scenariosHeading: 'Tre typer av projekt vi tar oss an',
+    scenariosIntro: 'Så här ser arbetet ut i praktiken — vad vi går igenom, hur vi planerar och vad du får när projektet är klart.',
+    processHeading: 'Från platsbesök till nycklarna i handen',
+    diffHeading: 'Fyra saker du märker under hela projektet',
+    ctaTitleDefault: 'Beskriv projektet så återkommer vi med en plan',
+    ctaTextDefault: 'Oavsett om det gäller renovering, tillbyggnad eller ett större entreprenaduppdrag börjar vi med ett platsbesök och en tydlig offert.',
+    contactHeadline: 'Ta nästa steg',
+    contactSubline: 'Ring eller mejla och beskriv projektet — vi bokar ett platsbesök och tar fram ett underlag.',
+    servicesPageSub: 'Varje tjänst beskrivs så att du förstår vad som ingår, när den passar och hur arbetet läggs upp.',
+    footerTagline: 'Demo skapad för en modernare digital kundupplevelse.',
+    fallbackServices: [
+      { name: 'Renovering av badrum och kök', description: 'Helhetsansvar från rivning till färdigt rum, med samordning av alla yrkesgrupper som behövs.' },
+      { name: 'Tillbyggnad och nybyggnation', description: 'Nya ytor som ansluter till det befintliga huset både tekniskt och estetiskt.' },
+      { name: 'Tak, fasad och yttre underhåll', description: 'Åtgärder som skyddar huset mot väder och håller underhållsbehovet nere över tid.' },
+      { name: 'Mark och grund', description: 'Förberedande arbeten som ger resten av bygget en stabil och dränerad utgångspunkt.' },
+      { name: 'Snickeri och inredning', description: 'Platsbyggda lösningar och detaljarbete där måtten sällan är standard.' },
+    ],
+    fallbackValues: [
+      { title: 'Tydlig offert', text: 'Du vet vad som ingår innan spaden sätts i marken.' },
+      { title: 'En kontaktperson', text: 'Samma person följer projektet från start till överlämning.' },
+      { title: 'Ordning på arbetsplatsen', text: 'Städat, säkert och dokumenterat genom hela projektet.' },
+    ],
+    fallbackFaqs: [
+      { question: 'Hur får jag en offert?', answer: 'Kontakta oss så bokar vi ett platsbesök och återkommer med ett skriftligt underlag.' },
+      { question: 'Kan jag använda ROT-avdrag?', answer: 'ROT-avdrag kan ofta användas för arbetskostnaden vid renovering i bostad. Vi går igenom vad som gäller för just ditt projekt.' },
+      { question: 'Vem ansvarar för underentreprenörer?', answer: 'Vi samordnar de yrkesgrupper som behövs och du har fortsatt en kontaktperson.' },
+      { question: 'Hur lång tid tar ett projekt?', answer: 'Det beror på omfattning och förutsättningar på plats — tidplanen tas fram i samband med offerten.' },
+    ],
+    fallbackPathways: [
+      { eyebrow: 'INOMHUS', title: 'Renovering av badrum eller kök', description: 'När rummet behöver göras om från grunden med rätt tätskikt, el och ytskikt.', ctaLabel: 'Boka platsbesök' },
+      { eyebrow: 'MER YTA', title: 'Tillbyggnad eller nybygg', description: 'När huset behöver växa och allt från ritning till stomme ska hänga ihop.', ctaLabel: 'Beskriv projektet' },
+      { eyebrow: 'YTTRE SKYDD', title: 'Tak, fasad och utvändigt', description: 'När huset börjar visa slitage och underhållet inte bör vänta ännu en säsong.', ctaLabel: 'Boka besiktning' },
+      { eyebrow: 'GRUNDEN', title: 'Mark och grundarbete', description: 'När dränering, platta eller markarbete måste vara rätt innan resten kan byggas.', ctaLabel: 'Kontakta oss' },
+    ],
+    systemPrompt: `Du är en senior svensk copywriter och art director för PREMIUM byggföretagssajter i klass med de bästa nordiska bygg- och arkitektvarumärkena. Ton: konkret, ordhållig, yrkesstolt och lugn. Bygg förtroende via TYDLIGHET, PLANERING och ANSVAR — inte via siffror, superlativ eller påhittade certifikat.
+
+VIKTIGT: Skriv INTE HTML. Returnera bara giltig JSON enligt schemat nedan. HTML byggs av systemet.
+
+RETURFORMAT — endast JSON, ingen markdown, inga kommentarer:
+{
+  "businessName": "...",
+  "businessType": "vad verksamheten FAKTISKT är, svenskt substantiv, t.ex. 'Byggföretag', 'Takläggare', 'Snickeri', 'Markentreprenör', 'Badrumsrenovering', 'Måleri', 'VVS-företag'",
+  "venueNoun": "bestämd form av verksamheten, t.ex. 'företaget', 'byggfirman', 'entreprenaden'",
+  "serviceNoun": "vad ett uppdrag kallas i singular, t.ex. 'projekt', 'uppdrag', 'jobb'",
+  "serviceNounPlural": "plural av ovanstående, t.ex. 'projekt'",
+  "staffNoun": "vad personalen kallas i plural, t.ex. 'snickare', 'hantverkare', 'takläggare'",
+  "tagline": "kort premium tagline, 3–7 ord",
+  "heroEyebrow": "kort label, t.ex. '{businessType} i {ort}'",
+  "heroLine1": "första raden (3–6 ord, konkret och rak)",
+  "heroLine2": "andra raden (3–7 ord, löfte om ordning/kvalitet)",
+  "heroSubline": "2 meningar som förklarar vad kunden faktiskt får",
+  "trustBadges": ["Tydlig offert", "Fast kontaktperson", "Dokumenterad överlämning"],
+  "pathwaysIntro": "1 mening som guidar kunden till rätt ingång",
+  "pathways": [
+    {"eyebrow":"INOMHUS","title":"Renovering av badrum eller kök","description":"...","ctaLabel":"Boka platsbesök"},
+    {"eyebrow":"MER YTA","title":"Tillbyggnad eller nybygg","description":"...","ctaLabel":"Beskriv projektet"},
+    {"eyebrow":"YTTRE SKYDD","title":"Tak, fasad och utvändigt","description":"...","ctaLabel":"Boka besiktning"},
+    {"eyebrow":"GRUNDEN","title":"Mark och grundarbete","description":"...","ctaLabel":"Kontakta oss"}
+  ],
+  "services": [{"name":"...","description":"1–2 meningar om vad tjänsten omfattar","when":"'När:' — kort rad om när kunden ska välja den"}],
+  "aboutTitle": "editoriell rubrik, gärna 2 rader",
+  "aboutIntro": "1–2 meningar med tydlig hållning",
+  "aboutBefore": "stycke om FÖRE projektet (platsbesök, offert, tidplan)",
+  "aboutDuring": "stycke om UNDER projektet (utförande, avstämningar, ordning på arbetsplatsen)",
+  "aboutAfter": "stycke om EFTER (slutbesiktning, överlämning, garanti generellt formulerat)",
+  "differentiators": [
+    {"title":"Tydlig offert innan arbetet startar","text":"..."},
+    {"title":"En kontaktperson genom hela projektet","text":"..."},
+    {"title":"Egna hantverkare och samordnade yrkesgrupper","text":"..."},
+    {"title":"Slutbesiktning och dokumenterad överlämning","text":"..."}
+  ],
+  "scenarios": [
+    {"category":"Renovering","title":"Badrum som byggs om från grunden","description":"...","delivery":"..."},
+    {"category":"Tillbyggnad","title":"Nya kvadratmeter som ansluter till befintligt hus","description":"...","delivery":"..."},
+    {"category":"Utvändigt","title":"Tak eller fasad som inte bör vänta en säsong till","description":"...","delivery":"..."}
+  ],
+  "processSteps": [
+    {"title":"Platsbesök och behovsbild","description":"...","outcome":"..."},
+    {"title":"Offert och tidplan","description":"...","outcome":"..."},
+    {"title":"Utförande med löpande avstämning","description":"...","outcome":"..."},
+    {"title":"Slutbesiktning och överlämning","description":"...","outcome":"..."}
+  ],
+  "values": [{"title":"...","text":"..."}],
+  "faqs": [{"question":"...","answer":"..."}],
+  "ctaTitle": "kort rubrik för sista CTA-bandet",
+  "ctaText": "1–2 meningar som får kunden att höra av sig"
+}
+
+STEG 0 — AVGÖR VERKSAMHETEN INNAN DU SKRIVER:
+Läs källdatan (titel, beskrivning, kategori, tjänster, om-text) och avgör vad företaget FAKTISKT gör. Alla leads i den här mallen är inte breda byggfirmor — det kan vara takläggare, snickeri, mureri, plattsättning, markentreprenad, måleri, VVS eller el. Sätt businessType/venueNoun/serviceNoun/staffNoun efter det du faktiskt ser och skriv sedan ALL copy för DEN verksamheten. Skriv aldrig om badrumsrenovering för ett markföretag. Om källdatan är tvetydig: välj bredare formuleringar ("projekt", "uppdrag").
+
+ABSOLUTA REGLER:
+1. Hitta ALDRIG på adresser, telefon, priser, öppettider, årtal, statistik, certifieringar, kundnamn, referensprojekt eller citat.
+2. "scenarios" = TYPISKA uppdrag verksamheten tar — aldrig namngivna kunder eller påhittade referenser.
+3. Skriv om ROT-avdrag, försäkring och garanti endast generellt, aldrig med belopp, procentsatser eller nummer.
+4. Om business_name saknas eller ser ut som HTTP-fel/domän utan namn, returnera {"error":"invalid business name"}.
+5. Extrahera 4–7 verkliga tjänster från källdatan. Vid oklarhet: branschstandard för DEN verksamhetstyp du identifierat i steg 0, utan pris.
+6. Language = svenska. Ton = konkret och yrkesstolt — undvik "marknadens bästa" och "helhetslösningar" utan innehåll.
+7. heroLine1 + heroLine2 = korta, slagkraftiga rader (3–7 ord vardera).
+8. Undvik generiska ord som "professionell" och "hög kvalitet" om de inte följs av något konkret.
+9. Alla rubriker, pathways, tjänster, FAQ och CTA måste matcha businessType.
+10. Max 4500 tokens totalt.`,
+    polishSystemPrompt: `Du är en senior svensk copywriter för premium byggföretagssajter.
+
+Skriv om ALLA textfält i det medskickade JSON-objektet till naturlig, flytande svenska av hög kvalitet. Ton: konkret, ordhållig, yrkesstolt.
+
+ABSOLUTA REGLER:
+1. Behåll EXAKT samma JSON-struktur, samma nycklar, samma antal element i arrays.
+2. Hitta ALDRIG på nya fakta (adresser, telefon, priser, årtal, certifieringar, kundnamn, referensprojekt).
+3. Fixa styltiga meningar, konstig ordföljd, saknad interpunktion, för långa meningar, upprepningar, klichéer.
+4. Varje textblock ska ha varierad meningslängd. Undvik att alla meningar börjar med "Vi".
+5. heroLine1 + heroLine2 = korta, slagkraftiga rader (3–7 ord vardera) med punkt i slutet.
+6. Byt ut generiska fraser mot konkret, egen svenska när fakta tillåter det.
+7. Om ett fält är tomt — låt det vara tomt.
+8. Svara med ENBART det uppdaterade JSON-objektet.`,
+  },
 }
 
 function nicheFromTemplate(template: string | null | undefined, hints: Array<unknown> = []): NicheConfig {
@@ -400,7 +547,9 @@ function nicheFromTemplate(template: string | null | undefined, hints: Array<unk
     .map((v) => String(v).toLowerCase())
     .join(' ')
   const looksSalon = /hair|hairdresser|hair\s*salon|fris[öo]r|frisörsalong|salong|barber|barbershop|fade|klipp|beauty|sk[öo]nhet|nail|hudv[åa]rd|spa|lashes|brow|laser hair/.test(joined)
+  const looksBuild = /bygg|byggfirma|byggföretag|byggservice|entreprenad|totalentreprenad|snicker|snickare|murar|mureri|plattsätt|kakel|badrumsrenover|renover|takläggar|takarbete|tak\s|fasad|m[åa]lare|m[åa]leri|mark(?:arbete|entrepren)|anläggning|grundarbet|betong|husbygg|construction|builder|contractor/.test(joined)
 
+  if (template === 'construction_v1' || (looksBuild && !looksSalon && template !== 'hair_salon_v1')) return NICHE_CONFIG.construction
   if (template === 'hair_salon_v1' || looksSalon) return NICHE_CONFIG.hair_salon
   return NICHE_CONFIG.auto_workshop
 }
@@ -413,6 +562,7 @@ const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s)
  * for whatever the company actually is (nail studio, skin clinic, spa, ...).
  */
 function adaptNicheConfig(nc: NicheConfig, plan: SitePlan): NicheConfig {
+  if (nc.key === 'construction') return adaptConstructionConfig(nc, plan)
   if (nc.key !== 'hair_salon') return nc
   const type = (plan.businessType || '').trim()
   const venue = (plan.venueNoun || '').trim().toLowerCase()
@@ -492,6 +642,33 @@ function adaptNicheConfig(nc: NicheConfig, plan: SitePlan): NicheConfig {
       : nc.polishSystemPrompt,
   }
 }
+
+/**
+ * Light re-labelling for the construction template so a roofer, mason or
+ * ground-works contractor doesn't get generic "byggföretag" wording everywhere.
+ */
+function adaptConstructionConfig(nc: NicheConfig, plan: SitePlan): NicheConfig {
+  const type = (plan.businessType || '').trim()
+  if (!type) return nc
+  const isGeneric = /byggf[öo]retag|byggfirma|bygg\b/i.test(type)
+  if (isGeneric) return nc
+  const lower = type.toLowerCase()
+  const t = (v: string) => v.replace(/Byggföretag/g, cap(type)).replace(/byggföretag/g, lower)
+  return {
+    ...nc,
+    label: cap(type),
+    metaDescSuffix: lower,
+    heroEyebrowDefault: (city: string) => (city ? `${cap(type)} i ${city}` : cap(type)),
+    heroSublineDefault: t(nc.heroSublineDefault),
+    contactSubline: t(nc.contactSubline),
+    footerTagline: t(nc.footerTagline),
+    polishSystemPrompt:
+      nc.polishSystemPrompt.replace(/premium byggföretagssajter/, `premium ${lower}-sajter`) +
+      `\n9. Verksamheten är en ${lower}. All text måste passa den verksamheten.`,
+  }
+}
+
+
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
@@ -949,6 +1126,7 @@ function buildSiteFiles({
   const scenarios = normalizeScenarios(plan.scenarios)
   const processSteps = normalizeProcess(plan.processSteps)
   const isSalon = nc.key === 'hair_salon'
+  const isBuild = nc.key === 'construction'
   const trustBadgeSource = (plan.trustBadges || []).map(cleanText).filter(Boolean)
   const trustBadges = (trustBadgeSource.length
     ? trustBadgeSource
@@ -960,7 +1138,7 @@ function buildSiteFiles({
   const primaryHref = phone ? `tel:${phone.replace(/\s+/g, '')}` : email ? `mailto:${email}` : null
   const primaryLabel = phone ? 'Ring nu' : email ? 'Mejla oss' : null
   const bookLabel = 'Boka tid'
-  const displayFont = brandFonts[0] || (isSalon ? 'Cormorant Garamond' : 'Space Grotesk')
+  const displayFont = brandFonts[0] || (isSalon ? 'Cormorant Garamond' : isBuild ? 'Archivo' : 'Space Grotesk')
   const bodyFont = isSalon ? 'Manrope' : 'Inter'
   const nicheStyles = isSalon ? `
     .theme-salon{--font-body:Manrope,sans-serif}
@@ -1075,7 +1253,62 @@ function buildSiteFiles({
       .theme-salon .service-row{padding:44px 0}
       .theme-salon .service-row img,.theme-salon .photo{height:320px}
     }
+  ` : isBuild ? `
+    .theme-build{--font-body:Inter,sans-serif}
+    .theme-build{background:linear-gradient(180deg,var(--bg) 0%,var(--bg) 60%,color-mix(in srgb,var(--surface) 70%,var(--bg)) 100%)}
+    .theme-build .h1,.theme-build .h2,.theme-build .h3,.theme-build .brand,.theme-build .footer-title{letter-spacing:-.02em;font-weight:800}
+    .theme-build .h1{font-size:clamp(46px,6.6vw,86px);line-height:.95;text-transform:none}
+    .theme-build .h2{font-size:clamp(32px,4.2vw,58px);max-width:16ch}
+    .theme-build .eyebrow{letter-spacing:.3em;text-transform:uppercase;font-weight:800;border:0;background:transparent;padding:0;border-radius:0;margin-bottom:16px}
+    .theme-build .eyebrow:before{content:"";display:inline-block;width:26px;height:2px;background:var(--primary);vertical-align:middle;margin-right:12px}
+    .theme-build .btn,.theme-build .nav-cta,.theme-build .card,.theme-build .scenario,.theme-build .diff,.theme-build .contact-item,.theme-build .service-row .when{border-radius:5px}
+    .theme-build .btn{padding:16px 30px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;font-size:13px}
+    .theme-build .photo,.theme-build .service-row img,.theme-build .scenario img,.theme-build .map{border-radius:6px}
+    /* Architectural dark hero with a subtle drawing grid */
+    .theme-build .hero{min-height:86vh;padding:120px 28px 70px}
+    .theme-build .hero>img{filter:brightness(.42) saturate(.85) contrast(1.05)}
+    .theme-build .hero:after{background:
+      linear-gradient(90deg,rgba(12,14,16,.94) 0%,rgba(12,14,16,.82) 48%,rgba(12,14,16,.42) 100%)}
+    .theme-build .hero:before{content:"";position:absolute;inset:0;z-index:-1;opacity:.16;
+      background-image:linear-gradient(to right,rgba(255,255,255,.35) 1px,transparent 1px),linear-gradient(to bottom,rgba(255,255,255,.35) 1px,transparent 1px);
+      background-size:88px 88px}
+    .theme-build .hero .h1,.theme-build .hero .lead,.theme-build .hero .eyebrow{color:#fff}
+    .theme-build .hero .lead{color:rgba(255,255,255,.78);max-width:56ch}
+    .theme-build .hero .h1 .accent{color:var(--primary)}
+    .theme-build .trust-row{gap:0;margin-top:34px;flex-wrap:wrap}
+    .theme-build .trust-row span{padding:12px 20px;border:1px solid rgba(255,255,255,.22);border-right:0;color:#fff;background:rgba(255,255,255,.04);font-weight:600;font-size:13px;letter-spacing:.06em;text-transform:uppercase}
+    .theme-build .trust-row span:last-child{border-right:1px solid rgba(255,255,255,.22)}
+    .theme-build .trust-row span:before{display:none}
+    .theme-build .band{background:#101315;color:#fff}
+    .theme-build .band .h2,.theme-build .band .eyebrow{color:#fff}
+    .theme-build .band .lead,.theme-build .band p{color:rgba(255,255,255,.72)}
+    .theme-build .band .scenario{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.14)}
+    .theme-build .band .scenario h3{color:#fff}
+    .theme-build .band .scenario p{color:rgba(255,255,255,.7)}
+    .theme-build .band .scenario .delivery{color:rgba(255,255,255,.85);border-top-color:rgba(255,255,255,.14)}
+    .theme-build .band-tight{background:color-mix(in srgb,var(--surface) 82%,var(--bg))}
+    /* Numbered process steps with a connecting rule */
+    .theme-build .card.path-card{border-top:3px solid var(--primary);position:relative;padding-top:34px}
+    .theme-build .diff{border-left:0;border-top:3px solid var(--primary);border-radius:0 0 5px 5px;background:var(--surface)}
+    .theme-build .service-row .when strong{letter-spacing:.2em}
+    .theme-build .cta-band{border-radius:6px;background:linear-gradient(120deg,#101315 0%,#191d20 60%,color-mix(in srgb,var(--primary) 55%,#101315) 100%)}
+    .theme-build .cta-band h2,.theme-build .cta-band .lead{color:#fff}
+    .theme-build .page-hero{text-align:left;padding:150px 28px 90px;background:#101315}
+    .theme-build .page-hero .h1,.theme-build .page-hero .lead,.theme-build .page-hero .eyebrow{color:#fff}
+    .theme-build .page-hero .h1{margin:0!important;max-width:14ch}
+    .theme-build .page-hero .lead{margin:22px 0 0!important;color:rgba(255,255,255,.75)}
+    .theme-build .page-hero>img{opacity:.24}
+    .theme-build footer{background:#101315;color:rgba(255,255,255,.66);border-top-color:rgba(255,255,255,.12)}
+    .theme-build footer .footer-title{color:#fff}
+    .theme-build footer a{color:rgba(255,255,255,.66)}
+    .theme-build footer a:hover{color:var(--primary)}
+    @media(max-width:900px){
+      .theme-build .hero{min-height:auto;padding:104px 20px 60px}
+      .theme-build .trust-row span{border-right:1px solid rgba(255,255,255,.22)}
+    }
   ` : ''
+
+
 
   const common = (active: 'home' | 'about' | 'services', title: string, body: string) => `<!DOCTYPE html>
 <html lang="sv">
@@ -1203,7 +1436,7 @@ function buildSiteFiles({
     @media(max-width:900px){.nav-inner{padding:14px 20px}.nav-toggle{display:inline-flex}.nav-menu{display:none;position:absolute;top:calc(100% + 10px);left:20px;right:20px;z-index:60;flex-direction:column;align-items:stretch;padding:16px;border-radius:22px;border:1px solid var(--border);background:color-mix(in srgb,var(--surface) 94%,var(--bg));box-shadow:0 24px 60px rgba(0,0,0,.22)}.nav.open .nav-menu{display:flex}.nav.open .nav-toggle span:nth-child(1){transform:translateY(6px) rotate(45deg)}.nav.open .nav-toggle span:nth-child(2){opacity:0}.nav.open .nav-toggle span:nth-child(3){transform:translateY(-6px) rotate(-45deg)}.links{flex-direction:column;align-items:stretch;gap:8px}.links a,.nav-cta{width:100%;justify-content:center}.links a{padding:12px 14px;font-size:15px}.section,.section-sm{padding:70px 20px}.hero{min-height:auto;padding:100px 20px}.g-4,.g-3,.g-2,.about-split,.diff-grid,.contact-grid,.footer-grid{grid-template-columns:1fr}.service-row{grid-template-columns:1fr;gap:32px;padding:60px 0}.service-row.rev>.s-media{order:0}.service-row img,.photo{height:340px}.cta-band{padding:70px 24px;border-radius:20px}footer{padding:64px 20px 34px}}
   </style>
 </head>
-<body class="${nc.key === 'hair_salon' ? 'theme-salon' : 'theme-auto'}">
+<body class="${isSalon ? 'theme-salon' : isBuild ? 'theme-build' : 'theme-auto'}">
   <style>${nicheStyles}</style>
   ${nav(active, businessName, primaryHref, primaryLabel, hasContact)}
   ${body}

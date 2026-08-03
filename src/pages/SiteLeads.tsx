@@ -92,6 +92,7 @@ const STATUS_COLORS: Record<string, string> = {
 const NICHE_OPTIONS: { value: string; label: string }[] = [
   { value: "auto_workshop", label: "Bilverkstad / mekaniker" },
   { value: "hair_salon", label: "Frisörsalong" },
+  { value: "construction", label: "Byggföretag" },
 ];
 
 export default function SiteLeads() {

@@ -461,6 +461,7 @@ async function startGeneration(
   const nicheTemplate = ({
     auto_workshop: 'auto_workshop_v1',
     hair_salon: 'hair_salon_v1',
+    construction: 'construction_v1',
   } as Record<string, string>)[niche]
 
   // Ensure ghost list for this user
@@ -593,14 +594,18 @@ function normaliseUrl(raw: string): string {
   return `https://${s.replace(/^\/+/, '')}`
 }
 
-function inferLeadNiche(lead: any): 'auto_workshop' | 'hair_salon' {
+function inferLeadNiche(lead: any): 'auto_workshop' | 'hair_salon' | 'construction' {
   if (lead?.niche === 'hair_salon') return 'hair_salon'
+  if (lead?.niche === 'construction') return 'construction'
   const text = [lead?.company_name, lead?.category, lead?.niche]
     .filter(Boolean)
     .join(' ')
     .toLowerCase()
   if (/hair|hairdresser|hair\s*salon|fris[öo]r|frisörsalong|salong|barber|barbershop|fade|klipp|beauty|sk[öo]nhet|nail|hudv[åa]rd|spa|lashes|brow|laser hair/.test(text)) {
     return 'hair_salon'
+  }
+  if (/bygg|byggfirma|byggföretag|byggservice|entreprenad|snicker|snickare|murar|mureri|plattsätt|kakel|badrumsrenover|renover|takläggar|takarbete|fasad|m[åa]lare|m[åa]leri|mark(?:arbete|entrepren)|anläggning|grundarbet|betong|husbygg|construction|builder|contractor/.test(text)) {
+    return 'construction'
   }
   return 'auto_workshop'
 }
