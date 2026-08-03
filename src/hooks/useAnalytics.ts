@@ -132,8 +132,42 @@ export const useRecentActivity = (filters: AnalyticsFilters) =>
     },
   });
 
+// Step derivation: sent_emails.step_id is null for node-based sequences, so the
+// step number is derived from the send order within each enrollment.
+export type StepFilter = "all" | "first" | `step-${number}` | "followups";
+
+export const annotateSteps = (rows: SentEmailRow[]): (SentEmailRow & { stepIndex: number })[] => {
+  const byEnrollment = new Map<string, SentEmailRow[]>();
+  rows.forEach((r) => {
+    const key = r.enrollment_id ?? `solo-${r.id}`;
+    const arr = byEnrollment.get(key) ?? [];
+    arr.push(r);
+    byEnrollment.set(key, arr);
+  });
+  const out: (SentEmailRow & { stepIndex: number })[] = [];
+  byEnrollment.forEach((arr) => {
+    arr
+      .slice()
+      .sort((a, b) => a.sent_at.localeCompare(b.sent_at))
+      .forEach((r, i) => out.push({ ...r, stepIndex: i + 1 }));
+  });
+  return out;
+};
+
+export const filterByStep = (
+  rows: (SentEmailRow & { stepIndex: number })[],
+  filter: StepFilter
+) => {
+  if (filter === "all") return rows;
+  if (filter === "first") return rows.filter((r) => r.stepIndex === 1);
+  if (filter === "followups") return rows.filter((r) => r.stepIndex > 1);
+  const n = Number(filter.replace("step-", ""));
+  return rows.filter((r) => r.stepIndex <= n);
+};
+
 // Aggregations
 export const computeKpis = (rows: SentEmailRow[]) => {
+
   const failed = rows.filter((r) => r.status === "failed").length;
   const bounced = rows.filter((r) => r.status === "bounced").length;
   const complained = rows.filter((r) => r.status === "complained").length;
