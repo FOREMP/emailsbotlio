@@ -90,7 +90,14 @@ const Analytics = () => {
               {senders.map((s) => <SelectItem key={s.id} value={s.id}>{s.from_email}</SelectItem>)}
             </SelectContent>
           </Select>
+          <Select value={stepFilter} onValueChange={(v) => setStepFilter(v as StepFilter)}>
+            <SelectTrigger className="w-[220px]"><SelectValue placeholder="Steg" /></SelectTrigger>
+            <SelectContent>
+              {stepOptions.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
+
       </div>
 
       <div className="space-y-6">
