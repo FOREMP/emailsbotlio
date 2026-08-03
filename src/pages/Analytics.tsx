@@ -3,8 +3,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   AnalyticsFilters,
   DateRangeKey,
+  StepFilter,
+  annotateSteps,
   computeDailySeries,
   computeKpis,
+  filterByStep,
   useEnrollments,
   useRecentActivity,
   useSenders,
@@ -29,17 +32,35 @@ const RANGE_OPTIONS: { value: DateRangeKey; label: string }[] = [
 
 const Analytics = () => {
   const [filters, setFilters] = useState<AnalyticsFilters>({ range: "30d", sequenceId: "all", senderId: "all" });
+  const [stepFilter, setStepFilter] = useState<StepFilter>("all");
 
   const { data: sequences = [] } = useSequences();
   const { data: senders = [] } = useSenders();
-  const { data: rows = [], isLoading } = useSentEmails(filters);
+  const { data: allRows = [], isLoading } = useSentEmails(filters);
   const { data: enrollments = [] } = useEnrollments({ ...filters, sequenceId: "all" });
   const { data: unsubs = [] } = useUnsubscribed(filters);
   const { data: activity = [] } = useRecentActivity(filters);
 
+  const stepped = useMemo(() => annotateSteps(allRows), [allRows]);
+  const maxStep = useMemo(() => stepped.reduce((m, r) => Math.max(m, r.stepIndex), 1), [stepped]);
+  const rows = useMemo(() => filterByStep(stepped, stepFilter), [stepped, stepFilter]);
+
+  const stepOptions = useMemo(() => {
+    const opts: { value: StepFilter; label: string }[] = [
+      { value: "all", label: "Alla utskick" },
+      { value: "first", label: "Endast första mailet" },
+    ];
+    for (let n = 2; n <= Math.min(maxStep, 8); n++) {
+      opts.push({ value: `step-${n}` as StepFilter, label: `Första + ${n - 1} uppföljning${n - 1 > 1 ? "ar" : ""}` });
+    }
+    if (maxStep > 1) opts.push({ value: "followups", label: "Endast uppföljningar" });
+    return opts;
+  }, [maxStep]);
+
   const kpis = useMemo(() => computeKpis(rows), [rows]);
   const days = filters.range === "24h" ? 1 : filters.range === "7d" ? 7 : filters.range === "90d" ? 90 : 30;
   const series = useMemo(() => computeDailySeries(rows, days), [rows, days]);
+
 
   return (
     <>
