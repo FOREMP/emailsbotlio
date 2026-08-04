@@ -24,6 +24,7 @@ type EnrollRow = {
   current_node_id: string | null;
   next_send_at: string | null;
   last_sent_at: string | null;
+  created_at?: string | null;
   contact: { id: string; email: string | null; first_name: string | null; custom_fields: any } | null;
 };
 type SentRow = {
