@@ -298,12 +298,16 @@ export default function SiteOutreach() {
       </Card>
 
       {/* KPI cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard label="Aktiva" value={counts.active} />
-        <StatCard label="Väntar kapacitet" value={counts.waiting} />
+        <StatCard label="Väntar på första mail" value={counts.waitingFirst} />
+        <StatCard label="Väntar på uppföljning" value={counts.waitingFollowup} />
+        <StatCard label="Nya i kön (24h)" value={counts.newLast24h} />
+        <StatCard label={`Nya mail i dag (av ${dailyLimit})`} value={counts.sentFirstToday} />
+        <StatCard label={`Uppföljningar i dag (av ${dailyLimit * 3})`} value={counts.sentFollowupToday} />
         <StatCard label="Klara" value={counts.completed} />
         <StatCard label="Stoppade" value={counts.stopped} />
-        <StatCard label="Skickade (senaste 5)" value={recent.length} />
+
       </div>
 
       {/* Statistik — samma graf som Analytics, men filtrerad på denna sekvens */}
