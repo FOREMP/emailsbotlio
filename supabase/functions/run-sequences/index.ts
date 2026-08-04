@@ -183,14 +183,22 @@ Deno.serve(async (req) => {
   const domainSentToday = new Map<string, number>()
   const domainCounted = new Set<string>() // domains we've already initialised from DB
 
+  const domainCap = new Map<string, number>()
+
   async function getDomainRemaining(domain: string): Promise<number> {
     if (!domainCounted.has(domain)) {
       // Fetch all sender ids for this domain (any user) — domain reputation is shared regardless of user
       const { data: dSenders } = await supabase
         .from('senders')
-        .select('id, from_email')
+        .select('id, from_email, daily_limit, followup_multiplier, is_active')
         .ilike('from_email', `%@${domain}`)
       const ids = (dSenders ?? []).map((s: any) => s.id)
+      // Dynamic cap: every active sender on this domain contributes its first-mail
+      // quota plus its follow-up quota (daily_limit * followup_multiplier).
+      const dynCap = (dSenders ?? [])
+        .filter((s: any) => s.is_active !== false)
+        .reduce((sum: number, s: any) => sum + (s.daily_limit ?? 0) * (1 + (s.followup_multiplier ?? 3)), 0)
+      domainCap.set(domain, Math.max(PER_DOMAIN_DAILY_CAP, dynCap))
       let used = 0
       if (ids.length > 0) {
         const startOfDay = new Date(); startOfDay.setUTCHours(0, 0, 0, 0)
@@ -205,8 +213,9 @@ Deno.serve(async (req) => {
       domainSentToday.set(domain, used)
       domainCounted.add(domain)
     }
-    return Math.max(0, PER_DOMAIN_DAILY_CAP - (domainSentToday.get(domain) ?? 0))
+    return Math.max(0, (domainCap.get(domain) ?? PER_DOMAIN_DAILY_CAP) - (domainSentToday.get(domain) ?? 0))
   }
+
 
   function bumpDomain(domain: string) {
     domainSentToday.set(domain, (domainSentToday.get(domain) ?? 0) + 1)
