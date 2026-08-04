@@ -656,6 +656,7 @@ export type Database = {
         Row: {
           created_at: string
           daily_limit: number
+          followup_multiplier: number
           from_email: string
           from_name: string
           id: string
@@ -670,6 +671,7 @@ export type Database = {
         Insert: {
           created_at?: string
           daily_limit?: number
+          followup_multiplier?: number
           from_email: string
           from_name: string
           id?: string
@@ -684,6 +686,7 @@ export type Database = {
         Update: {
           created_at?: string
           daily_limit?: number
+          followup_multiplier?: number
           from_email?: string
           from_name?: string
           id?: string
@@ -1110,6 +1113,10 @@ export type Database = {
     }
     Functions: {
       seed_default_senders: { Args: never; Returns: number }
+      sender_capacity_remaining: {
+        Args: { _is_followup: boolean; _sender_id: string }
+        Returns: number
+      }
       sender_daily_remaining: { Args: { _sender_id: string }; Returns: number }
       sender_warmup_quota: { Args: { _sender_id: string }; Returns: number }
     }
