@@ -22,6 +22,7 @@ interface Sender {
   warmup_enabled: boolean;
   warmup_started_at: string | null;
   warmup_target: number;
+  followup_multiplier?: number;
 }
 
 interface SendingDomain {
