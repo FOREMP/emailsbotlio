@@ -559,7 +559,7 @@ Deno.serve(async (req) => {
               candidates = filtered
             }
             for (const c of candidates.sort(() => Math.random() - 0.5)) {
-              const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: c.id })
+              const { data: rem } = await supabase.rpc('sender_capacity_remaining', { _sender_id: c.id, _is_followup: isFollowupEnr })
               if ((rem ?? 0) <= 0) continue
               const dom = (c.from_email as string).split('@')[1]
               const domRem = await getDomainRemaining(dom)
