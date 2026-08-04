@@ -585,7 +585,7 @@ Deno.serve(async (req) => {
           continue
         }
         if (cfg.sender_strategy === 'specific' && !enr.assigned_sender_id) {
-          const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: preSenderId })
+          const { data: rem } = await supabase.rpc('sender_capacity_remaining', { _sender_id: preSenderId, _is_followup: isFollowupEnr })
           if ((rem ?? 0) <= 0) {
             const tomorrow = nextStockholmMidnightUtc()
             const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
