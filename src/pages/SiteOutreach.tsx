@@ -68,7 +68,7 @@ export default function SiteOutreach() {
       supabase.from("sequence_nodes").select("id, node_type, position_y, config").eq("sequence_id", s.id).order("position_y"),
       supabase
         .from("enrollments")
-        .select("id, status, current_step, current_node_id, next_send_at, last_sent_at, contact_id")
+        .select("id, status, current_step, current_node_id, next_send_at, last_sent_at, created_at, contact_id")
         .eq("sequence_id", s.id)
         .order("updated_at", { ascending: false })
         .limit(200),
