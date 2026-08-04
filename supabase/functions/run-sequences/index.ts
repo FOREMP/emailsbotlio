@@ -468,6 +468,10 @@ Deno.serve(async (req) => {
           failed++; continue
         }
 
+        // Follow-ups draw from a separate, larger budget than first emails
+        // (daily_limit for first mails, daily_limit * followup_multiplier for follow-ups).
+        const isFollowupEnr = !!enr.last_sent_at
+
         // STICKY SENDER: if this enrollment already has an assigned sender from
         // a prior send, reuse it so the recipient sees the same From across the
         // first email and every follow-up (matches subject-based threading).
@@ -476,10 +480,11 @@ Deno.serve(async (req) => {
           if (!match) return { ok: false, reason: 'sender no longer active or domain unverified' }
           const dom = (match.from_email as string).split('@')[1]
           if (cfg.sender_domain && dom !== cfg.sender_domain) return { ok: false, reason: `assigned sender is not on ${cfg.sender_domain}` }
-          const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: sid })
-          if ((rem ?? 0) <= 0) return { ok: false, reason: 'assigned sender at daily cap' }
+          const { data: rem } = await supabase.rpc('sender_capacity_remaining', { _sender_id: sid, _is_followup: isFollowupEnr })
+          if ((rem ?? 0) <= 0) return { ok: false, reason: isFollowupEnr ? 'assigned sender at follow-up daily cap' : 'assigned sender at daily cap' }
           const domRem = await getDomainRemaining(dom)
-          if (domRem <= 0) return { ok: false, reason: `domain ${dom} at daily cap (${PER_DOMAIN_DAILY_CAP})` }
+          if (domRem <= 0) return { ok: false, reason: `domain ${dom} at daily cap` }
+
           return { ok: true }
         }
 
