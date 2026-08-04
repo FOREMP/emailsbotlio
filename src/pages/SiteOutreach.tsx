@@ -140,14 +140,42 @@ export default function SiteOutreach() {
   const dailyLimit = Number(dailyLimitNode ? cfgVal(dailyLimitNode, "max_per_day") : 16) || 16;
 
   const counts = useMemo(() => {
-    const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
     const active = enrollments.filter((e) => e.status === "active" || e.status === "waiting_capacity").length;
-    const waiting = enrollments.filter((e) => e.status === "waiting_capacity").length;
+    const waitingRows = enrollments.filter((e) => e.status === "waiting_capacity");
+    const waiting = waitingRows.length;
+    const waitingFirst = waitingRows.filter((e) => !e.last_sent_at).length;
+    const waitingFollowup = waiting - waitingFirst;
     const completed = enrollments.filter((e) => e.status === "completed").length;
     const stopped = enrollments.filter((e) => e.status === "stopped" || e.status === "unsubscribed").length;
-    const sentToday = recent.filter((s) => new Date(s.sent_at) >= today).length; // approximate; only last 5 shown
-    return { active, waiting, completed, stopped, sentToday };
-  }, [enrollments, recent]);
+    const newLast24h = enrollments.filter((e) => e.created_at && new Date(e.created_at).getTime() >= dayAgo).length;
+
+    // Dagens utskick uppdelat på förstamail och uppföljningar.
+    const firstSendAt = new Map<string, number>();
+    for (const r of statsRows) {
+      const eid = (r as any).enrollment_id as string | null;
+      if (!eid) continue;
+      const t = new Date(r.sent_at).getTime();
+      const prev = firstSendAt.get(eid);
+      if (prev === undefined || t < prev) firstSendAt.set(eid, t);
+    }
+    let sentFirstToday = 0;
+    let sentFollowupToday = 0;
+    for (const r of statsRows) {
+      const t = new Date(r.sent_at).getTime();
+      if (t < today.getTime()) continue;
+      const eid = (r as any).enrollment_id as string | null;
+      const isFollowup = !!eid && (firstSendAt.get(eid) ?? t) < t;
+      if (isFollowup) sentFollowupToday++; else sentFirstToday++;
+    }
+    return {
+      active, waiting, waitingFirst, waitingFollowup, completed, stopped,
+      newLast24h, sentFirstToday, sentFollowupToday,
+      sentToday: sentFirstToday + sentFollowupToday,
+    };
+  }, [enrollments, statsRows]);
+
 
   const stopEnrollment = async (id: string, reason: string) => {
     if (!confirm(`Stoppa denna kontakt från fler mail? (${reason})`)) return;
