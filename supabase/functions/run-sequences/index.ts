@@ -183,14 +183,22 @@ Deno.serve(async (req) => {
   const domainSentToday = new Map<string, number>()
   const domainCounted = new Set<string>() // domains we've already initialised from DB
 
+  const domainCap = new Map<string, number>()
+
   async function getDomainRemaining(domain: string): Promise<number> {
     if (!domainCounted.has(domain)) {
       // Fetch all sender ids for this domain (any user) — domain reputation is shared regardless of user
       const { data: dSenders } = await supabase
         .from('senders')
-        .select('id, from_email')
+        .select('id, from_email, daily_limit, followup_multiplier, is_active')
         .ilike('from_email', `%@${domain}`)
       const ids = (dSenders ?? []).map((s: any) => s.id)
+      // Dynamic cap: every active sender on this domain contributes its first-mail
+      // quota plus its follow-up quota (daily_limit * followup_multiplier).
+      const dynCap = (dSenders ?? [])
+        .filter((s: any) => s.is_active !== false)
+        .reduce((sum: number, s: any) => sum + (s.daily_limit ?? 0) * (1 + (s.followup_multiplier ?? 3)), 0)
+      domainCap.set(domain, Math.max(PER_DOMAIN_DAILY_CAP, dynCap))
       let used = 0
       if (ids.length > 0) {
         const startOfDay = new Date(); startOfDay.setUTCHours(0, 0, 0, 0)
@@ -205,8 +213,9 @@ Deno.serve(async (req) => {
       domainSentToday.set(domain, used)
       domainCounted.add(domain)
     }
-    return Math.max(0, PER_DOMAIN_DAILY_CAP - (domainSentToday.get(domain) ?? 0))
+    return Math.max(0, (domainCap.get(domain) ?? PER_DOMAIN_DAILY_CAP) - (domainSentToday.get(domain) ?? 0))
   }
+
 
   function bumpDomain(domain: string) {
     domainSentToday.set(domain, (domainSentToday.get(domain) ?? 0) + 1)
@@ -459,6 +468,10 @@ Deno.serve(async (req) => {
           failed++; continue
         }
 
+        // Follow-ups draw from a separate, larger budget than first emails
+        // (daily_limit for first mails, daily_limit * followup_multiplier for follow-ups).
+        const isFollowupEnr = !!enr.last_sent_at
+
         // STICKY SENDER: if this enrollment already has an assigned sender from
         // a prior send, reuse it so the recipient sees the same From across the
         // first email and every follow-up (matches subject-based threading).
@@ -467,10 +480,11 @@ Deno.serve(async (req) => {
           if (!match) return { ok: false, reason: 'sender no longer active or domain unverified' }
           const dom = (match.from_email as string).split('@')[1]
           if (cfg.sender_domain && dom !== cfg.sender_domain) return { ok: false, reason: `assigned sender is not on ${cfg.sender_domain}` }
-          const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: sid })
-          if ((rem ?? 0) <= 0) return { ok: false, reason: 'assigned sender at daily cap' }
+          const { data: rem } = await supabase.rpc('sender_capacity_remaining', { _sender_id: sid, _is_followup: isFollowupEnr })
+          if ((rem ?? 0) <= 0) return { ok: false, reason: isFollowupEnr ? 'assigned sender at follow-up daily cap' : 'assigned sender at daily cap' }
           const domRem = await getDomainRemaining(dom)
-          if (domRem <= 0) return { ok: false, reason: `domain ${dom} at daily cap (${PER_DOMAIN_DAILY_CAP})` }
+          if (domRem <= 0) return { ok: false, reason: `domain ${dom} at daily cap` }
+
           return { ok: true }
         }
 
@@ -545,7 +559,7 @@ Deno.serve(async (req) => {
               candidates = filtered
             }
             for (const c of candidates.sort(() => Math.random() - 0.5)) {
-              const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: c.id })
+              const { data: rem } = await supabase.rpc('sender_capacity_remaining', { _sender_id: c.id, _is_followup: isFollowupEnr })
               if ((rem ?? 0) <= 0) continue
               const dom = (c.from_email as string).split('@')[1]
               const domRem = await getDomainRemaining(dom)
@@ -571,7 +585,7 @@ Deno.serve(async (req) => {
           continue
         }
         if (cfg.sender_strategy === 'specific' && !enr.assigned_sender_id) {
-          const { data: rem } = await supabase.rpc('sender_daily_remaining', { _sender_id: preSenderId })
+          const { data: rem } = await supabase.rpc('sender_capacity_remaining', { _sender_id: preSenderId, _is_followup: isFollowupEnr })
           if ((rem ?? 0) <= 0) {
             const tomorrow = nextStockholmMidnightUtc()
             const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)

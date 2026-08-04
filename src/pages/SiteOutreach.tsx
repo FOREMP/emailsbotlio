@@ -24,6 +24,7 @@ type EnrollRow = {
   current_node_id: string | null;
   next_send_at: string | null;
   last_sent_at: string | null;
+  created_at?: string | null;
   contact: { id: string; email: string | null; first_name: string | null; custom_fields: any } | null;
 };
 type SentRow = {
@@ -68,7 +69,7 @@ export default function SiteOutreach() {
       supabase.from("sequence_nodes").select("id, node_type, position_y, config").eq("sequence_id", s.id).order("position_y"),
       supabase
         .from("enrollments")
-        .select("id, status, current_step, current_node_id, next_send_at, last_sent_at, contact_id")
+        .select("id, status, current_step, current_node_id, next_send_at, last_sent_at, created_at, contact_id")
         .eq("sequence_id", s.id)
         .order("updated_at", { ascending: false })
         .limit(200),
@@ -139,14 +140,42 @@ export default function SiteOutreach() {
   const dailyLimit = Number(dailyLimitNode ? cfgVal(dailyLimitNode, "max_per_day") : 16) || 16;
 
   const counts = useMemo(() => {
-    const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
     const active = enrollments.filter((e) => e.status === "active" || e.status === "waiting_capacity").length;
-    const waiting = enrollments.filter((e) => e.status === "waiting_capacity").length;
+    const waitingRows = enrollments.filter((e) => e.status === "waiting_capacity");
+    const waiting = waitingRows.length;
+    const waitingFirst = waitingRows.filter((e) => !e.last_sent_at).length;
+    const waitingFollowup = waiting - waitingFirst;
     const completed = enrollments.filter((e) => e.status === "completed").length;
     const stopped = enrollments.filter((e) => e.status === "stopped" || e.status === "unsubscribed").length;
-    const sentToday = recent.filter((s) => new Date(s.sent_at) >= today).length; // approximate; only last 5 shown
-    return { active, waiting, completed, stopped, sentToday };
-  }, [enrollments, recent]);
+    const newLast24h = enrollments.filter((e) => e.created_at && new Date(e.created_at).getTime() >= dayAgo).length;
+
+    // Dagens utskick uppdelat på förstamail och uppföljningar.
+    const firstSendAt = new Map<string, number>();
+    for (const r of statsRows) {
+      const eid = (r as any).enrollment_id as string | null;
+      if (!eid) continue;
+      const t = new Date(r.sent_at).getTime();
+      const prev = firstSendAt.get(eid);
+      if (prev === undefined || t < prev) firstSendAt.set(eid, t);
+    }
+    let sentFirstToday = 0;
+    let sentFollowupToday = 0;
+    for (const r of statsRows) {
+      const t = new Date(r.sent_at).getTime();
+      if (t < today.getTime()) continue;
+      const eid = (r as any).enrollment_id as string | null;
+      const isFollowup = !!eid && (firstSendAt.get(eid) ?? t) < t;
+      if (isFollowup) sentFollowupToday++; else sentFirstToday++;
+    }
+    return {
+      active, waiting, waitingFirst, waitingFollowup, completed, stopped,
+      newLast24h, sentFirstToday, sentFollowupToday,
+      sentToday: sentFirstToday + sentFollowupToday,
+    };
+  }, [enrollments, statsRows]);
+
 
   const stopEnrollment = async (id: string, reason: string) => {
     if (!confirm(`Stoppa denna kontakt från fler mail? (${reason})`)) return;
@@ -269,12 +298,16 @@ export default function SiteOutreach() {
       </Card>
 
       {/* KPI cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard label="Aktiva" value={counts.active} />
-        <StatCard label="Väntar kapacitet" value={counts.waiting} />
+        <StatCard label="Väntar på första mail" value={counts.waitingFirst} />
+        <StatCard label="Väntar på uppföljning" value={counts.waitingFollowup} />
+        <StatCard label="Nya i kön (24h)" value={counts.newLast24h} />
+        <StatCard label={`Nya mail i dag (av ${dailyLimit})`} value={counts.sentFirstToday} />
+        <StatCard label={`Uppföljningar i dag (av ${dailyLimit * 3})`} value={counts.sentFollowupToday} />
         <StatCard label="Klara" value={counts.completed} />
         <StatCard label="Stoppade" value={counts.stopped} />
-        <StatCard label="Skickade (senaste 5)" value={recent.length} />
+
       </div>
 
       {/* Statistik — samma graf som Analytics, men filtrerad på denna sekvens */}

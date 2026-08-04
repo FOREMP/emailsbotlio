@@ -22,6 +22,7 @@ interface Sender {
   warmup_enabled: boolean;
   warmup_started_at: string | null;
   warmup_target: number;
+  followup_multiplier?: number;
 }
 
 interface SendingDomain {
@@ -329,9 +330,9 @@ const Senders = () => {
                               </Button>
                             </div>
                           </div>
-                          <div className="mt-3 grid grid-cols-[1fr_1fr_auto] gap-3 items-end border-t pt-3">
+                          <div className="mt-3 grid grid-cols-2 md:grid-cols-[1fr_1fr_1fr_auto] gap-3 items-end border-t pt-3">
                             <div>
-                              <Label className="text-xs">Daily limit</Label>
+                              <Label className="text-xs">Nya mail / dag</Label>
                               <Input
                                 type="number"
                                 min={1}
@@ -340,11 +341,24 @@ const Senders = () => {
                               />
                             </div>
                             <div>
+                              <Label className="text-xs">Uppföljningar ×</Label>
+                              <Input
+                                type="number"
+                                min={1}
+                                value={s.followup_multiplier ?? 3}
+                                onChange={(e) => updateSender(s.id, { followup_multiplier: Number(e.target.value) })}
+                              />
+                              <p className="text-[10px] text-muted-foreground mt-1">
+                                {s.daily_limit} nya + {s.daily_limit * (s.followup_multiplier ?? 3)} uppföljningar per dag
+                              </p>
+                            </div>
+                            <div>
                               <Label className="text-xs">Today's quota</Label>
                               <div className="h-9 px-3 flex items-center rounded-md border bg-muted/40 text-sm">
                                 {todayQuota(s)} {s.warmup_enabled && <span className="ml-2 text-[10px] text-amber-600 dark:text-amber-400">warming…</span>}
                               </div>
                             </div>
+
                             {!s.warmup_enabled ? (
                               <Button size="sm" variant="outline" onClick={() => updateSender(s.id, { warmup_enabled: true, warmup_started_at: new Date().toISOString(), warmup_target: 50 })}>
                                 <Flame className="h-3.5 w-3.5" /> Warm up
