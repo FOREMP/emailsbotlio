@@ -296,7 +296,9 @@ export type Database = {
           created_at: string
           demo_site_url: string | null
           error_message: string | null
+          gen_progress: Json | null
           generated_files: Json | null
+          generation_mode: string
           github_repo_url: string | null
           id: string
           last_clicked_at: string | null
@@ -322,7 +324,9 @@ export type Database = {
           created_at?: string
           demo_site_url?: string | null
           error_message?: string | null
+          gen_progress?: Json | null
           generated_files?: Json | null
+          generation_mode?: string
           github_repo_url?: string | null
           id?: string
           last_clicked_at?: string | null
@@ -348,7 +352,9 @@ export type Database = {
           created_at?: string
           demo_site_url?: string | null
           error_message?: string | null
+          gen_progress?: Json | null
           generated_files?: Json | null
+          generation_mode?: string
           github_repo_url?: string | null
           id?: string
           last_clicked_at?: string | null

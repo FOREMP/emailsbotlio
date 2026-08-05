@@ -40,6 +40,7 @@ export default function SiteApprovals() {
   const [loading, setLoading] = useState(true);
   const [regen, setRegen] = useState<LeadRow | null>(null);
   const [feedback, setFeedback] = useState("");
+  const [regenMode, setRegenMode] = useState<"keep" | "template" | "freeform">("keep");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [ticking, setTicking] = useState(false);
   const [filter, setFilter] = useState<string>("awaiting_approval");
@@ -248,6 +249,13 @@ export default function SiteApprovals() {
         }
 
         // 3. Re-queue the site so the worker picks it up on the next tick.
+        //    Freeform builds page-by-page, so its progress must start clean.
+        const modeFields =
+          regenMode === "keep"
+            ? {}
+            : regenMode === "freeform"
+              ? { generation_mode: "freeform", gen_progress: null, generated_files: null }
+              : { generation_mode: "template" };
         await supabase
           .from("generated_sites")
           .update({
@@ -255,6 +263,7 @@ export default function SiteApprovals() {
             queued_at: new Date().toISOString(),
             error_message: null,
             attempts: 0,
+            ...modeFields,
           })
           .eq("id", regen.generated_site_id);
       }
@@ -262,6 +271,7 @@ export default function SiteApprovals() {
       toast({ title: "Regenererar", description: "Ny version byggs, kolla igen om några minuter." });
       setRegen(null);
       setFeedback("");
+      setRegenMode("keep");
       load();
     } catch (e) {
       toast({ title: "Fel", description: (e as Error).message, variant: "destructive" });
@@ -392,6 +402,21 @@ export default function SiteApprovals() {
             </DialogDescription>
           </DialogHeader>
           <Textarea rows={6} value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="Feedback till AI:n…" />
+          <div className="space-y-2">
+            <div className="text-sm font-medium">Byggmotor för denna regenerering</div>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant={regenMode === "keep" ? "default" : "outline"} onClick={() => setRegenMode("keep")}>
+                Samma som förut
+              </Button>
+              <Button size="sm" variant={regenMode === "template" ? "default" : "outline"} onClick={() => setRegenMode("template")}>
+                Mall
+              </Button>
+              <Button size="sm" variant={regenMode === "freeform" ? "default" : "outline"} onClick={() => setRegenMode("freeform")}>
+                AI bygger fritt (DeepSeek V4)
+              </Button>
+            </div>
+          </div>
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setRegen(null)} disabled={busyId === regen?.id}>Avbryt</Button>
             <Button onClick={submitRegen} disabled={busyId === regen?.id} className="gap-2">

@@ -446,6 +446,26 @@ async function auditOne(
 }
 
 // ---------------------------------------------------------------------------
+// Which site engine new jobs use. Controlled from /site-leads via
+// app_settings.site_generation_mode ('template' = current template engine,
+// 'freeform' = AI builds the whole site). Env var is a hard override.
+let cachedGenerationMode: 'template' | 'freeform' | null = null
+async function resolveGenerationMode(
+  supabase: ReturnType<typeof createClient>,
+): Promise<'template' | 'freeform'> {
+  const envMode = Deno.env.get('SITE_GENERATION_MODE')
+  if (envMode === 'freeform' || envMode === 'template') return envMode
+  if (cachedGenerationMode) return cachedGenerationMode
+  const { data } = await supabase
+    .from('app_settings')
+    .select('value')
+    .eq('key', 'site_generation_mode')
+    .maybeSingle()
+  const mode = (data?.value as any)?.mode
+  cachedGenerationMode = mode === 'freeform' ? 'freeform' : 'template'
+  return cachedGenerationMode
+}
+
 // GENERATE — creates synthetic contact + generated_sites row, kicks off
 // scrape-lead-data. The reconciler above then walks the pipeline forward.
 // ---------------------------------------------------------------------------
@@ -463,6 +483,9 @@ async function startGeneration(
     hair_salon: 'hair_salon_v1',
     construction: 'construction_v1',
   } as Record<string, string>)[niche]
+
+  const generationMode = await resolveGenerationMode(supabase)
+
 
   // Ensure ghost list for this user
   const { data: list } = await supabase
@@ -532,6 +555,7 @@ async function startGeneration(
       source_url: normaliseUrl(lead.website),
       status: 'pending',
       template: nicheTemplate,
+      generation_mode: generationMode,
     })
     .select('id')
     .single()
