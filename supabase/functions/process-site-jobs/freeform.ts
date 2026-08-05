@@ -23,19 +23,31 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 export const BUILD_MODEL = 'deepseek/deepseek-v4-flash-0731'
 export const LANG_MODEL = 'openai/gpt-4.1-mini'
 
-const MAX_PAGES = 6
+const MAX_PAGES = 5
 const REQUIRED_PAGES = ['index', 'om-oss', 'kontakt']
 const PROGRESS_VERSION = 2
 
-const BLUEPRINT_MAX_TOKENS = 3200
-const DESIGN_MAX_TOKENS = 7000
-const INDEX_PAGE_MAX_TOKENS = 25000
-const INNER_PAGE_MAX_TOKENS = 18000
-const BLUEPRINT_TIMEOUT_MS = 70_000
-const DESIGN_TIMEOUT_MS = 90_000
-const INDEX_PAGE_TIMEOUT_MS = 120_000
-const INNER_PAGE_TIMEOUT_MS = 95_000
+const BLUEPRINT_MAX_TOKENS = 2600
+const DESIGN_MAX_TOKENS = 4800
+const DESIGN_RETRY_MAX_TOKENS = 3200
+const INDEX_PAGE_MAX_TOKENS = 14000
+const INNER_PAGE_MAX_TOKENS = 9000
+const PAGE_RETRY_MAX_TOKENS = 7000
+const BLUEPRINT_TIMEOUT_MS = 55_000
+const DESIGN_TIMEOUT_MS = 65_000
+const DESIGN_RETRY_TIMEOUT_MS = 45_000
+const INDEX_PAGE_TIMEOUT_MS = 85_000
+const INNER_PAGE_TIMEOUT_MS = 70_000
+const PAGE_RETRY_TIMEOUT_MS = 55_000
 const POLISH_TIMEOUT_MS = 45_000
+const PLANNING_HOME_LIMIT = 3200
+const PLANNING_ABOUT_LIMIT = 1600
+const PLANNING_SERVICES_LIMIT = 2000
+const PAGE_HOME_LIMIT = 2200
+const PAGE_ABOUT_LIMIT = 1200
+const PAGE_SERVICES_LIMIT = 1600
+const CSS_PROMPT_LIMIT = 3600
+const IMAGE_PROMPT_LIMIT = 6
 
 const COMPONENT_GUIDE = `
 KOMPONENTKONTRAKT — HTML måste följa detta:
@@ -292,6 +304,7 @@ SCHEMA:
   const raw = await callModel(
     ctx.openrouterKey,
     BUILD_MODEL,
+    'freeform-blueprint',
     system,
     user,
     BLUEPRINT_MAX_TOKENS,
@@ -340,15 +353,31 @@ ${palette}
     `TYPSNITT FRÅN DERAS NUVARANDE SAJT:\n${ctx.brandFonts.join(', ') || 'inga — välj moderna webbsäkra systemtypsnitt'}`,
   ].join('\n')
 
-  const raw = await callModel(
-    ctx.openrouterKey,
-    BUILD_MODEL,
+  const compactUser = [
+    buildPlanningSourceBlock(ctx, 'Bygg ett kompakt men komplett designsystem för hela sajten.'),
+    '',
+    `SIDOR SOM SKA FINNAS:\n${plan.pages.map((page) => `- ${page.slug}: ${page.title}`).join('\n')}`,
+    '',
+    `DESIGNRIKTNING:\n${plan.designDirective || 'modern, luftig, förtroendeingivande, premium'}`,
+    '',
+    'KOMPAKT LÄGE: prioritera stark typografi, tydlig header, hero, kort, CTA-band, footer och mobilmeny. Håll antalet varianter nere.',
+    '',
+    `TYPSNITT:\n${ctx.brandFonts.join(', ') || 'moderna webbsäkra systemtypsnitt'}`,
+  ].join('\n')
+
+  const raw = await callModelWithCompactRetry({
+    key: ctx.openrouterKey,
+    model: BUILD_MODEL,
+    label: 'freeform-design',
     system,
     user,
-    DESIGN_MAX_TOKENS,
-    DESIGN_TIMEOUT_MS,
-    true,
-  )
+    maxTokens: DESIGN_MAX_TOKENS,
+    timeoutMs: DESIGN_TIMEOUT_MS,
+    jsonMode: true,
+    retryUser: compactUser,
+    retryMaxTokens: DESIGN_RETRY_MAX_TOKENS,
+    retryTimeoutMs: DESIGN_RETRY_TIMEOUT_MS,
+  })
   const parsed = JSON.parse(stripFence(raw))
   const css = sanitizeCss(String(parsed?.css ?? ''))
   if (css.length < 1200) throw new Error(`design system came back too short (${css.length} chars)`)
@@ -369,7 +398,6 @@ async function buildPage(
   designNote: string,
 ): Promise<string> {
   const nav = plan.pages.map((p) => `${p.title} → ${fileNameFor(p.slug)}`).join('\n')
-  const pageSpecificSource = buildPageSourceBlock(ctx, page)
 
   const system = `Du är en svensk senior frontend-utvecklare och designer. Du skriver komplett, produktionsklar HTML för EN sida i en modern företagssajt.
 
@@ -383,10 +411,11 @@ HÅRDA REGLER:
 - Hitta aldrig på priser, årtal, certifikat, kundnamn eller referensprojekt.
 - Följ komponentkontraktet nedan. Menyn ska använda details/summary för mobilversionen.
 - Skapa en sida som känns skräddarsydd för företaget, men återanvänd de gemensamma komponenterna så att hela sajten blir konsekvent.
+- Håll sidan koncentrerad och skarp: startsidan 5–7 huvudsektioner, undersidor 4–6 huvudsektioner. Kortare copy är bättre än utfyllnad.
 `
 
-  const user = [
-    pageSpecificSource,
+  const buildPageUser = (compact = false) => [
+    buildPageSourceBlock(ctx, page, compact),
     '',
     `BYGG SIDAN:\n- slug: ${page.slug}\n- fil: ${fileNameFor(page.slug)}\n- titel: ${page.title}\n- syfte: ${page.purpose || page.title}`,
     page.sections.length ? `- prioriterade sektioner: ${page.sections.join(', ')}` : '',
@@ -398,16 +427,29 @@ HÅRDA REGLER:
     '',
     `NAVIGATION (exakt dessa länkar):\n${nav}`,
     '',
-    `BEFINTLIG style.css (använd dess klasser och rytm):\n${existingCss.slice(0, 9000)}`,
+    `BEFINTLIG style.css (använd dess klasser och rytm):\n${buildCssPromptContext(existingCss, compact)}`,
     '',
-    `BILDPOOL (endast dessa URL:er):\n${ctx.imagePool.join('\n') || '[inga bilder — bygg utan foton, använd färg, komposition och typografi]'}`,
+    `BILDPOOL (endast dessa URL:er):\n${buildImagePromptContext(ctx.imagePool, compact)}`,
+    compact ? '\nKOMPAKT LÄGE: prioritera färre sektioner, mindre upprepning och tydliga CTA-ytor.' : '',
   ]
     .filter(Boolean)
     .join('\n')
 
   const maxTokens = page.slug === 'index' ? INDEX_PAGE_MAX_TOKENS : INNER_PAGE_MAX_TOKENS
   const timeoutMs = page.slug === 'index' ? INDEX_PAGE_TIMEOUT_MS : INNER_PAGE_TIMEOUT_MS
-  const raw = await callModel(ctx.openrouterKey, BUILD_MODEL, system, user, maxTokens, timeoutMs, true)
+  const raw = await callModelWithCompactRetry({
+    key: ctx.openrouterKey,
+    model: BUILD_MODEL,
+    label: `freeform-page:${page.slug}`,
+    system,
+    user: buildPageUser(false),
+    maxTokens,
+    timeoutMs,
+    jsonMode: true,
+    retryUser: buildPageUser(true),
+    retryMaxTokens: PAGE_RETRY_MAX_TOKENS,
+    retryTimeoutMs: PAGE_RETRY_TIMEOUT_MS,
+  })
   const parsed = JSON.parse(stripFence(raw))
   const html = sanitizeHtml(String(parsed?.html ?? ''), ctx, plan)
   if (html.length < 850) throw new Error(`page ${page.slug} came back too short (${html.length} chars)`)
@@ -435,6 +477,7 @@ Svara ENDAST med JSON: {"texts": {"0": "...", "1": "..."}} med samma index.`
   const raw = await callModel(
     ctx.openrouterKey,
     LANG_MODEL,
+    'freeform-language-pass',
     system,
     user,
     4000,
@@ -470,15 +513,15 @@ function buildPlanningSourceBlock(ctx: FreeformCtx, intro: string): string {
     `Beskrivning: ${pages.home?.description || scraped.description || ''}`,
     `Sammanfattning: ${pages.home?.summary || scraped.summary || ''}`,
     '',
-    `HEM (markdown):\n${takeSnippet(pages.home?.markdown || '', 6000)}`,
-    pages.about ? `\nOM OSS (markdown):\n${takeSnippet(pages.about.markdown, 3200)}` : '',
-    pages.services ? `\nTJÄNSTER (markdown):\n${takeSnippet(pages.services.markdown, 4200)}` : '',
+    `HEM (markdown):\n${takeSnippet(pages.home?.markdown || '', PLANNING_HOME_LIMIT)}`,
+    pages.about ? `\nOM OSS (markdown):\n${takeSnippet(pages.about.markdown, PLANNING_ABOUT_LIMIT)}` : '',
+    pages.services ? `\nTJÄNSTER (markdown):\n${takeSnippet(pages.services.markdown, PLANNING_SERVICES_LIMIT)}` : '',
   ]
     .filter(Boolean)
     .join('\n')
 }
 
-function buildPageSourceBlock(ctx: FreeformCtx, page: FreeformPageSpec): string {
+function buildPageSourceBlock(ctx: FreeformCtx, page: FreeformPageSpec, compact = false): string {
   const scraped = ctx.scraped ?? {}
   const pages = scraped.pages ?? {}
   const home = String(pages.home?.markdown ?? '')
@@ -488,25 +531,29 @@ function buildPageSourceBlock(ctx: FreeformCtx, page: FreeformPageSpec): string 
   const pageSlug = page.slug
   const relevantBlocks: string[] = []
 
+  const homeLimit = compact ? 1500 : PAGE_HOME_LIMIT
+  const aboutLimit = compact ? 800 : PAGE_ABOUT_LIMIT
+  const servicesLimit = compact ? 900 : PAGE_SERVICES_LIMIT
+
   if (pageSlug === 'index') {
-    relevantBlocks.push(`HEM (viktigast):\n${takeSnippet(home, 4200)}`)
-    if (services) relevantBlocks.push(`TJÄNSTER:\n${takeSnippet(services, 1800)}`)
-    if (about) relevantBlocks.push(`OM OSS:\n${takeSnippet(about, 1400)}`)
+    relevantBlocks.push(`HEM (viktigast):\n${takeSnippet(home, homeLimit)}`)
+    if (services) relevantBlocks.push(`TJÄNSTER:\n${takeSnippet(services, Math.min(servicesLimit, 900))}`)
+    if (about) relevantBlocks.push(`OM OSS:\n${takeSnippet(about, Math.min(aboutLimit, 700))}`)
   } else if (pageSlug === 'om-oss') {
-    if (about) relevantBlocks.push(`OM OSS (viktigast):\n${takeSnippet(about, 4200)}`)
-    relevantBlocks.push(`HEM:\n${takeSnippet(home, 2200)}`)
-    if (services) relevantBlocks.push(`TJÄNSTER:\n${takeSnippet(services, 1200)}`)
+    if (about) relevantBlocks.push(`OM OSS (viktigast):\n${takeSnippet(about, aboutLimit + 1000)}`)
+    relevantBlocks.push(`HEM:\n${takeSnippet(home, Math.min(homeLimit, 1400))}`)
+    if (services) relevantBlocks.push(`TJÄNSTER:\n${takeSnippet(services, Math.min(servicesLimit, 900))}`)
   } else if (pageSlug === 'kontakt') {
-    relevantBlocks.push(`HEM:\n${takeSnippet(home, 1800)}`)
-    if (about) relevantBlocks.push(`OM OSS:\n${takeSnippet(about, 1000)}`)
+    relevantBlocks.push(`HEM:\n${takeSnippet(home, Math.min(homeLimit, 1200))}`)
+    if (about) relevantBlocks.push(`OM OSS:\n${takeSnippet(about, Math.min(aboutLimit, 700))}`)
   } else if (/tjanster|priser|vanliga-fragor|galleri|behandlingar|projekt/.test(pageSlug)) {
-    if (services) relevantBlocks.push(`TJÄNSTER (viktigast):\n${takeSnippet(services, 4200)}`)
-    relevantBlocks.push(`HEM:\n${takeSnippet(home, 2200)}`)
-    if (about) relevantBlocks.push(`OM OSS:\n${takeSnippet(about, 1200)}`)
+    if (services) relevantBlocks.push(`TJÄNSTER (viktigast):\n${takeSnippet(services, servicesLimit + 400)}`)
+    relevantBlocks.push(`HEM:\n${takeSnippet(home, Math.min(homeLimit, 1400))}`)
+    if (about) relevantBlocks.push(`OM OSS:\n${takeSnippet(about, Math.min(aboutLimit, 800))}`)
   } else {
-    relevantBlocks.push(`HEM:\n${takeSnippet(home, 2800)}`)
-    if (about) relevantBlocks.push(`OM OSS:\n${takeSnippet(about, 1600)}`)
-    if (services) relevantBlocks.push(`TJÄNSTER:\n${takeSnippet(services, 1800)}`)
+    relevantBlocks.push(`HEM:\n${takeSnippet(home, Math.min(homeLimit, 1600))}`)
+    if (about) relevantBlocks.push(`OM OSS:\n${takeSnippet(about, Math.min(aboutLimit, 900))}`)
+    if (services) relevantBlocks.push(`TJÄNSTER:\n${takeSnippet(services, Math.min(servicesLimit, 1000))}`)
   }
 
   return [
@@ -637,7 +684,7 @@ function extractTexts(html: string): string[] {
   while ((match = re.exec(html)) !== null) {
     const value = match[3].trim()
     if (value && !/^[\d\s+()-]+$/.test(value) && !/@/.test(value)) out.push(value)
-    if (out.length >= 60) break
+    if (out.length >= 40) break
   }
   return out
 }
@@ -797,9 +844,66 @@ function cleanPlainText(value: string): string {
   return String(value || '').replace(/\s+/g, ' ').trim()
 }
 
+function buildCssPromptContext(css: string, compact = false): string {
+  const cleaned = sanitizeCss(css).replace(/\s+/g, ' ').trim()
+  if (!cleaned) return '[ingen befintlig CSS]'
+  const rootBlock = cleaned.match(/:root\s*\{[^}]*\}/i)?.[0] ?? ''
+  const focus = [rootBlock, cleaned].filter(Boolean).join('\n')
+  return takeSnippet(focus, compact ? 2200 : CSS_PROMPT_LIMIT)
+}
+
+function buildImagePromptContext(images: string[], compact = false): string {
+  const picked = images.filter(Boolean).slice(0, compact ? 4 : IMAGE_PROMPT_LIMIT)
+  return picked.length ? picked.join('\n') : '[inga bilder — bygg utan foton, använd färg, komposition och typografi]'
+}
+
+function shouldRetryCompact(err: unknown): boolean {
+  const msg = (err as Error)?.message || ''
+  return (err as Error)?.name === 'AbortError'
+    || /timed out/i.test(msg)
+    || /returned empty content/i.test(msg)
+    || /came back too short/i.test(msg)
+}
+
+async function callModelWithCompactRetry(args: {
+  key: string
+  model: string
+  label: string
+  system: string
+  user: string
+  maxTokens: number
+  timeoutMs: number
+  jsonMode: boolean
+  retryUser: string
+  retryMaxTokens: number
+  retryTimeoutMs: number
+}): Promise<string> {
+  const {
+    key,
+    model,
+    label,
+    system,
+    user,
+    maxTokens,
+    timeoutMs,
+    jsonMode,
+    retryUser,
+    retryMaxTokens,
+    retryTimeoutMs,
+  } = args
+
+  try {
+    return await callModel(key, model, `${label}:primary`, system, user, maxTokens, timeoutMs, jsonMode)
+  } catch (err) {
+    if (!shouldRetryCompact(err)) throw err
+    return await callModel(key, model, `${label}:compact-retry`, system, retryUser, retryMaxTokens, retryTimeoutMs, jsonMode)
+  }
+}
+
 async function callModel(
   key: string,
   model: string,
+  label: string,
   system: string,
   user: string,
   maxTokens: number,
@@ -834,6 +938,11 @@ async function callModel(
     const content = data.choices?.[0]?.message?.content
     if (!content) throw new Error(`${model} returned empty content`)
     return String(content)
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') {
+      throw new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s on ${model}`)
+    }
+    throw err
   } finally {
     clearTimeout(timeoutId)
   }
