@@ -117,6 +117,8 @@ export default function SiteLeads() {
   // Automation switch + manual override (moved here from the old Sites page)
   const [autoState, setAutoState] = useState<"running" | "paused" | "stopped">("running");
   const [autoBusy, setAutoBusy] = useState(false);
+  // Which builder engine new jobs use
+  const [genMode, setGenMode] = useState<"template" | "freeform">("template");
 
   const loadAutoState = async () => {
     const { data } = await supabase
@@ -126,6 +128,38 @@ export default function SiteLeads() {
       .maybeSingle();
     setAutoState(((data?.value as any)?.state ?? "running") as "running" | "paused" | "stopped");
   };
+
+  const loadGenMode = async () => {
+    const { data } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("key", "site_generation_mode")
+      .maybeSingle();
+    setGenMode(((data?.value as any)?.mode ?? "template") as "template" | "freeform");
+  };
+
+  const changeGenMode = async (mode: "template" | "freeform") => {
+    setAutoBusy(true);
+    try {
+      const { error } = await supabase
+        .from("app_settings")
+        .upsert({ key: "site_generation_mode", value: { mode } as any, updated_at: new Date().toISOString() });
+      if (error) throw error;
+      setGenMode(mode);
+      toast({
+        title: mode === "freeform" ? "Byggmotor: AI bygger fritt" : "Byggmotor: Mall",
+        description: mode === "freeform"
+          ? "Nya hemsidor byggs från grunden av DeepSeek V4 Flash."
+          : "Nya hemsidor byggs med de befintliga mallarna.",
+      });
+    } catch (err) {
+      toast({ title: "Kunde inte byta byggmotor", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setAutoBusy(false);
+    }
+  };
+
+
 
   const changeAutoState = async (state: "running" | "paused" | "stopped") => {
     setAutoBusy(true);
@@ -191,7 +225,7 @@ export default function SiteLeads() {
     setCounts(c);
   };
 
-  useEffect(() => { load(); loadAutoState(); }, []);
+  useEffect(() => { load(); loadAutoState(); loadGenMode(); }, []);
 
 
   const visible = leads
@@ -494,7 +528,23 @@ export default function SiteLeads() {
             <RefreshCw className="h-4 w-4" /> Kör pipeline nu
           </Button>
         </div>
+        <div className="flex flex-wrap items-center gap-2 border-t pt-3">
+          <div className="text-sm font-medium">Byggmotor</div>
+          <Button size="sm" variant={genMode === "template" ? "default" : "outline"}
+            disabled={autoBusy || genMode === "template"} onClick={() => changeGenMode("template")}>
+            Mall (nuvarande)
+          </Button>
+          <Button size="sm" variant={genMode === "freeform" ? "default" : "outline"}
+            disabled={autoBusy || genMode === "freeform"} onClick={() => changeGenMode("freeform")}>
+            AI bygger fritt (DeepSeek V4)
+          </Button>
+          <p className="text-xs text-muted-foreground basis-full">
+            Gäller nya bygg. "AI bygger fritt" låter AI:n designa hela sajten från grunden utifrån rådatan —
+            minst start, om oss och kontakt, fler sidor när underlaget räcker. Byt tillbaka när som helst.
+          </p>
+        </div>
       </Card>
+
 
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">

@@ -7,6 +7,7 @@
 // Niche-aware: `generated_sites.template` decides which industry copy/labels/
 // stock images/fallbacks are used. Adding a niche = extend NICHE_CONFIG.
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { runFreeformStep, BUILD_MODEL, type FreeformCtx } from './freeform.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -721,7 +722,7 @@ Deno.serve(async (req) => {
       .update({ status: 'processing', updated_at: new Date().toISOString() })
       .eq('id', generated_site_id)
       .eq('status', 'queued')
-      .select('id, contact_id, site_lead_id, source_url, scraped_content, template, attempts')
+      .select('id, contact_id, site_lead_id, source_url, scraped_content, template, attempts, generation_mode, gen_progress, generated_files')
       .maybeSingle()
     if (claimErr || !claimed) return json({ ok: true, message: 'lost race, another worker claimed it' })
 
@@ -878,6 +879,94 @@ Deno.serve(async (req) => {
     const regenFeedback = typeof cf.regen_feedback === 'string' && cf.regen_feedback.trim()
       ? String(cf.regen_feedback).trim()
       : null
+
+    // -----------------------------------------------------------------------
+    // FREEFORM ENGINE (generation_mode = 'freeform')
+    // AI designs and writes the whole site from the raw Firecrawl material.
+    // One step per invocation; the row is re-queued until the site is complete.
+    // Everything below this block is the untouched template engine.
+    // -----------------------------------------------------------------------
+    if (site.generation_mode === 'freeform') {
+      const ffCtx: FreeformCtx = {
+        supabase,
+        siteId: generated_site_id,
+        openrouterKey,
+        scraped,
+        facts: {
+          business_name: facts.business_name,
+          phone: facts.phone,
+          address: facts.address,
+          city: facts.city,
+          email: facts.email,
+          source_url: facts.source_url,
+          google_maps_url: googleMapsUrl,
+          niche: nc.key,
+        },
+        nicheLabel: nc.label,
+        category: siteLead?.category ?? null,
+        brandPalette,
+        brandFonts,
+        imagePool,
+        regenFeedback,
+        progress: (site.gen_progress ?? null) as any,
+      }
+
+      const heartbeat = setInterval(() => {
+        supabase.from('generated_sites')
+          .update({ updated_at: new Date().toISOString() })
+          .eq('id', generated_site_id)
+          .then(() => {}, () => {})
+      }, 60_000)
+
+      try {
+        const existingFiles = (site.generated_files ?? {}) as Record<string, string>
+        const step = await runFreeformStep(ffCtx, existingFiles)
+
+        if (step.done) {
+          await supabase.from('generated_sites').update({
+            status: 'generated',
+            error_message: null,
+            generated_files: step.files,
+            gen_progress: step.progress,
+            updated_at: new Date().toISOString(),
+          }).eq('id', generated_site_id)
+        } else {
+          // More work to do — re-queue and let cron continue next minute.
+          // Progress was made, so the retry counter resets.
+          await supabase.from('generated_sites').update({
+            status: 'queued',
+            queued_at: new Date().toISOString(),
+            error_message: null,
+            attempts: 0,
+            generated_files: step.files,
+            gen_progress: step.progress,
+            updated_at: new Date().toISOString(),
+          }).eq('id', generated_site_id)
+
+          // Kick the worker immediately so a full site doesn't take 6 minutes.
+          fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/process-site-jobs`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+            },
+            body: JSON.stringify({ generated_site_id }),
+          }).catch(() => {})
+        }
+
+        return json({ ok: true, mode: 'freeform', done: step.done, note: step.note, model: BUILD_MODEL })
+      } catch (err) {
+        const msg = (err as Error).name === 'AbortError'
+          ? 'Freeform: modellen tog för lång tid på detta steg.'
+          : `Freeform error: ${(err as Error).message}`
+        console.error('freeform error', err)
+        await failOrRetry(supabase, generated_site_id, nextAttempts, msg)
+        return json({ ok: false, mode: 'freeform', error: msg }, 200)
+      } finally {
+        clearInterval(heartbeat)
+      }
+    }
+
 
     const userTextParts = [
       `Skapa en kompakt innehållsplan för en 3-sidig premium-sajt. Utgångspunkt: ${nc.label.toLowerCase()}, men LÄS källdatan först och skriv för det verksamheten FAKTISKT gör. Skriv ENDAST JSON enligt schemat.`,
