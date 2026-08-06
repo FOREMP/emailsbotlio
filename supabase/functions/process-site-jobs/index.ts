@@ -909,7 +909,9 @@ Deno.serve(async (req) => {
         },
         nicheLabel: siteLead?.category ? '' : (siteLead?.niche && siteLead.niche !== 'other' ? nc.label : ''),
         category: siteLead?.category ?? (typeof cf.category === 'string' ? cf.category : null),
-        brandPalette,
+        // Only inherit colors when the lead site really had branding; otherwise
+        // freeform picks a palette that fits the business type.
+        brandPalette: hasRealBranding ? brandPalette : {},
         brandFonts,
         // Only real images from the lead here; freeform picks its own stock set
         // based on the business type it derived from the category.
