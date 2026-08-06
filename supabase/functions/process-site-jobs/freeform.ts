@@ -617,20 +617,8 @@ function parseJson(s: string): any { const x = strip(s); try { return JSON.parse
 function clean(s: string): string { return String(s || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() }
 function esc(s: string): string { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') }
 function attr(s: string): string { return esc(s).replace(/'/g, '&#39;') }
-function isSalon(ctx: FreeformCtx): boolean { return /salon|fris|hair|beauty|skönhet|hud|spa|nail|nagel|klinik/i.test(`${ctx.nicheLabel} ${ctx.category ?? ''} ${ctx.facts.niche}`) }
-function businessTypeFromCategory(raw: string, flags: { clinic: boolean; salon: boolean; beauty: boolean }): string {
-  const x = clean(decodeText(raw)).toLowerCase()
-  if (!x) return ''
-  if (/hair\s*salon|fris|hår|barber|barbershop/.test(x)) return 'Frisörsalong'
-  if (/massage|massör|massageterapeut/.test(x)) return 'Massageklinik'
-  if (/medical|clinic|klinik|injektion|botox|fillers|blodprov|laser|hud|migrän/.test(x)) return 'Klinik'
-  if (/beauty|skönhet|esthetic|aesthetic|spa/.test(x)) return 'Skönhetsklinik'
-  if (/nail|nagel/.test(x)) return 'Nagelstudio'
-  if (flags.clinic) return 'Klinik'
-  if (flags.salon) return 'Frisörsalong'
-  if (flags.beauty) return 'Skönhetsstudio'
-  return titleCaseSv(raw)
-}
+function isSalon(ctx: FreeformCtx): boolean { return buildProfile(ctx).isBeauty }
+
 function titleCaseSv(s: string): string { return clean(decodeText(s)).split(/\s+/).map((w) => w.length <= 3 ? w.toLowerCase() : w[0].toUpperCase() + w.slice(1).toLowerCase()).join(' ') }
 function decodeText(s: string): string {
   return String(s || '')
