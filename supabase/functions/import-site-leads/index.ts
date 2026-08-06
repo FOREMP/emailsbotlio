@@ -3,6 +3,7 @@
 // keeps the Edge Function under Supabase worker limits and uses AI only for
 // picking the best review snippets, not for re-reading every column.
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { classifyNiche, type NicheKey } from '../_shared/niche.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -126,7 +127,7 @@ Deno.serve(async (req) => {
         reviews_count: n.reviews_count ?? null,
         review_snippets: n.review_snippets ?? null,
         status,
-        niche,
+        niche: classifyNiche(n.category, n.company_name) ?? fallbackNiche ?? 'other',
         source_file_id: source_file_id ?? null,
       })
       if (error) {
