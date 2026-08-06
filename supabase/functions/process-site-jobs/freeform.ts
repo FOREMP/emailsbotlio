@@ -475,29 +475,76 @@ function sourceFor(ctx: FreeformCtx, page: FreeformPageSpec): string {
   const parts = [page.slug === 'om-oss' ? `${p.about?.summary ?? ''} ${p.about?.markdown ?? ''}` : '', /tjanster|behandlingar|service/i.test(page.slug) ? `${p.services?.summary ?? ''} ${p.services?.markdown ?? ''}` : '', `${p.home?.summary ?? ctx.scraped?.summary ?? ''} ${p.home?.markdown ?? ctx.scraped?.markdown ?? ''}`]
   return clean(decodeText(parts.filter(Boolean).join(' ')))
 }
+const SERVICE_HINTS: Record<string, RegExp> = {
+  hair: /klipp|färg|sling|balayage|styling|hårvård|permanent|toning/i,
+  nails: /nagel|manikyr|pedikyr|gele|akryl|fyllning/i,
+  beauty: /frans|bryn|makeup|ansikt|vax|hudvård/i,
+  clinic: /behandling|konsultation|injektion|laser|hudvård|undersökning|terapi/i,
+  massage: /massage|behandling|terapi|stretch|avslappning/i,
+  electrical: /elinstallat|elarbete|belysning|laddbox|elcentral|felsök|jordfelsbrytare|solcell|installation|service/i,
+  plumbing: /rörarbete|avlopp|vattenläck|badrum|värmepump|installation|felsök|service/i,
+  construction: /renover|badrum|kök|tillbygg|snicker|tak|fasad|mark|betong|mureri|plattsätt|montage/i,
+  auto: /service|reparation|felsök|däck|bromsar|besiktning|motor|kamrem|ac-service|lack/i,
+  cleaning: /städ|lokalvård|flyttstäd|fönsterputs|golvvård|storstäd/i,
+  restaurant: /meny|lunch|catering|pizza|à la carte|dryck|frukost/i,
+  general: /service|installation|reparation|underhåll|rådgiv|projekt|montage|konsultation/i,
+}
+
+const SERVICE_DEFAULTS: Record<string, string[]> = {
+  hair: ['Personlig konsultation', 'Klippning och form', 'Färg och nyans', 'Styling inför tillfälle'],
+  nails: ['Personlig konsultation', 'Manikyr', 'Pedikyr', 'Förstärkning och påfyllning'],
+  beauty: ['Personlig konsultation', 'Fransar och bryn', 'Ansiktsbehandling', 'Rådgivning inför behandling'],
+  clinic: ['Personlig konsultation', 'Behandlingsrådgivning', 'Uppföljning', 'Kontakt inför bokning'],
+  massage: ['Massagebehandlingar', 'Personlig konsultation', 'Behandlingsrådgivning', 'Kontakt inför bokning'],
+  electrical: ['Elinstallation', 'Felsökning och service', 'Belysning och uttag', 'Laddbox och elcentral'],
+  plumbing: ['Rörinstallation', 'Felsökning och service', 'Badrum och våtrum', 'Akut hjälp vid läckage'],
+  construction: ['Renovering', 'Snickeriarbeten', 'Tak och fasad', 'Projektledning och offert'],
+  auto: ['Service och underhåll', 'Felsökning', 'Bromsar och däck', 'Rådgivning inför reparation'],
+  cleaning: ['Regelbunden städning', 'Flyttstädning', 'Lokalvård för företag', 'Fönsterputs'],
+  restaurant: ['Meny och rätter', 'Lunch', 'Catering', 'Bordsbokning'],
+  general: ['Tydlig rådgivning', 'Genomtänkt utförande', 'Smidig kontakt', 'Nästa steg utan krångel'],
+}
+
 function serviceIdeas(ctx: FreeformCtx): string[] {
   const profile = buildProfile(ctx)
+  const kind = profile.kind || 'general'
+  const hint = SERVICE_HINTS[kind] ?? SERVICE_HINTS.general
   const raw = decodeText(`${ctx.scraped?.pages?.services?.markdown ?? ''} ${ctx.scraped?.pages?.home?.markdown ?? ctx.scraped?.markdown ?? ''}`)
   const found = raw.split(/[\n•|,;]+/)
     .map((s) => clean(s).replace(/^[-–—*\d.\s#]+/, '').replace(/\s{2,}/g, ' '))
     .filter(isGoodServiceTitle)
-    .filter((s) => /klipp|färg|sling|balayage|styling|frans|bryn|nagel|massage|hud|behandling|injektion|blodprov|fettreducer|migrän|laser|service|reparation|felsök|kontakt|boka|rådgiv/i.test(s))
+    .filter((s) => hint.test(s))
   const unique = Array.from(new Map(found.map((s) => [s.toLowerCase(), titleCaseSv(s)])).values()).slice(0, 6)
   if (unique.length >= 3) return unique
-  if (profile.isClinic) return ['Massagebehandlingar', 'Personlig konsultation', 'Behandlingsrådgivning', 'Kontakt inför bokning']
-  return profile.isBeauty ? ['Personlig konsultation', 'Klippning och form', 'Färg och nyans', 'Styling inför tillfälle'] : ['Tydlig rådgivning', 'Genomtänkt utförande', 'Smidig kontakt', 'Nästa steg utan krångel']
+  return SERVICE_DEFAULTS[kind] ?? SERVICE_DEFAULTS.general
 }
 function serviceText(title: string, salon: boolean): string {
   if (/konsult|rådgiv/i.test(title)) return 'Ett lugnt första steg där behov, förväntningar och rätt väg framåt blir tydliga.'
   if (/klipp|färg|sling|balayage|styling|hud|massage|behandling|frans|bryn|nagel/i.test(title)) return 'Presenterat med fokus på känsla, kvalitet och ett resultat som passar kunden i vardagen.'
   return salon ? 'En tydlig behandlingstext med fokus på känsla, trygghet och personlig rådgivning.' : 'En tydlig presentation av erbjudandet, skriven utan påhittade priser eller löften.'
 }
+
+const STOCK_BY_KIND: Record<string, string[]> = {
+  hair: ['https://images.unsplash.com/photo-1560066984-138dadb4c035?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1521590832167-7bcbfaa6381f?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1522337660859-02fbefca4702?auto=format&fit=crop&w=1400&q=80'],
+  nails: ['https://images.unsplash.com/photo-1604654894610-df63bc536371?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1607779097040-26e80aa78e66?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?auto=format&fit=crop&w=1400&q=80'],
+  beauty: ['https://images.unsplash.com/photo-1596704017254-9b121068fb31?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1512290923902-8a9f81dc236c?auto=format&fit=crop&w=1400&q=80'],
+  clinic: ['https://images.unsplash.com/photo-1519823551278-64ac92734fb1?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1544161515-4ab6ce6db874?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1629909613654-28e377c37b09?auto=format&fit=crop&w=1400&q=80'],
+  massage: ['https://images.unsplash.com/photo-1600334129128-685c5582fd35?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1519823551278-64ac92734fb1?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1540555700478-4be289fbecef?auto=format&fit=crop&w=1400&q=80'],
+  electrical: ['https://images.unsplash.com/photo-1621905251189-08b45d6a269e?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1581092160562-40aa08e78837?auto=format&fit=crop&w=1400&q=80'],
+  plumbing: ['https://images.unsplash.com/photo-1607472586893-edb57bdc0e39?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1585704032915-c3400ca199e7?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1600566752355-35792bedcfea?auto=format&fit=crop&w=1400&q=80'],
+  construction: ['https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1541888946425-d81bb19240f5?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1581094794329-c8112a89af12?auto=format&fit=crop&w=1400&q=80'],
+  auto: ['https://images.unsplash.com/photo-1486262715619-67b85e0b08d3?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1530046339160-ce3e530c7d2f?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1517524008697-84bbe3c3fd98?auto=format&fit=crop&w=1400&q=80'],
+  cleaning: ['https://images.unsplash.com/photo-1581578731548-c64695cc6952?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1563453392212-326f5e854473?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1585421514738-01798e348b17?auto=format&fit=crop&w=1400&q=80'],
+  restaurant: ['https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1552566626-52f8b828add9?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=crop&w=1400&q=80'],
+  general: ['https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1556761175-b413da4baf72?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?auto=format&fit=crop&w=1400&q=80'],
+}
+
 function images(ctx: FreeformCtx): string[] {
   const profile = buildProfile(ctx)
-  const salon = ['https://images.unsplash.com/photo-1560066984-138dadb4c035?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1521590832167-7bcbfaa6381f?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1522337660859-02fbefca4702?auto=format&fit=crop&w=1400&q=80']
-  const clinic = ['https://images.unsplash.com/photo-1519823551278-64ac92734fb1?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1544161515-4ab6ce6db874?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1629909613654-28e377c37b09?auto=format&fit=crop&w=1400&q=80']
-  const general = ['https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1556761175-b413da4baf72?auto=format&fit=crop&w=1400&q=80']
-  return Array.from(new Set([...(profile.isClinic ? clinic : profile.isBeauty ? salon : general), ...(ctx.imagePool || []).filter((u) => /^https?:\/\//i.test(u))])).slice(0, 6)
+  const stock = STOCK_BY_KIND[profile.kind || 'general'] ?? STOCK_BY_KIND.general
+  const own = (ctx.imagePool || []).filter((u) => /^https?:\/\//i.test(u) && !/images\.unsplash\.com/i.test(u))
+  return Array.from(new Set([...stock, ...own])).slice(0, 6)
+
 }
 function cleanContentMap(input: any): Record<string, FreeformPageContent> {
   const out: Record<string, FreeformPageContent> = {}
