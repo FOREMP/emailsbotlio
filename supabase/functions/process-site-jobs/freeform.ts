@@ -453,7 +453,7 @@ function cta(c: FreeformPageContent, ctx: FreeformCtx): string {
 }
 function footer(plan: FreeformPlan, business: string, ctx: FreeformCtx): string {
   const links = plan.pages.map((p) => `<a href='${attr(fileNameFor(p.slug))}'>${esc(p.slug === 'index' ? 'Hem' : p.title)}</a>`).join('<br>')
-  const info = [ctx.facts.phone, ctx.facts.email, decodeText([ctx.facts.address, ctx.facts.city].filter(Boolean).join(', '))].filter(Boolean).map(esc).join('<br>')
+  const info = [ctx.facts.phone, ctx.facts.email, decodeText([ctx.facts.address, ctx.facts.city].filter(Boolean).join(', '))].filter(Boolean).map((v) => esc(String(v))).join('<br>')
   return `<footer class='site-footer'><div class='wrap'><div class='footer-grid'><div><div class='footer-title'>${esc(business)}</div><p>Tydlig information, varm känsla och enkel kontakt inför nästa steg.</p></div><div><div class='footer-title'>Navigering</div><p>${links}</p></div><div><div class='footer-title'>Kontakt</div><p>${info || 'Kontakta företaget för mer information.'}</p></div></div><p class='foot-bottom'>© ${new Date().getFullYear()} ${esc(business)}</p></div></footer>`
 }
 function buttons(ctx: FreeformCtx, c: FreeformPageContent): string {
