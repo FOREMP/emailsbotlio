@@ -13,6 +13,7 @@
 // The whole file uses the service role; cron sends the anon key just so
 // pg_net can hit the function endpoint (verify_jwt is off).
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { classifyNiche, templateForNiche, type NicheKey } from '../_shared/niche.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -478,13 +479,12 @@ async function startGeneration(
   // Resolve the niche up-front: it is used both on the ghost contact and on
   // the generated_sites row (previously declared after first use -> TDZ crash).
   const niche = inferLeadNiche(lead)
-  const nicheTemplate = ({
-    auto_workshop: 'auto_workshop_v1',
-    hair_salon: 'hair_salon_v1',
-    construction: 'construction_v1',
-  } as Record<string, string>)[niche]
+  const nicheTemplate = templateForNiche(niche)
 
-  const generationMode = await resolveGenerationMode(supabase)
+  // No template exists for this category yet -> the site can only be built by
+  // the freeform (AI-from-scratch) engine.
+  const resolvedMode = await resolveGenerationMode(supabase)
+  const generationMode = nicheTemplate ? resolvedMode : 'freeform'
 
 
   // Ensure ghost list for this user
@@ -618,20 +618,10 @@ function normaliseUrl(raw: string): string {
   return `https://${s.replace(/^\/+/, '')}`
 }
 
-function inferLeadNiche(lead: any): 'auto_workshop' | 'hair_salon' | 'construction' {
-  if (lead?.niche === 'hair_salon') return 'hair_salon'
-  if (lead?.niche === 'construction') return 'construction'
-  const text = [lead?.company_name, lead?.category, lead?.niche]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase()
-  if (/hair|hairdresser|hair\s*salon|fris[öo]r|frisörsalong|salong|barber|barbershop|fade|klipp|beauty|sk[öo]nhet|nail|hudv[åa]rd|spa|lashes|brow|laser hair/.test(text)) {
-    return 'hair_salon'
-  }
-  if (/bygg|byggfirma|byggföretag|byggservice|entreprenad|snicker|snickare|murar|mureri|plattsätt|kakel|badrumsrenover|renover|takläggar|takarbete|fasad|m[åa]lare|m[åa]leri|mark(?:arbete|entrepren)|anläggning|grundarbet|betong|husbygg|construction|builder|contractor/.test(text)) {
-    return 'construction'
-  }
-  return 'auto_workshop'
+function inferLeadNiche(lead: any): NicheKey | null {
+  // The category column from the uploaded lead file is the source of truth.
+  // The stored niche tag (if any) is only a fallback for older leads.
+  return classifyNiche(lead?.category) ?? classifyNiche(lead?.niche) ?? classifyNiche(lead?.company_name)
 }
 
 function json(body: unknown, status = 200): Response {

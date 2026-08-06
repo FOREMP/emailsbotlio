@@ -3,6 +3,7 @@
 // keeps the Edge Function under Supabase worker limits and uses AI only for
 // picking the best review snippets, not for re-reading every column.
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { classifyNiche, type NicheKey } from '../_shared/niche.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -61,11 +62,12 @@ Deno.serve(async (req) => {
     const rows = Array.isArray(body.rows) ? body.rows.slice(0, MAX_ROWS_PER_CALL) as ImportRow[] : []
     const mapping = isPlainObject(body.mapping) ? body.mapping as Record<string, ImportRole> : {}
     const source_file_id = typeof body.source_file_id === 'string' ? body.source_file_id : null
+    // Niche is no longer required: it is derived per row from the mapped
+    // `category` column. An explicit niche (if sent) acts as a fallback only.
     const ALLOWED_NICHES = new Set(['auto_workshop', 'hair_salon', 'construction'])
-    if (typeof body.niche !== 'string' || !ALLOWED_NICHES.has(body.niche)) {
-      return json({ error: 'niche required: auto_workshop, hair_salon or construction' }, 400)
-    }
-    const niche = body.niche
+    const fallbackNiche = typeof body.niche === 'string' && ALLOWED_NICHES.has(body.niche)
+      ? body.niche as NicheKey
+      : null
 
     if (rows.length === 0) return json({ error: 'rows required' }, 400)
     if (Object.keys(mapping).length === 0) return json({ error: 'mapping required' }, 400)
@@ -125,7 +127,7 @@ Deno.serve(async (req) => {
         reviews_count: n.reviews_count ?? null,
         review_snippets: n.review_snippets ?? null,
         status,
-        niche,
+        niche: classifyNiche(n.category, n.company_name) ?? fallbackNiche ?? 'other',
         source_file_id: source_file_id ?? null,
       })
       if (error) {
