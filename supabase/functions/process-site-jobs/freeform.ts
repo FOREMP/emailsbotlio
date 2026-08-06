@@ -271,7 +271,10 @@ async function pageContent(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformP
   const system = `Du skriver första utkastet till innehåll för en svensk premium-webbplats. Svara endast med JSON. Ingen HTML. Ingen CSS.
 HÅRDA REGLER:
 - All text ska vara på svenska. Översätt källtext som är på engelska.
-- Använd uppladdad lead-kategori som primär verksamhetstyp. Gissa inte annan nisch.
+- VERKSAMHETSTYPEN i profilen (härledd från uppladdad kategori) är sanning. Skriv ALDRIG om en annan bransch.
+- Om källtexten tydligt motsäger verksamhetstypen (t.ex. el, rör, bygg, bil) ska du följa källtexten, aldrig en skönhets- eller salongsvinkel.
+- Använd bara branschord som passar verksamheten. Skriv inte "behandling", "salong" eller "klinik" om det inte är ett skönhets-/vårdföretag.
+
 - Skriv som företaget, aldrig som systemet. Skriv inte "sidan visar", "webbplatsen är byggd", "AI" eller "demo".
 - Hitta aldrig på priser, årtal, certifikat, kundnamn, recensioner, personalnamn eller öppettider.
 - Använd bara tjänster/behandlingar från godkänd tjänstelista eller tydlig källtext.
