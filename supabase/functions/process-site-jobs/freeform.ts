@@ -42,6 +42,8 @@ export interface BusinessProfile {
   servicesLead: string
   isBeauty: boolean
   isClinic: boolean
+  kind?: string
+
 }
 export interface FactPack {
   category: string
