@@ -324,7 +324,8 @@ HÅRDA REGLER:
 - Korrigera mojibake, t.ex. VÃ¥rvÃ¤dersvÃ¤gen -> Vårvädersvägen.
 - FAQ ska vara kundnyttig och verksamhetsspecifik.
 - Service-titlar ska vara korta riktiga tjänster/behandlingar, inte meningar eller instruktioner.
-- Om kategorin säger klinik/massage/skönhet ska ord som klinik, behandling och konsultation användas hellre än salong om det passar.`
+- Följ profilens verksamhetstyp. Använd ord som klinik/behandling/salong ENBART för skönhets- och vårdföretag. För el, rör, bygg, bil, städ m.fl. används tjänst, uppdrag, installation, service.
+- Om utkastet beskriver fel bransch: skriv om det så att det matchar profilens verksamhetstyp och källtexten.`
   const user = [
     `Sida: ${page.slug} - ${page.title}`,
     `Profil från uppladdad kategori: ${JSON.stringify(profile)}`,
