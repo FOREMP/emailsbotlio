@@ -167,31 +167,90 @@ function buildPlan(ctx: FreeformCtx): FreeformPlan {
   }
 }
 
+// --------------------------------------------------------------------------
+// Business classification.
+// Priority: uploaded lead CATEGORY -> niche tag -> company name -> source text.
+// The scraped page text is only consulted when nothing else says anything,
+// because loose substring matching on body copy used to turn electricians into
+// hair salons ("huvud" matched /hud/, "spara" matched /spa/, ...).
+// --------------------------------------------------------------------------
+type BizKind =
+  | 'hair' | 'nails' | 'beauty' | 'clinic' | 'massage'
+  | 'electrical' | 'plumbing' | 'construction' | 'auto'
+  | 'cleaning' | 'restaurant' | 'general'
+
+const KIND_RULES: { kind: BizKind; label: string; re: RegExp }[] = [
+  { kind: 'electrical', label: 'Elfirma', re: /(elektriker|elfirma|elinstallat|elentreprenad|eltekni|elservice|elarbete|electrician|electrical)/ },
+  { kind: 'plumbing', label: 'VVS- och rörfirma', re: /(rörmokar|rormokar|rörfirma|\bvvs\b|plumber|plumbing|avloppsspol)/ },
+  { kind: 'construction', label: 'Byggföretag', re: /(byggfirma|byggföretag|byggservice|byggnadsfirma|\bbygg\b|snickar|snickeri|murar|mureri|plattsätt|kakelsätt|badrumsrenover|renoveringsfirma|takläggar|takarbete|fasadarbete|målerifirma|måleri|markarbete|markentrepren|anläggningsfirma|betongarbete|construction|builder|contractor|roofing|carpenter)/ },
+  { kind: 'auto', label: 'Bilverkstad', re: /(bilverkstad|bilservice|bilrekond|däckverkstad|dackverkstad|däckhotell|billack|bilplåt|bilglas|motorverkstad|mekaniker|auto repair|car repair|auto shop|mechanic|tyre shop)/ },
+  { kind: 'hair', label: 'Frisörsalong', re: /(frisör|frisor|hairdress|hair salon|\bhair\b|barbershop|barber|herrfrisör|damfrisör)/ },
+  { kind: 'nails', label: 'Nagelstudio', re: /(nagelsalong|nagelstudio|nagelteknolog|nail salon|\bnails\b|manikyr|pedikyr)/ },
+  { kind: 'clinic', label: 'Klinik', re: /(klinik|clinic|hudterapeut|hudvård|skin care|botox|fillers|injektionsbehandling|laserklinik|medicinsk|tandläkare|dentist|fysioterap|naprapat|kiropraktor|vårdcentral)/ },
+  { kind: 'massage', label: 'Massage', re: /(massage|massör|massor\b|massageterapeut|\bspa\b|spaanläggning)/ },
+  { kind: 'beauty', label: 'Skönhetssalong', re: /(skönhetssalong|skönhetsstudio|beauty salon|\bbeauty\b|fransstylist|frans- och bryn|brynstylist|lash|brow|makeup|make-up)/ },
+  { kind: 'cleaning', label: 'Städfirma', re: /(städfirma|städservice|städbolag|lokalvård|flyttstäd|fönsterputs|cleaning service)/ },
+  { kind: 'restaurant', label: 'Restaurang', re: /(restaurang|restaurant|pizzeria|\bcafé\b|\bcafe\b|bageri|catering|bistro)/ },
+]
+
+const NEUTRAL_NICHE = /^(other|okänd|unknown|)$/i
+
+function matchKind(text: string): { kind: BizKind; label: string } | null {
+  const x = clean(decodeText(text)).toLowerCase()
+  if (!x) return null
+  for (const rule of KIND_RULES) if (rule.re.test(x)) return { kind: rule.kind, label: rule.label }
+  return null
+}
+
 function buildProfile(ctx: FreeformCtx): BusinessProfile {
-  const category = clean(decodeText(ctx.category || ctx.facts.niche || ctx.nicheLabel || '')).toLowerCase()
-  const source = `${category} ${sourceFor(ctx, { slug: 'index', title: '', purpose: '', sections: [] })}`.toLowerCase()
-  const clinic = /klinik|clinic|injektion|botox|fillers|blodprov|fettreducer|laser|hud|medical|medicinsk|migrän|wellness|massage/.test(source)
-  const salon = /fris|salon|hair|hår|klipp|färg|balayage/.test(source) && !clinic
-  const beauty = clinic || salon || /beauty|skönhet|spa|nagel|nail|bryn|frans/.test(source)
-  const city = ctx.facts.city ? ` i ${decodeText(ctx.facts.city)}` : ''
-  let businessType = businessTypeFromCategory(ctx.category || '', { clinic, salon, beauty })
-  if (!businessType || businessType.length > 42) businessType = clinic ? 'Klinik' : salon ? 'Frisörsalong' : beauty ? 'Skönhetsstudio' : ctx.nicheLabel || 'Företag'
+  const category = clean(decodeText(ctx.category || '')).toLowerCase()
+  const nicheTag = NEUTRAL_NICHE.test(String(ctx.facts.niche || '')) ? '' : String(ctx.facts.niche || '')
+  const companyName = clean(decodeText(ctx.facts.business_name || ''))
+
+  // 1) Uploaded category is the authority.
+  let hit = matchKind(category)
+  // 2) Manual niche tag, only when no category was uploaded.
+  if (!hit && !category) hit = matchKind(`${nicheTag} ${ctx.nicheLabel || ''}`)
+  // 3) Company name, then the scraped source text as a last resort.
+  if (!hit) hit = matchKind(companyName)
+  if (!hit && !category && !nicheTag) {
+    hit = matchKind(clean(sourceFor(ctx, { slug: 'index', title: '', purpose: '', sections: [] })).slice(0, 4000))
+  }
+
+  const kind: BizKind = hit?.kind ?? 'general'
+  const clinic = kind === 'clinic' || kind === 'massage'
+  const salon = kind === 'hair'
+  const beauty = clinic || salon || kind === 'nails' || kind === 'beauty'
+
+  // Business type: prefer a clean label from the matched kind, but keep the
+  // uploaded category wording when it is short and specific.
+  let businessType = hit?.label || ''
+  if (category && category.length <= 34 && !/,|;/.test(category)) businessType = category
+  if (!businessType) businessType = nicheTag ? titleCaseSv(nicheTag.replace(/_/g, ' ')) : 'Företag'
   businessType = titleCaseSv(businessType)
-  const venueNoun = clinic ? 'kliniken' : salon ? 'salongen' : /studio|nagel|nail/i.test(category) ? 'studion' : 'verksamheten'
+
+  const city = ctx.facts.city ? ` i ${decodeText(ctx.facts.city)}` : ''
+  const venueNoun = clinic ? 'kliniken' : salon ? 'salongen' : kind === 'nails' || kind === 'beauty' ? 'studion' : kind === 'restaurant' ? 'restaurangen' : 'verksamheten'
   const servicePlural = beauty ? 'Behandlingar' : 'Tjänster'
+  const aboutTitle = clinic ? 'Om kliniken' : salon ? 'Om salongen' : kind === 'nails' || kind === 'beauty' ? 'Om studion' : 'Om oss'
+
   return {
-    category: ctx.category || ctx.nicheLabel || '',
+    category: ctx.category || nicheTag || '',
     businessType,
     venueNoun,
     servicePlural,
-    aboutTitle: clinic ? 'Om kliniken' : salon ? 'Om salongen' : /studio/i.test(category) ? 'Om studion' : 'Om oss',
+    aboutTitle,
     heroEyebrow: `${businessType}${city}`,
     servicesHeading: beauty ? 'Behandlingar med tydlig väg in.' : 'Tjänster som är lätta att förstå.',
-    servicesLead: beauty ? 'Besökaren ska snabbt förstå vad som erbjuds, vad som passar och hur nästa steg tas.' : 'Erbjudandet presenteras konkret med tydliga vägar till kontakt.',
+    servicesLead: beauty
+      ? 'Besökaren ska snabbt förstå vad som erbjuds, vad som passar och hur nästa steg tas.'
+      : 'Erbjudandet presenteras konkret med tydliga vägar till kontakt.',
     isBeauty: beauty,
     isClinic: clinic,
+    kind,
   }
 }
+
 
 function buildFactPack(ctx: FreeformCtx): FactPack {
   const all = decodeText(sourceFor(ctx, { slug: 'index', title: '', purpose: '', sections: [] }))
