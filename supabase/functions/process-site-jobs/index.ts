@@ -766,12 +766,13 @@ Deno.serve(async (req) => {
         .maybeSingle()
       : { data: null }
 
+    // Category (from the uploaded lead file) is the primary signal.
     const nc = nicheFromTemplate(site.template, [
-      siteLead?.niche,
       siteLead?.category,
-      siteLead?.company_name,
-      cf.niche,
       cf.category,
+      siteLead?.niche,
+      cf.niche,
+      siteLead?.company_name,
       cf.company,
     ])
 
