@@ -901,13 +901,20 @@ Deno.serve(async (req) => {
           email: facts.email,
           source_url: facts.source_url,
           google_maps_url: googleMapsUrl,
-          niche: nc.key,
+          // Freeform classifies the business itself from the uploaded category.
+          // Never hand it the template-engine fallback niche (which defaults to
+          // auto_workshop/hair_salon) — that is what produced salon sites for
+          // electricians.
+          niche: (siteLead?.niche as string) ?? (typeof cf.niche === 'string' ? cf.niche : '') ?? '',
         },
-        nicheLabel: nc.label,
-        category: siteLead?.category ?? null,
+        nicheLabel: siteLead?.category ? '' : (siteLead?.niche && siteLead.niche !== 'other' ? nc.label : ''),
+        category: siteLead?.category ?? (typeof cf.category === 'string' ? cf.category : null),
         brandPalette,
         brandFonts,
-        imagePool,
+        // Only real images from the lead here; freeform picks its own stock set
+        // based on the business type it derived from the category.
+        imagePool: [...extraImages, ...scrapedImages].slice(0, 12),
+
         regenFeedback,
         progress: (site.gen_progress ?? null) as any,
       }
