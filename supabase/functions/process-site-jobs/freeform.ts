@@ -42,6 +42,8 @@ export interface BusinessProfile {
   servicesLead: string
   isBeauty: boolean
   isClinic: boolean
+  kind?: string
+
 }
 export interface FactPack {
   category: string
@@ -167,31 +169,90 @@ function buildPlan(ctx: FreeformCtx): FreeformPlan {
   }
 }
 
+// --------------------------------------------------------------------------
+// Business classification.
+// Priority: uploaded lead CATEGORY -> niche tag -> company name -> source text.
+// The scraped page text is only consulted when nothing else says anything,
+// because loose substring matching on body copy used to turn electricians into
+// hair salons ("huvud" matched /hud/, "spara" matched /spa/, ...).
+// --------------------------------------------------------------------------
+type BizKind =
+  | 'hair' | 'nails' | 'beauty' | 'clinic' | 'massage'
+  | 'electrical' | 'plumbing' | 'construction' | 'auto'
+  | 'cleaning' | 'restaurant' | 'general'
+
+const KIND_RULES: { kind: BizKind; label: string; re: RegExp }[] = [
+  { kind: 'electrical', label: 'Elfirma', re: /(elektriker|elfirma|elinstallat|elentreprenad|eltekni|elservice|elarbete|electrician|electrical)/ },
+  { kind: 'plumbing', label: 'VVS- och rörfirma', re: /(rörmokar|rormokar|rörfirma|\bvvs\b|plumber|plumbing|avloppsspol)/ },
+  { kind: 'construction', label: 'Byggföretag', re: /(byggfirma|byggföretag|byggservice|byggnadsfirma|\bbygg\b|snickar|snickeri|murar|mureri|plattsätt|kakelsätt|badrumsrenover|renoveringsfirma|takläggar|takarbete|fasadarbete|målerifirma|måleri|markarbete|markentrepren|anläggningsfirma|betongarbete|construction|builder|contractor|roofing|carpenter)/ },
+  { kind: 'auto', label: 'Bilverkstad', re: /(bilverkstad|bilservice|bilrekond|däckverkstad|dackverkstad|däckhotell|billack|bilplåt|bilglas|motorverkstad|mekaniker|auto repair|car repair|auto shop|mechanic|tyre shop)/ },
+  { kind: 'hair', label: 'Frisörsalong', re: /(frisör|frisor|hairdress|hair salon|\bhair\b|barbershop|barber|herrfrisör|damfrisör)/ },
+  { kind: 'nails', label: 'Nagelstudio', re: /(nagelsalong|nagelstudio|nagelteknolog|nail salon|\bnails\b|manikyr|pedikyr)/ },
+  { kind: 'clinic', label: 'Klinik', re: /(klinik|clinic|hudterapeut|hudvård|skin care|botox|fillers|injektionsbehandling|laserklinik|medicinsk|tandläkare|dentist|fysioterap|naprapat|kiropraktor|vårdcentral)/ },
+  { kind: 'massage', label: 'Massage', re: /(massage|massör|massor\b|massageterapeut|\bspa\b|spaanläggning)/ },
+  { kind: 'beauty', label: 'Skönhetssalong', re: /(skönhetssalong|skönhetsstudio|beauty salon|\bbeauty\b|fransstylist|frans- och bryn|brynstylist|lash|brow|makeup|make-up)/ },
+  { kind: 'cleaning', label: 'Städfirma', re: /(städfirma|städservice|städbolag|lokalvård|flyttstäd|fönsterputs|cleaning service)/ },
+  { kind: 'restaurant', label: 'Restaurang', re: /(restaurang|restaurant|pizzeria|\bcafé\b|\bcafe\b|bageri|catering|bistro)/ },
+]
+
+const NEUTRAL_NICHE = /^(other|okänd|unknown|)$/i
+
+function matchKind(text: string): { kind: BizKind; label: string } | null {
+  const x = clean(decodeText(text)).toLowerCase()
+  if (!x) return null
+  for (const rule of KIND_RULES) if (rule.re.test(x)) return { kind: rule.kind, label: rule.label }
+  return null
+}
+
 function buildProfile(ctx: FreeformCtx): BusinessProfile {
-  const category = clean(decodeText(ctx.category || ctx.facts.niche || ctx.nicheLabel || '')).toLowerCase()
-  const source = `${category} ${sourceFor(ctx, { slug: 'index', title: '', purpose: '', sections: [] })}`.toLowerCase()
-  const clinic = /klinik|clinic|injektion|botox|fillers|blodprov|fettreducer|laser|hud|medical|medicinsk|migrän|wellness|massage/.test(source)
-  const salon = /fris|salon|hair|hår|klipp|färg|balayage/.test(source) && !clinic
-  const beauty = clinic || salon || /beauty|skönhet|spa|nagel|nail|bryn|frans/.test(source)
-  const city = ctx.facts.city ? ` i ${decodeText(ctx.facts.city)}` : ''
-  let businessType = businessTypeFromCategory(ctx.category || '', { clinic, salon, beauty })
-  if (!businessType || businessType.length > 42) businessType = clinic ? 'Klinik' : salon ? 'Frisörsalong' : beauty ? 'Skönhetsstudio' : ctx.nicheLabel || 'Företag'
+  const category = clean(decodeText(ctx.category || '')).toLowerCase()
+  const nicheTag = NEUTRAL_NICHE.test(String(ctx.facts.niche || '')) ? '' : String(ctx.facts.niche || '')
+  const companyName = clean(decodeText(ctx.facts.business_name || ''))
+
+  // 1) Uploaded category is the authority.
+  let hit = matchKind(category)
+  // 2) Manual niche tag, only when no category was uploaded.
+  if (!hit && !category) hit = matchKind(`${nicheTag} ${ctx.nicheLabel || ''}`)
+  // 3) Company name, then the scraped source text as a last resort.
+  if (!hit) hit = matchKind(companyName)
+  if (!hit && !category && !nicheTag) {
+    hit = matchKind(clean(sourceFor(ctx, { slug: 'index', title: '', purpose: '', sections: [] })).slice(0, 4000))
+  }
+
+  const kind: BizKind = hit?.kind ?? 'general'
+  const clinic = kind === 'clinic' || kind === 'massage'
+  const salon = kind === 'hair'
+  const beauty = clinic || salon || kind === 'nails' || kind === 'beauty'
+
+  // Business type: prefer a clean label from the matched kind, but keep the
+  // uploaded category wording when it is short and specific.
+  let businessType = hit?.label || ''
+  if (category && category.length <= 34 && !/,|;/.test(category)) businessType = category
+  if (!businessType) businessType = nicheTag ? titleCaseSv(nicheTag.replace(/_/g, ' ')) : 'Företag'
   businessType = titleCaseSv(businessType)
-  const venueNoun = clinic ? 'kliniken' : salon ? 'salongen' : /studio|nagel|nail/i.test(category) ? 'studion' : 'verksamheten'
+
+  const city = ctx.facts.city ? ` i ${decodeText(ctx.facts.city)}` : ''
+  const venueNoun = clinic ? 'kliniken' : salon ? 'salongen' : kind === 'nails' || kind === 'beauty' ? 'studion' : kind === 'restaurant' ? 'restaurangen' : 'verksamheten'
   const servicePlural = beauty ? 'Behandlingar' : 'Tjänster'
+  const aboutTitle = clinic ? 'Om kliniken' : salon ? 'Om salongen' : kind === 'nails' || kind === 'beauty' ? 'Om studion' : 'Om oss'
+
   return {
-    category: ctx.category || ctx.nicheLabel || '',
+    category: ctx.category || nicheTag || '',
     businessType,
     venueNoun,
     servicePlural,
-    aboutTitle: clinic ? 'Om kliniken' : salon ? 'Om salongen' : /studio/i.test(category) ? 'Om studion' : 'Om oss',
+    aboutTitle,
     heroEyebrow: `${businessType}${city}`,
     servicesHeading: beauty ? 'Behandlingar med tydlig väg in.' : 'Tjänster som är lätta att förstå.',
-    servicesLead: beauty ? 'Besökaren ska snabbt förstå vad som erbjuds, vad som passar och hur nästa steg tas.' : 'Erbjudandet presenteras konkret med tydliga vägar till kontakt.',
+    servicesLead: beauty
+      ? 'Besökaren ska snabbt förstå vad som erbjuds, vad som passar och hur nästa steg tas.'
+      : 'Erbjudandet presenteras konkret med tydliga vägar till kontakt.',
     isBeauty: beauty,
     isClinic: clinic,
+    kind,
   }
 }
+
 
 function buildFactPack(ctx: FreeformCtx): FactPack {
   const all = decodeText(sourceFor(ctx, { slug: 'index', title: '', purpose: '', sections: [] }))
@@ -210,7 +271,10 @@ async function pageContent(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformP
   const system = `Du skriver första utkastet till innehåll för en svensk premium-webbplats. Svara endast med JSON. Ingen HTML. Ingen CSS.
 HÅRDA REGLER:
 - All text ska vara på svenska. Översätt källtext som är på engelska.
-- Använd uppladdad lead-kategori som primär verksamhetstyp. Gissa inte annan nisch.
+- VERKSAMHETSTYPEN i profilen (härledd från uppladdad kategori) är sanning. Skriv ALDRIG om en annan bransch.
+- Om källtexten tydligt motsäger verksamhetstypen (t.ex. el, rör, bygg, bil) ska du följa källtexten, aldrig en skönhets- eller salongsvinkel.
+- Använd bara branschord som passar verksamheten. Skriv inte "behandling", "salong" eller "klinik" om det inte är ett skönhets-/vårdföretag.
+
 - Skriv som företaget, aldrig som systemet. Skriv inte "sidan visar", "webbplatsen är byggd", "AI" eller "demo".
 - Hitta aldrig på priser, årtal, certifikat, kundnamn, recensioner, personalnamn eller öppettider.
 - Använd bara tjänster/behandlingar från godkänd tjänstelista eller tydlig källtext.
@@ -260,7 +324,8 @@ HÅRDA REGLER:
 - Korrigera mojibake, t.ex. VÃ¥rvÃ¤dersvÃ¤gen -> Vårvädersvägen.
 - FAQ ska vara kundnyttig och verksamhetsspecifik.
 - Service-titlar ska vara korta riktiga tjänster/behandlingar, inte meningar eller instruktioner.
-- Om kategorin säger klinik/massage/skönhet ska ord som klinik, behandling och konsultation användas hellre än salong om det passar.`
+- Följ profilens verksamhetstyp. Använd ord som klinik/behandling/salong ENBART för skönhets- och vårdföretag. För el, rör, bygg, bil, städ m.fl. används tjänst, uppdrag, installation, service.
+- Om utkastet beskriver fel bransch: skriv om det så att det matchar profilens verksamhetstyp och källtexten.`
   const user = [
     `Sida: ${page.slug} - ${page.title}`,
     `Profil från uppladdad kategori: ${JSON.stringify(profile)}`,
@@ -388,7 +453,7 @@ function cta(c: FreeformPageContent, ctx: FreeformCtx): string {
 }
 function footer(plan: FreeformPlan, business: string, ctx: FreeformCtx): string {
   const links = plan.pages.map((p) => `<a href='${attr(fileNameFor(p.slug))}'>${esc(p.slug === 'index' ? 'Hem' : p.title)}</a>`).join('<br>')
-  const info = [ctx.facts.phone, ctx.facts.email, decodeText([ctx.facts.address, ctx.facts.city].filter(Boolean).join(', '))].filter(Boolean).map(esc).join('<br>')
+  const info = [ctx.facts.phone, ctx.facts.email, decodeText([ctx.facts.address, ctx.facts.city].filter(Boolean).join(', '))].filter(Boolean).map((v) => esc(String(v))).join('<br>')
   return `<footer class='site-footer'><div class='wrap'><div class='footer-grid'><div><div class='footer-title'>${esc(business)}</div><p>Tydlig information, varm känsla och enkel kontakt inför nästa steg.</p></div><div><div class='footer-title'>Navigering</div><p>${links}</p></div><div><div class='footer-title'>Kontakt</div><p>${info || 'Kontakta företaget för mer information.'}</p></div></div><p class='foot-bottom'>© ${new Date().getFullYear()} ${esc(business)}</p></div></footer>`
 }
 function buttons(ctx: FreeformCtx, c: FreeformPageContent): string {
@@ -416,29 +481,76 @@ function sourceFor(ctx: FreeformCtx, page: FreeformPageSpec): string {
   const parts = [page.slug === 'om-oss' ? `${p.about?.summary ?? ''} ${p.about?.markdown ?? ''}` : '', /tjanster|behandlingar|service/i.test(page.slug) ? `${p.services?.summary ?? ''} ${p.services?.markdown ?? ''}` : '', `${p.home?.summary ?? ctx.scraped?.summary ?? ''} ${p.home?.markdown ?? ctx.scraped?.markdown ?? ''}`]
   return clean(decodeText(parts.filter(Boolean).join(' ')))
 }
+const SERVICE_HINTS: Record<string, RegExp> = {
+  hair: /klipp|färg|sling|balayage|styling|hårvård|permanent|toning/i,
+  nails: /nagel|manikyr|pedikyr|gele|akryl|fyllning/i,
+  beauty: /frans|bryn|makeup|ansikt|vax|hudvård/i,
+  clinic: /behandling|konsultation|injektion|laser|hudvård|undersökning|terapi/i,
+  massage: /massage|behandling|terapi|stretch|avslappning/i,
+  electrical: /elinstallat|elarbete|belysning|laddbox|elcentral|felsök|jordfelsbrytare|solcell|installation|service/i,
+  plumbing: /rörarbete|avlopp|vattenläck|badrum|värmepump|installation|felsök|service/i,
+  construction: /renover|badrum|kök|tillbygg|snicker|tak|fasad|mark|betong|mureri|plattsätt|montage/i,
+  auto: /service|reparation|felsök|däck|bromsar|besiktning|motor|kamrem|ac-service|lack/i,
+  cleaning: /städ|lokalvård|flyttstäd|fönsterputs|golvvård|storstäd/i,
+  restaurant: /meny|lunch|catering|pizza|à la carte|dryck|frukost/i,
+  general: /service|installation|reparation|underhåll|rådgiv|projekt|montage|konsultation/i,
+}
+
+const SERVICE_DEFAULTS: Record<string, string[]> = {
+  hair: ['Personlig konsultation', 'Klippning och form', 'Färg och nyans', 'Styling inför tillfälle'],
+  nails: ['Personlig konsultation', 'Manikyr', 'Pedikyr', 'Förstärkning och påfyllning'],
+  beauty: ['Personlig konsultation', 'Fransar och bryn', 'Ansiktsbehandling', 'Rådgivning inför behandling'],
+  clinic: ['Personlig konsultation', 'Behandlingsrådgivning', 'Uppföljning', 'Kontakt inför bokning'],
+  massage: ['Massagebehandlingar', 'Personlig konsultation', 'Behandlingsrådgivning', 'Kontakt inför bokning'],
+  electrical: ['Elinstallation', 'Felsökning och service', 'Belysning och uttag', 'Laddbox och elcentral'],
+  plumbing: ['Rörinstallation', 'Felsökning och service', 'Badrum och våtrum', 'Akut hjälp vid läckage'],
+  construction: ['Renovering', 'Snickeriarbeten', 'Tak och fasad', 'Projektledning och offert'],
+  auto: ['Service och underhåll', 'Felsökning', 'Bromsar och däck', 'Rådgivning inför reparation'],
+  cleaning: ['Regelbunden städning', 'Flyttstädning', 'Lokalvård för företag', 'Fönsterputs'],
+  restaurant: ['Meny och rätter', 'Lunch', 'Catering', 'Bordsbokning'],
+  general: ['Tydlig rådgivning', 'Genomtänkt utförande', 'Smidig kontakt', 'Nästa steg utan krångel'],
+}
+
 function serviceIdeas(ctx: FreeformCtx): string[] {
   const profile = buildProfile(ctx)
+  const kind = profile.kind || 'general'
+  const hint = SERVICE_HINTS[kind] ?? SERVICE_HINTS.general
   const raw = decodeText(`${ctx.scraped?.pages?.services?.markdown ?? ''} ${ctx.scraped?.pages?.home?.markdown ?? ctx.scraped?.markdown ?? ''}`)
   const found = raw.split(/[\n•|,;]+/)
     .map((s) => clean(s).replace(/^[-–—*\d.\s#]+/, '').replace(/\s{2,}/g, ' '))
     .filter(isGoodServiceTitle)
-    .filter((s) => /klipp|färg|sling|balayage|styling|frans|bryn|nagel|massage|hud|behandling|injektion|blodprov|fettreducer|migrän|laser|service|reparation|felsök|kontakt|boka|rådgiv/i.test(s))
+    .filter((s) => hint.test(s))
   const unique = Array.from(new Map(found.map((s) => [s.toLowerCase(), titleCaseSv(s)])).values()).slice(0, 6)
   if (unique.length >= 3) return unique
-  if (profile.isClinic) return ['Massagebehandlingar', 'Personlig konsultation', 'Behandlingsrådgivning', 'Kontakt inför bokning']
-  return profile.isBeauty ? ['Personlig konsultation', 'Klippning och form', 'Färg och nyans', 'Styling inför tillfälle'] : ['Tydlig rådgivning', 'Genomtänkt utförande', 'Smidig kontakt', 'Nästa steg utan krångel']
+  return SERVICE_DEFAULTS[kind] ?? SERVICE_DEFAULTS.general
 }
 function serviceText(title: string, salon: boolean): string {
   if (/konsult|rådgiv/i.test(title)) return 'Ett lugnt första steg där behov, förväntningar och rätt väg framåt blir tydliga.'
   if (/klipp|färg|sling|balayage|styling|hud|massage|behandling|frans|bryn|nagel/i.test(title)) return 'Presenterat med fokus på känsla, kvalitet och ett resultat som passar kunden i vardagen.'
   return salon ? 'En tydlig behandlingstext med fokus på känsla, trygghet och personlig rådgivning.' : 'En tydlig presentation av erbjudandet, skriven utan påhittade priser eller löften.'
 }
+
+const STOCK_BY_KIND: Record<string, string[]> = {
+  hair: ['https://images.unsplash.com/photo-1560066984-138dadb4c035?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1521590832167-7bcbfaa6381f?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1522337660859-02fbefca4702?auto=format&fit=crop&w=1400&q=80'],
+  nails: ['https://images.unsplash.com/photo-1604654894610-df63bc536371?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1607779097040-26e80aa78e66?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?auto=format&fit=crop&w=1400&q=80'],
+  beauty: ['https://images.unsplash.com/photo-1596704017254-9b121068fb31?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1512290923902-8a9f81dc236c?auto=format&fit=crop&w=1400&q=80'],
+  clinic: ['https://images.unsplash.com/photo-1519823551278-64ac92734fb1?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1544161515-4ab6ce6db874?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1629909613654-28e377c37b09?auto=format&fit=crop&w=1400&q=80'],
+  massage: ['https://images.unsplash.com/photo-1600334129128-685c5582fd35?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1519823551278-64ac92734fb1?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1540555700478-4be289fbecef?auto=format&fit=crop&w=1400&q=80'],
+  electrical: ['https://images.unsplash.com/photo-1621905251189-08b45d6a269e?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1581092160562-40aa08e78837?auto=format&fit=crop&w=1400&q=80'],
+  plumbing: ['https://images.unsplash.com/photo-1607472586893-edb57bdc0e39?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1585704032915-c3400ca199e7?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1600566752355-35792bedcfea?auto=format&fit=crop&w=1400&q=80'],
+  construction: ['https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1541888946425-d81bb19240f5?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1581094794329-c8112a89af12?auto=format&fit=crop&w=1400&q=80'],
+  auto: ['https://images.unsplash.com/photo-1486262715619-67b85e0b08d3?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1530046339160-ce3e530c7d2f?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1517524008697-84bbe3c3fd98?auto=format&fit=crop&w=1400&q=80'],
+  cleaning: ['https://images.unsplash.com/photo-1581578731548-c64695cc6952?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1563453392212-326f5e854473?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1585421514738-01798e348b17?auto=format&fit=crop&w=1400&q=80'],
+  restaurant: ['https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1552566626-52f8b828add9?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=crop&w=1400&q=80'],
+  general: ['https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1556761175-b413da4baf72?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?auto=format&fit=crop&w=1400&q=80'],
+}
+
 function images(ctx: FreeformCtx): string[] {
   const profile = buildProfile(ctx)
-  const salon = ['https://images.unsplash.com/photo-1560066984-138dadb4c035?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1521590832167-7bcbfaa6381f?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1522337660859-02fbefca4702?auto=format&fit=crop&w=1400&q=80']
-  const clinic = ['https://images.unsplash.com/photo-1519823551278-64ac92734fb1?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1544161515-4ab6ce6db874?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1629909613654-28e377c37b09?auto=format&fit=crop&w=1400&q=80']
-  const general = ['https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1556761175-b413da4baf72?auto=format&fit=crop&w=1400&q=80']
-  return Array.from(new Set([...(profile.isClinic ? clinic : profile.isBeauty ? salon : general), ...(ctx.imagePool || []).filter((u) => /^https?:\/\//i.test(u))])).slice(0, 6)
+  const stock = STOCK_BY_KIND[profile.kind || 'general'] ?? STOCK_BY_KIND.general
+  const own = (ctx.imagePool || []).filter((u) => /^https?:\/\//i.test(u) && !/images\.unsplash\.com/i.test(u))
+  return Array.from(new Set([...stock, ...own])).slice(0, 6)
+
 }
 function cleanContentMap(input: any): Record<string, FreeformPageContent> {
   const out: Record<string, FreeformPageContent> = {}
@@ -511,20 +623,8 @@ function parseJson(s: string): any { const x = strip(s); try { return JSON.parse
 function clean(s: string): string { return String(s || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() }
 function esc(s: string): string { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') }
 function attr(s: string): string { return esc(s).replace(/'/g, '&#39;') }
-function isSalon(ctx: FreeformCtx): boolean { return /salon|fris|hair|beauty|skönhet|hud|spa|nail|nagel|klinik/i.test(`${ctx.nicheLabel} ${ctx.category ?? ''} ${ctx.facts.niche}`) }
-function businessTypeFromCategory(raw: string, flags: { clinic: boolean; salon: boolean; beauty: boolean }): string {
-  const x = clean(decodeText(raw)).toLowerCase()
-  if (!x) return ''
-  if (/hair\s*salon|fris|hår|barber|barbershop/.test(x)) return 'Frisörsalong'
-  if (/massage|massör|massageterapeut/.test(x)) return 'Massageklinik'
-  if (/medical|clinic|klinik|injektion|botox|fillers|blodprov|laser|hud|migrän/.test(x)) return 'Klinik'
-  if (/beauty|skönhet|esthetic|aesthetic|spa/.test(x)) return 'Skönhetsklinik'
-  if (/nail|nagel/.test(x)) return 'Nagelstudio'
-  if (flags.clinic) return 'Klinik'
-  if (flags.salon) return 'Frisörsalong'
-  if (flags.beauty) return 'Skönhetsstudio'
-  return titleCaseSv(raw)
-}
+function isSalon(ctx: FreeformCtx): boolean { return buildProfile(ctx).isBeauty }
+
 function titleCaseSv(s: string): string { return clean(decodeText(s)).split(/\s+/).map((w) => w.length <= 3 ? w.toLowerCase() : w[0].toUpperCase() + w.slice(1).toLowerCase()).join(' ') }
 function decodeText(s: string): string {
   return String(s || '')
