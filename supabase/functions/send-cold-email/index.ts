@@ -39,6 +39,8 @@ function deriveCompany(domain: string, brandFromDb?: string | null): string {
   return root.charAt(0).toUpperCase() + root.slice(1)
 }
 
+const CONTACT_PHONE = '076 190 5353'
+
 function stripExistingSignOff(text: string): string {
   if (!text) return text
   const pattern = /\n+\s*(Best regards|Kind regards|Sincerely|Cheers|Regards|Vänliga hälsningar|Med vänlig hälsning|Mvh|MVH|Hälsningar|Bästa hälsningar)[\s\S]*$/i
@@ -52,7 +54,8 @@ function appendFooter(
   postalAddress?: string | null,
 ): string {
   const cleaned = stripExistingSignOff(bodyText)
-  const signoff = `Best regards,\n${senderName}\n${company}`
+  // Swedish sign-off: Vänliga hälsningar / namn / telefon / FÖRETAG
+  const signoff = `Vänliga hälsningar\n${senderName}\n${CONTACT_PHONE}\n${company.toUpperCase()}`
   const legal: string[] = []
   if (postalAddress && postalAddress.trim()) legal.push(postalAddress.trim())
   const legalBlock = legal.length > 0 ? `\n\n---\n${legal.join('\n')}` : ''
