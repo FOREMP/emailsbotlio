@@ -314,10 +314,6 @@ export default function SiteLeads() {
 
   const startImport = async () => {
     if (!parsed) return;
-    if (!niche) {
-      toast({ title: "Välj bransch", description: "Välj bransch/mall innan import — annars vet AI:n inte vilken hemsidemall som ska användas.", variant: "destructive" });
-      return;
-    }
     if (!Object.values(mapping).includes("company_name")) {
       toast({ title: "Välj företagskolumn", description: "Mappa en kolumn till Företag innan import.", variant: "destructive" });
       return;
@@ -330,7 +326,7 @@ export default function SiteLeads() {
       for (let i = 0; i < parsed.rows.length; i += BATCH_SIZE) {
         const rows = parsed.rows.slice(i, i + BATCH_SIZE).map((row) => slimRow(row, mapping));
         const { data, error } = await supabase.functions.invoke("import-site-leads", {
-          body: { rows, mapping, niche },
+          body: { rows, mapping, ...(niche ? { niche } : {}) },
         });
         if (error) {
           totals.failed_batches += 1;
@@ -452,23 +448,20 @@ export default function SiteLeads() {
           </div>
 
           <div className="grid gap-1 max-w-sm">
-            <Label className="text-xs uppercase text-muted-foreground">Bransch / mall</Label>
-            <Select value={niche} onValueChange={setNiche} disabled={uploading}>
-              <SelectTrigger className="h-9"><SelectValue placeholder="Välj bransch…" /></SelectTrigger>
+            <Label className="text-xs uppercase text-muted-foreground">Bransch / mall (valfritt)</Label>
+            <Select value={niche || "auto"} onValueChange={(v) => setNiche(v === "auto" ? "" : v)} disabled={uploading}>
+              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
               <SelectContent>
+                <SelectItem value="auto">Auto — från kategori-kolumnen</SelectItem>
                 {NICHE_OPTIONS.map((n) => (
                   <SelectItem key={n.value} value={n.value}>{n.label}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <p className={`text-xs ${niche ? 'text-muted-foreground' : 'text-destructive'}`}>
-              {niche
-                ? 'Alla leads i denna fil taggas med denna bransch. AI:n använder taggen för att välja rätt hemsidemall.'
-                : 'Välj bransch — annars vet AI:n inte vilken mall som ska användas.'}
+            <p className="text-xs text-muted-foreground">
+              Branschen läses automatiskt från kolumnen du mappar till Kategori. Finns ingen mall för kategorin byggs hemsidan med AI-motorn (freeform).
             </p>
           </div>
-
-
 
           <div className="grid gap-3 md:grid-cols-2">
             {parsed.headers.map((header) => (
@@ -492,7 +485,7 @@ export default function SiteLeads() {
 
           <div className="flex justify-end gap-2">
             <Button variant="outline" disabled={uploading} onClick={() => setMapping(autoDetectMapping(parsed.headers))}>Auto-mappa</Button>
-            <Button disabled={uploading || !niche} onClick={startImport}>{uploading ? "Importerar..." : `Importera ${parsed.rows.length} leads`}</Button>
+            <Button disabled={uploading} onClick={startImport}>{uploading ? "Importerar..." : `Importera ${parsed.rows.length} leads`}</Button>
           </div>
         </Card>
       )}
