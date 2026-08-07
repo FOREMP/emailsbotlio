@@ -25,7 +25,7 @@ Deno.serve(async (req) => {
 
     const { data: site, error: siteErr } = await supabase
       .from('generated_sites')
-      .select('id, contact_id, generated_files')
+      .select('id, contact_id, site_lead_id, generated_files')
       .eq('id', generated_site_id)
       .single()
     if (siteErr || !site) return json({ error: 'site not found' }, 404)
@@ -35,47 +35,76 @@ Deno.serve(async (req) => {
       .filter(([, data]) => typeof data === 'string' && data.length > 0)
       .map(([file, data]) => ({ file, data }))
 
-    // Get contact for a nice project name
-    const { data: contact } = await supabase
-      .from('contacts')
-      .select('company, email')
-      .eq('id', site.contact_id)
-      .single()
+    // Prefer the real company name for a human-readable URL: demo-<company>.vercel.app
+    let companyName = ''
+    if (site.site_lead_id) {
+      const { data: lead } = await supabase
+        .from('site_leads')
+        .select('company_name')
+        .eq('id', site.site_lead_id)
+        .maybeSingle()
+      companyName = (lead?.company_name ?? '').toString()
+    }
+    if (!companyName && site.contact_id) {
+      const { data: contact } = await supabase
+        .from('contacts')
+        .select('first_name, last_name, custom_fields, email')
+        .eq('id', site.contact_id)
+        .maybeSingle()
+      const cf = (contact?.custom_fields ?? {}) as Record<string, unknown>
+      companyName = String(
+        cf.company ?? cf.company_name ?? cf.företag ?? cf.foretag ?? contact?.email?.split('@')[0] ?? '',
+      )
+    }
 
-    const slugBase = (contact?.company || contact?.email?.split('@')[0] || 'demo')
-      .toString()
-      .toLowerCase()
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 40) || 'demo'
-    const projectName = `${slugBase}-${site.id.slice(0, 6)}`
+    const slug = (input: string) =>
+      input
+        .toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[åä]/g, 'a').replace(/ö/g, 'o')
+        .replace(/\b(ab|hb|kb)\b/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 45)
+        .replace(/-+$/g, '')
+
+    const companySlug = slug(companyName) || 'site'
+    const primaryName = `demo-${companySlug}`.slice(0, 52).replace(/-+$/g, '')
+    const fallbackName = `${primaryName}-${site.id.slice(0, 4)}`.slice(0, 60)
 
     await supabase.from('generated_sites').update({ status: 'deploying', error_message: null }).eq('id', generated_site_id)
 
-    // Vercel v13 deployments with inline file contents
-    const deployResp = await fetch('https://api.vercel.com/v13/deployments', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${vercelToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        name: projectName,
-        project: projectName,
-        target: 'production',
-        files: filesArray,
-        projectSettings: {
-          framework: null,
-          buildCommand: null,
-          outputDirectory: null,
-          installCommand: null,
-          devCommand: null,
+    const deploy = async (projectName: string) => {
+      const resp = await fetch('https://api.vercel.com/v13/deployments', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${vercelToken}`,
+          'Content-Type': 'application/json',
         },
-      }),
-    })
+        body: JSON.stringify({
+          name: projectName,
+          project: projectName,
+          target: 'production',
+          files: filesArray,
+          projectSettings: {
+            framework: null,
+            buildCommand: null,
+            outputDirectory: null,
+            installCommand: null,
+            devCommand: null,
+          },
+        }),
+      })
+      return { resp, data: await resp.json(), projectName }
+    }
 
-    const deployData = await deployResp.json()
+    let out = await deploy(primaryName)
+    if (!out.resp.ok && (out.resp.status === 409 || out.resp.status === 403)) {
+      // Name already taken by another project → add a short unique suffix.
+      out = await deploy(fallbackName)
+    }
+
+    const { resp: deployResp, data: deployData, projectName } = out
     if (!deployResp.ok) {
       await supabase.from('generated_sites').update({
         status: 'failed',
@@ -85,7 +114,11 @@ Deno.serve(async (req) => {
     }
 
     const url = deployData.url ? `https://${deployData.url}` : null
-    const aliasUrl = deployData.alias?.[0] ? `https://${deployData.alias[0]}` : url
+    // Production deployments get the clean project alias: demo-<company>.vercel.app
+    const cleanAlias = `https://${projectName}.vercel.app`
+    const namedAlias = (deployData.alias as string[] | undefined)?.find((a) => a === `${projectName}.vercel.app`)
+    const aliasUrl = namedAlias ? `https://${namedAlias}` : (cleanAlias || url)
+
 
     // Disable Vercel deployment protection (SSO/password) so the demo is publicly viewable.
     // Safe to call every deploy — idempotent.

@@ -17,16 +17,34 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!))
 }
 
+function linkify(escaped: string): string {
+  // Runs on already HTML-escaped text. Turns bare URLs / www. links into
+  // clickable anchors so recipients don't have to copy-paste them.
+  return escaped.replace(
+    /(https?:\/\/[^\s<]+|www\.[^\s<]+)/g,
+    (raw) => {
+      // Don't swallow trailing sentence punctuation into the link.
+      const m = raw.match(/^(.*?)([.,;:!?)\]]*)$/s)!
+      const link = m[1]
+      const tail = m[2] ?? ''
+      if (!link) return raw
+      const href = link.startsWith('http') ? link : `https://${link}`
+      return `<a href="${href}" style="color:#1a73e8;text-decoration:underline" target="_blank" rel="noopener">${link}</a>${tail}`
+    },
+  )
+}
+
 function plainToHtml(s: string, trackingPixelUrl?: string): string {
   // Convert newlines to <br> explicitly — many email clients (Gmail, Outlook)
   // strip CSS like `white-space: pre-wrap`, which collapses \n into spaces and
   // makes the signature appear on one line ("Best regards, Name, Company").
-  const escaped = escapeHtml(s).replace(/\r\n/g, '\n').replace(/\n/g, '<br>')
+  const escaped = linkify(escapeHtml(s)).replace(/\r\n/g, '\n').replace(/\n/g, '<br>')
   const pixel = trackingPixelUrl
     ? `<img src="${trackingPixelUrl}" width="1" height="1" alt="" style="display:block;border:0;outline:none;height:1px;width:1px;opacity:0" />`
     : ''
   return `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.55">${escaped}${pixel}</div>`
 }
+
 
 function deriveCompany(domain: string, brandFromDb?: string | null): string {
   if (brandFromDb && brandFromDb.trim()) {

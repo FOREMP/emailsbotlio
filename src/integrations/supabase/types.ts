@@ -1118,6 +1118,11 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      _json_string_escape: { Args: { value: string }; Returns: string }
+      next_sequence_schedule_slot: {
+        Args: { base_at?: string; config: Json }
+        Returns: string
+      }
       seed_default_senders: { Args: never; Returns: number }
       sender_capacity_remaining: {
         Args: { _is_followup: boolean; _sender_id: string }
