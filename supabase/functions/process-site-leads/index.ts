@@ -14,6 +14,8 @@
 // pg_net can hit the function endpoint (verify_jwt is off).
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { classifyNiche, templateForNiche, type NicheKey } from '../_shared/niche.ts'
+import { auditWebsite } from '../_shared/site-audit.ts'
+
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
