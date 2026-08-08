@@ -695,12 +695,29 @@ Deno.serve(async (req) => {
 
     // 2. Optional targeted id from generate-site kick, else oldest queued
     let targetId: string | null = null
+    let forceRun = false
     try {
       if (req.method === 'POST') {
         const body = await req.json().catch(() => ({}))
         if (typeof body?.generated_site_id === 'string') targetId = body.generated_site_id
+        // A targeted kick (manual "Generera"/regenerate) always runs; only the
+        // cron sweep obeys the operator pause/stop switch.
+        forceRun = Boolean(targetId) || body?.force === true
       }
     } catch (_) { /* ignore */ }
+
+    // 2b. Honor the operator switch from /site-leads (Pausa / Stoppa).
+    if (!forceRun) {
+      const { data: stateRow } = await supabase
+        .from('app_settings')
+        .select('value')
+        .eq('key', 'site_generation_state')
+        .maybeSingle()
+      const state = ((stateRow as any)?.value?.state ?? 'running') as string
+      if (state !== 'running') {
+        return json({ ok: true, message: `automation is ${state} — worker idle` })
+      }
+    }
 
     // 3. Find one queued row
     const findQuery = supabase
