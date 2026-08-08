@@ -793,7 +793,7 @@ Deno.serve(async (req) => {
       cf.company,
     ])
 
-    if (site.template !== `${nc.key === 'hair_salon' ? 'hair_salon' : 'auto_workshop'}_v1`) {
+    if (site.generation_mode !== 'freeform' && site.template !== `${nc.key === 'hair_salon' ? 'hair_salon' : 'auto_workshop'}_v1`) {
       await supabase
         .from('generated_sites')
         .update({ template: `${nc.key === 'hair_salon' ? 'hair_salon' : 'auto_workshop'}_v1` })
