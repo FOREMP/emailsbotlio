@@ -2,14 +2,13 @@
 // quality 1-10. High scores (>= skip_threshold) mean the lead has a decent
 // site already — we can skip generation and save cost.
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { auditWebsite } from '../_shared/site-audit.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const FIRECRAWL_V2 = 'https://api.firecrawl.dev/v2'
-const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
 
 interface AuditRequest {
   generated_site_id: string
