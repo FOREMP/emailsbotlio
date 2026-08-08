@@ -24,8 +24,8 @@ const FIRECRAWL_V2 = 'https://api.firecrawl.dev/v2'
 const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
 
 const AUDIT_PER_TICK = 3    // Firecrawl+Gemini per invocation — keep memory low
-const GEN_PER_TICK = 2      // how many new pipelines may START per tick
-const MAX_CONCURRENT_GEN = 3 // how many leads may be mid-pipeline at once
+const GEN_PER_TICK = 3      // how many new pipelines may START per tick
+const MAX_CONCURRENT_GEN = 5 // how many leads may be mid-pipeline at once
 const DAILY_GEN_CAP_FALLBACK = 16  // used only if we can't read sender limits
 const OUTREACH_DOMAIN = 'foremp.email'  // sites/day tracks daily send capacity on this domain
 const GHOST_LIST_NAME = 'Site Leads (auto)'
@@ -74,6 +74,18 @@ Deno.serve(async (req) => {
     report.recovered = await recoverStuckGenerations(supabase, supabaseUrl, serviceKey, report)
 
 
+    // Operator on/off switch (Igång / Pausad / Stoppad) from /site-leads.
+    const { data: autoRow } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'site_generation_state')
+      .maybeSingle()
+    const autoState = ((autoRow as any)?.value?.state ?? 'running') as string
+    if (autoState !== 'running') {
+      report.errors.push(`skip audit+generate: automation is ${autoState}`)
+      return json({ ok: true, ...report })
+    }
+
     // ---------------- 2. AUDIT --------------------
     const { data: auditRows } = await supabase
       .from('site_leads')
@@ -93,18 +105,6 @@ Deno.serve(async (req) => {
     }
 
     // ---------------- 3. GENERATE -----------------
-    // Respect the operator on/off switch stored in app_settings.
-    const { data: autoRow } = await supabase
-      .from('app_settings')
-      .select('value')
-      .eq('key', 'site_generation_state')
-      .maybeSingle()
-    const autoState = ((autoRow as any)?.value?.state ?? 'running') as string
-    if (autoState !== 'running') {
-      report.errors.push(`skip generate: automation is ${autoState}`)
-      return json({ ok: true, ...report })
-    }
-
     // Daily generation cap = today's outreach send capacity (sum of active
     // sender daily_limits on the outreach domain). Keeps sites-created/day in
     // lockstep with contacts-emailed/day so we never build stock we can't send.
@@ -116,12 +116,13 @@ Deno.serve(async (req) => {
     const dailyCap = (dailySenders ?? []).reduce((s: number, r: any) => s + (r.daily_limit ?? 0), 0)
       || DAILY_GEN_CAP_FALLBACK
 
+    // Count builds actually STARTED today. Using site_leads.updated_at made
+    // approvals of older leads eat today's quota, starving generation.
     const today = new Date().toISOString().slice(0, 10)
     const { count: doneToday } = await supabase
-      .from('site_leads')
+      .from('generated_sites')
       .select('id', { count: 'exact', head: true })
-      .in('status', ['generating', 'awaiting_approval', 'approved'])
-      .gte('updated_at', `${today}T00:00:00Z`)
+      .gte('created_at', `${today}T00:00:00Z`)
     const capacity = Math.max(0, dailyCap - (doneToday ?? 0))
     report.capacity = capacity
 
@@ -554,7 +555,9 @@ async function startGeneration(
       site_lead_id: lead.id,
       source_url: normaliseUrl(lead.website),
       status: 'pending',
-      template: nicheTemplate,
+      // NOT NULL column: freeform builds have no template, use a marker so the
+      // insert can't fail (this used to abort every non-template category).
+      template: nicheTemplate ?? 'freeform',
       generation_mode: generationMode,
     })
     .select('id')
