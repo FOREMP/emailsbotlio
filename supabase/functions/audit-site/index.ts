@@ -2,14 +2,13 @@
 // quality 1-10. High scores (>= skip_threshold) mean the lead has a decent
 // site already — we can skip generation and save cost.
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { auditWebsite } from '../_shared/site-audit.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const FIRECRAWL_V2 = 'https://api.firecrawl.dev/v2'
-const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
 
 interface AuditRequest {
   generated_site_id: string
@@ -67,103 +66,48 @@ Deno.serve(async (req) => {
       return json({ score: 0, reason: 'no site' })
     }
 
-    // Scrape with Firecrawl (markdown only — cheap)
     const fcKey = Deno.env.get('FIRECRAWL_API_KEY')
     if (!fcKey) return json({ error: 'FIRECRAWL_API_KEY not configured' }, 500)
-
-    const fcResp = await fetch(`${FIRECRAWL_V2}/scrape`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url: targetUrl,
-        formats: ['markdown'],
-        onlyMainContent: true,
-      }),
-    })
-    const fcData = await fcResp.json()
-    if (!fcResp.ok) {
-      await supabase.from('generated_sites').update({
-        status: 'audited',
-        audit_score: 0,
-        audit_reason: `Could not reach site (${fcResp.status}). Treating as needs generation.`,
-      }).eq('id', generated_site_id)
-      return json({ score: 0, reason: 'unreachable', details: fcData })
-    }
-
-    const markdown: string = fcData.data?.markdown ?? fcData.markdown ?? ''
-    const title: string = fcData.data?.metadata?.title ?? fcData.metadata?.title ?? ''
-
-    // Score with AI
     const lovableKey = Deno.env.get('LOVABLE_API_KEY')
     if (!lovableKey) return json({ error: 'LOVABLE_API_KEY missing' }, 500)
 
-    const aiResp = await fetch(`${AI_GATEWAY}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Lovable-API-Key': lovableKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'google/gemini-3-flash-preview',
-        // Determinism: temperature 0 + fixed seed + top_p 1 so identical input
-        // produces identical output. Without this Gemini varies scores by ±3.
-        temperature: 0,
-        top_p: 1,
-        seed: 42,
-        messages: [
-          {
-            role: 'system',
-            content: [
-              'You audit small-business websites and score them 1-10 for how modern, trustworthy and conversion-ready they look.',
-              'Be strict, consistent and deterministic — the SAME input MUST always produce the SAME score. Do not vary tone or scoring between runs.',
-              '',
-              'Scoring rubric (pick the single band that best matches, then pick the exact integer inside it):',
-              '  1  = broken, blank, parked domain, or unreadable',
-              '  2  = extremely outdated (pre-2010 look), no mobile layout, no real content',
-              '  3  = outdated template, weak copy, poor structure, no clear CTA',
-              '  4  = dated but functional; basic info present but ugly typography/layout',
-              '  5  = average small-business site; usable but generic, weak hero, thin content',
-              '  6  = decent modern-ish template with clear services and contact info',
-              '  7  = clearly modern, responsive, good hierarchy, clear CTAs',
-              '  8  = polished, on-brand, strong copy, trust signals (reviews, cases)',
-              '  9  = excellent design and conversion-focused, comparable to top agencies',
-              '  10 = flawless best-in-class, nothing meaningful to improve',
-              '',
-              'Rules:',
-              '- Judge ONLY from the title and content excerpt provided. Do not speculate about images you cannot see.',
-              '- If content is very thin (<300 chars of real copy) cap the score at 4.',
-              '- If the site is unreachable or empty, score 1.',
-              '- Reply with STRICT JSON only: {"score": <integer 1-10>, "reason": "<max 200 chars, cite concrete evidence>"}.',
-              '- The reason MUST reference specific observations (e.g. "no mobile nav", "generic stock hero", "clear service list + phone CTA"). No vague adjectives alone.',
-            ].join('\n'),
-          },
-          {
-            role: 'user',
-            content: `URL: ${targetUrl}\nTitle: ${title}\n\nContent excerpt:\n${markdown.slice(0, 3000)}`,
-          },
-        ],
-        response_format: { type: 'json_object' },
-      }),
-    })
-    const aiData = await aiResp.json()
-    if (!aiResp.ok) {
+    // Same screenshot-first rubric as the outreach pipeline.
+    const { data: contactRow } = await supabase
+      .from('contacts')
+      .select('first_name, last_name, custom_fields')
+      .eq('id', site.contact_id)
+      .maybeSingle()
+    const cfName = (contactRow?.custom_fields ?? {}) as Record<string, unknown>
+    const companyName = String(
+      cfName.company_name ?? cfName.company ?? cfName.foretag ?? contactRow?.first_name ?? '',
+    )
+
+    let result
+    try {
+      result = await auditWebsite(targetUrl, companyName, fcKey, lovableKey)
+    } catch (e) {
       await supabase.from('generated_sites').update({
         status: 'failed',
-        error_message: `AI audit failed: ${JSON.stringify(aiData).slice(0, 400)}`,
+        error_message: `AI audit failed: ${(e as Error).message}`.slice(0, 400),
       }).eq('id', generated_site_id)
-      return json({ error: 'ai audit failed', details: aiData }, aiResp.status)
+      return json({ error: 'ai audit failed', details: (e as Error).message }, 500)
     }
-
-    let parsed: { score: number; reason: string } = { score: 5, reason: 'unparsed' }
-    try {
-      parsed = JSON.parse(aiData.choices?.[0]?.message?.content ?? '{}')
-    } catch (_) { /* keep default */ }
 
     await supabase.from('generated_sites').update({
       status: 'audited',
-      audit_score: Math.max(0, Math.min(10, Math.round(parsed.score))),
-      audit_reason: parsed.reason?.slice(0, 500) ?? null,
-      source_url: targetUrl,
+      audit_score: result.score,
+      audit_reason: result.reason?.slice(0, 500) ?? null,
+      source_url: result.url,
     }).eq('id', generated_site_id)
 
-    return json({ score: parsed.score, reason: parsed.reason, url: targetUrl })
+    return json({
+      score: result.score,
+      reason: result.reason,
+      weaknesses: result.weaknesses,
+      uncertain: result.uncertain,
+      url: result.url,
+    })
+
   } catch (err) {
     console.error('audit-site error', err)
     return json({ error: (err as Error).message }, 500)
