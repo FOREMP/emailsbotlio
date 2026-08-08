@@ -1,8 +1,16 @@
+import {
+  pagesForTemplate,
+  selectBlockTemplateFamily,
+  templateDirective,
+  templatePromptNotes,
+  type BlockTemplateFamilyKey,
+} from './block-templates.ts'
+
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 export const BUILD_MODEL = 'deepseek/deepseek-v4-flash-0731'
 export const LANG_MODEL = 'openai/gpt-4.1-mini'
-const VERSION = 5
-const MAX_PAGES = 5
+const VERSION = 7
+const MAX_PAGES = 6
 type Stage = 'plan' | 'theme' | 'content' | 'polish_content' | 'render' | 'quality_check' | 'done'
 
 export interface FreeformFacts {
@@ -29,8 +37,8 @@ export interface FreeformCtx {
   regenFeedback: string | null
   progress: FreeformProgress | null
 }
-export interface FreeformPageSpec { slug: string; title: string; purpose: string; sections: string[] }
-export interface FreeformPlan { designDirective?: string; pages: FreeformPageSpec[] }
+export interface FreeformPageSpec { slug: string; title: string; purpose: string; sections: string[]; pageKind?: 'landing' | 'services' | 'process' | 'about' | 'faq' | 'contact'; templateFamily?: BlockTemplateFamilyKey }
+export interface FreeformPlan { designDirective?: string; templateFamily?: BlockTemplateFamilyKey; templateLabel?: string; templateNotes?: string[]; pages: FreeformPageSpec[] }
 export interface BusinessProfile {
   category: string
   businessType: string
@@ -65,6 +73,7 @@ export interface FreeformPageContent {
   services?: { title: string; text: string; detail?: string }[]
   sections?: { eyebrow?: string; title: string; text: string; bullets?: string[] }[]
   faqs?: { question: string; answer: string }[]
+  faqGroups?: { title: string; items: { question: string; answer: string }[] }[]
   closingTitle?: string
   closingText?: string
   source?: 'ai' | 'fallback' | 'polished'
@@ -105,8 +114,8 @@ export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<st
   }
   const plan = progress.plan
   if (progress.stage === 'theme' || !files['style.css'] || files['style.css'].length < 1200) {
-    files['style.css'] = buildCss(ctx)
-    return step(false, files, meta({ ...progress, profile: progress.profile ?? buildProfile(ctx), factPack: progress.factPack ?? buildFactPack(ctx), stage: 'content', theme: { designNote: 'Deterministic premium mobile-safe V5 renderer', source: 'deterministic', cssVersion: VERSION }, design: { designNote: 'Deterministic premium mobile-safe V5 renderer', source: 'deterministic' }, lastStage: 'theme' }), 'v5 theme ready')
+    files['style.css'] = buildCss(ctx, plan)
+    return step(false, files, meta({ ...progress, profile: progress.profile ?? buildProfile(ctx), factPack: progress.factPack ?? buildFactPack(ctx), stage: 'content', theme: { designNote: `Template/block renderer: ${plan.templateLabel || plan.templateFamily || 'default'}`, source: 'template-blocks', cssVersion: VERSION }, design: { designNote: `Template/block renderer: ${plan.templateLabel || plan.templateFamily || 'default'}`, source: 'template-blocks' }, lastStage: 'theme' }), `v${VERSION} theme ready`)
   }
   if (progress.stage === 'content') {
     const content = cleanContentMap(progress.content)
@@ -117,7 +126,7 @@ export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<st
       const done = plan.pages.every((p) => content[p.slug])
       return step(false, files, meta({ ...progress, stage: done ? 'polish_content' : 'content', content, lastStage: `content:${next.slug}`, lastError: got.error ?? progress.lastError, fallbacksUsed: got.source === 'fallback' ? addFallback(progress, `content:${next.slug}`) : progress.fallbacksUsed }), `${got.source} content ready for ${next.slug}`)
     }
-    return step(false, files, meta({ ...progress, stage: 'polish_content', content, lastStage: 'content:complete' }), 'v5 content complete')
+    return step(false, files, meta({ ...progress, stage: 'polish_content', content, lastStage: 'content:complete' }), 'v7 content complete')
   }
   if (progress.stage === 'polish_content') {
     const content = cleanContentMap(progress.content)
@@ -130,7 +139,7 @@ export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<st
       const done = plan.pages.every((p) => nowPolished.includes(p.slug))
       return step(false, files, meta({ ...progress, stage: done ? 'render' : 'polish_content', content, polished: nowPolished, lastStage: `polish:${next.slug}`, lastError: got.error ?? progress.lastError, fallbacksUsed: got.source === 'fallback' ? addFallback(progress, `polish:${next.slug}`) : progress.fallbacksUsed }), `${got.source} polish ready for ${next.slug}`)
     }
-    return step(false, files, meta({ ...progress, stage: 'render', content, lastStage: 'polish:complete' }), 'v5 polish complete')
+    return step(false, files, meta({ ...progress, stage: 'render', content, lastStage: 'polish:complete' }), 'v7 polish complete')
   }
   if (progress.stage === 'render') {
     const content = cleanContentMap(progress.content)
@@ -141,7 +150,7 @@ export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<st
     const checked = qualityFixFiles(files)
     return step(true, checked, meta({ ...progress, stage: 'done', lastStage: 'quality_check' }), `v${VERSION} quality checked`)
   }
-  return step(true, files, meta({ ...progress, stage: 'done', lastStage: 'done' }), 'v5 done')
+  return step(true, files, meta({ ...progress, stage: 'done', lastStage: 'done' }), 'v7 done')
 }
 
 function step(done: boolean, files: Record<string, string>, progress: FreeformProgress, note: string): FreeformStepResult {
@@ -153,19 +162,26 @@ function meta(p: FreeformProgress): FreeformProgress {
 
 function buildPlan(ctx: FreeformCtx): FreeformPlan {
   const profile = buildProfile(ctx)
-  const salon = profile.isBeauty
   const business = ctx.facts.business_name || ctx.nicheLabel || 'Företaget'
-  const serviceSlug = salon ? 'behandlingar' : 'tjanster'
+  const family = selectBlockTemplateFamily({
+    category: ctx.category,
+    niche: ctx.facts.niche,
+    nicheLabel: ctx.nicheLabel,
+    businessName: ctx.facts.business_name,
+    source: sourceFor(ctx, { slug: 'index', title: '', purpose: '', sections: [] }),
+  })
+  const pages = pagesForTemplate(family, {
+    business,
+    serviceTitle: profile.servicePlural,
+    aboutTitle: profile.aboutTitle,
+    includeFaqPage: shouldIncludeFaqPage(ctx, profile, family.key),
+  }).slice(0, MAX_PAGES).map((page) => ({ ...page, templateFamily: family.key }))
   return {
-    designDirective: profile.isClinic
-      ? `Premium ${profile.businessType.toLowerCase()}: kliniskt trygg, varm och exklusiv känsla med tydlig behandling/booking.`
-      : salon ? 'Premium beauty/salong: mjuk editorial känsla, stora bildytor, varm kontrast och tydlig mobil kontakt.' : 'Premium lokal företagssajt med tydlig struktur, stark hero och enkel kontakt.',
-    pages: [
-      { slug: 'index', title: business, purpose: 'Skapa starkt första intryck och leda till kontakt.', sections: ['hero', 'services', 'trust', 'contact'] },
-      { slug: serviceSlug, title: profile.servicePlural, purpose: 'Visa erbjudandet utan påhittade priser.', sections: ['services', 'process', 'cta'] },
-      { slug: 'om-oss', title: profile.aboutTitle, purpose: 'Bygga förtroende med arbetssätt och känsla.', sections: ['story', 'values', 'cta'] },
-      { slug: 'kontakt', title: 'Kontakt', purpose: 'Göra det lätt att ringa, mejla och hitta.', sections: ['contact', 'cta'] },
-    ].slice(0, MAX_PAGES),
+    designDirective: templateDirective(family),
+    templateFamily: family.key,
+    templateLabel: family.label,
+    templateNotes: [...family.notesFromEric, ...family.aiDecisionNotes],
+    pages,
   }
 }
 
@@ -279,9 +295,13 @@ HÅRDA REGLER:
 - Hitta aldrig på priser, årtal, certifikat, kundnamn, recensioner, personalnamn eller öppettider.
 - Använd bara tjänster/behandlingar från godkänd tjänstelista eller tydlig källtext.
 - FAQ ska hjälpa riktig kund att boka/förstå behandlingar, inte handla om webbplatsen.
+- Följ vald templatefamilj och blockordning. Blocken styr struktur/känsla; du fyller dem med företagets fakta.
+- Om templatefamiljen är restaurant landingpage: skriv bara restaurang/bar/café-relevant text och håll allt för index.html.
+- Om templatefamiljen är editorial service: gör texten varmare och mer premium, men fortfarande saklig och baserad på kategori/källa.
+- Om sidan är FAQ: använd faqGroups med 2-3 kategorier och bara frågor som passar företagets kategori/källa. Hellre färre bra frågor än många generiska.
 - Om underlaget är tunt: skriv elegant och branschrelevant men försiktigt.
 - Varje textfält max 45 ord.
-Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","heroLead":"","introTitle":"","introText":"","primaryCta":"","secondaryCta":"","services":[{"title":"","text":"","detail":""}],"sections":[{"eyebrow":"","title":"","text":"","bullets":[""]}],"faqs":[{"question":"","answer":""}],"closingTitle":"","closingText":""}`
+Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","heroLead":"","introTitle":"","introText":"","primaryCta":"","secondaryCta":"","services":[{"title":"","text":"","detail":""}],"sections":[{"eyebrow":"","title":"","text":"","bullets":[""]}],"faqs":[{"question":"","answer":""}],"faqGroups":[{"title":"","items":[{"question":"","answer":""}]}],"closingTitle":"","closingText":""}`
   const user = [
     `Företag: ${ctx.facts.business_name || '[okänt]'}`,
     `UPPLADDAD LEAD-KATEGORI (primär signal): ${ctx.category || '[saknas]'}`,
@@ -289,6 +309,14 @@ Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","he
     `Stad: ${ctx.facts.city || '[saknas]'}`,
     `Sida: ${page.slug} - ${page.title}`,
     `Syfte: ${page.purpose}`,
+    `Templatefamilj: ${plan.templateLabel || plan.templateFamily || '[saknas]'}`,
+    `Template/block-instruktioner:\n${templatePromptNotes(selectBlockTemplateFamily({
+      category: ctx.category,
+      niche: ctx.facts.niche,
+      nicheLabel: ctx.nicheLabel,
+      businessName: ctx.facts.business_name,
+      source: sourceFor(ctx, page),
+    }), page)}`,
     ctx.regenFeedback ? `Feedback: ${ctx.regenFeedback}` : '',
     `Alla sidor: ${plan.pages.map((p) => p.slug + ':' + p.title).join(', ')}`,
     'Faktapaket som får användas:',
@@ -297,14 +325,14 @@ Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","he
     sourceFor(ctx, page).slice(0, 2200) || '[Tunt underlag. Använd säker branschcopy utan påhittade fakta.]',
   ].filter(Boolean).join('\n')
   try {
-    const raw = await callModel(ctx.openrouterKey, BUILD_MODEL, `freeform-v5-content:${page.slug}`, system, user, 3200, 38_000)
+    const raw = await callModel(ctx.openrouterKey, BUILD_MODEL, `freeform-v7-content:${page.slug}`, system, user, 3200, 38_000)
     const parsed = parseJson(raw)
     const c = repairContent(ctx, cleanContent(parsed, ctx, page))
     if (!c.heroTitle || !c.heroLead) throw new Error('missing hero fields')
     return { source: 'ai', content: { ...c, source: 'ai' } }
   } catch (e) {
     const error = (e as Error).message
-    console.warn(`[freeform-v5] content fallback for ${page.slug}: ${error}`)
+    console.warn(`[freeform-v7] content fallback for ${page.slug}: ${error}`)
     return { source: 'fallback', content: fallbackContent(ctx, page), error }
   }
 }
@@ -325,10 +353,21 @@ HÅRDA REGLER:
 - FAQ ska vara kundnyttig och verksamhetsspecifik.
 - Service-titlar ska vara korta riktiga tjänster/behandlingar, inte meningar eller instruktioner.
 - Följ profilens verksamhetstyp. Använd ord som klinik/behandling/salong ENBART för skönhets- och vårdföretag. För el, rör, bygg, bil, städ m.fl. används tjänst, uppdrag, installation, service.
+- Behåll vald templatefamiljs känsla: restaurang = stämning/mat/besök; editorial service = varm premium service; practical service = tydlig trygghet/process.
+- Texten ska aldrig låta som intern malltext. Ta bort generiska rader som "Besökaren får..." och skriv i företagets röst.
+- För FAQ-sidor: gruppera frågorna i faqGroups. Använd bara grupper som faktiskt passar verksamheten, exempelvis Första kontakt, Planering, Omfattning, Besök, Genomförande eller Praktiska frågor.
 - Om utkastet beskriver fel bransch: skriv om det så att det matchar profilens verksamhetstyp och källtexten.`
   const user = [
     `Sida: ${page.slug} - ${page.title}`,
     `Profil från uppladdad kategori: ${JSON.stringify(profile)}`,
+    `Templatefamilj: ${plan.templateLabel || plan.templateFamily || '[saknas]'}`,
+    `Template/block-instruktioner:\n${templatePromptNotes(selectBlockTemplateFamily({
+      category: ctx.category,
+      niche: ctx.facts.niche,
+      nicheLabel: ctx.nicheLabel,
+      businessName: ctx.facts.business_name,
+      source: sourceFor(ctx, page),
+    }), page)}`,
     `Faktapaket: ${JSON.stringify(pack)}`,
     `Alla sidor: ${plan.pages.map((p) => p.slug + ':' + p.title).join(', ')}`,
     ctx.regenFeedback ? `Feedback: ${ctx.regenFeedback}` : '',
@@ -336,14 +375,14 @@ HÅRDA REGLER:
     JSON.stringify(draft),
   ].filter(Boolean).join('\n')
   try {
-    const raw = await callModel(ctx.openrouterKey, LANG_MODEL, `freeform-v5-polish:${page.slug}`, system, user, 3600, 36_000)
+    const raw = await callModel(ctx.openrouterKey, LANG_MODEL, `freeform-v7-polish:${page.slug}`, system, user, 3600, 36_000)
     const parsed = parseJson(raw)
     const c = repairContent(ctx, cleanContent(parsed, ctx, page))
     if (!c.heroTitle || !c.heroLead) throw new Error('polish missing hero fields')
     return { source: 'polished', content: { ...c, source: 'polished' } }
   } catch (e) {
     const error = (e as Error).message
-    console.warn(`[freeform-v5] polish fallback for ${page.slug}: ${error}`)
+    console.warn(`[freeform-v7] polish fallback for ${page.slug}: ${error}`)
     return { source: 'fallback', content: repairContent(ctx, draft), error }
   }
 }
@@ -374,6 +413,22 @@ function fallbackContent(ctx: FreeformCtx, page: FreeformPageSpec): FreeformPage
       { question: `Vilken ${salon ? 'behandling' : 'tjänst'} passar mig?`, answer: 'Berätta kort vad du vill ha hjälp med, så blir det lättare att rekommendera rätt nästa steg.' },
       { question: `Finns ${profile.venueNoun} i ${decodeText(ctx.facts.city || 'området')}?`, answer: ctx.facts.address || ctx.facts.city ? `Ja, kontakt- och adressuppgifter finns längre ned på sidan.` : 'Kontakta verksamheten för aktuell platsinformation.' },
     ],
+    faqGroups: profile.kind === 'construction' || profile.kind === 'electrical' || profile.kind === 'plumbing' || profile.kind === 'cleaning' ? [
+      {
+        title: 'Första kontakt',
+        items: [
+          { question: 'Vad behöver jag skicka med från början?', answer: 'Beskriv vad du vill ha hjälp med, var uppdraget finns och vilket underlag du redan har, till exempel bilder, mått eller ritningar.' },
+          { question: 'Behöver allt vara färdigplanerat?', answer: 'Nej. Det räcker ofta med en första beskrivning för att kunna avgöra vilka frågor som behöver lösas härnäst.' },
+        ],
+      },
+      {
+        title: 'Planering och omfattning',
+        items: [
+          { question: 'När blir det tydligt vad som ingår?', answer: 'Omfattningen behöver gås igenom innan arbetet planeras. I vissa uppdrag krävs kompletterande information först.' },
+          { question: 'Vad händer om förutsättningarna ändras?', answer: 'Nya önskemål eller upptäckta förutsättningar bör diskuteras innan arbetet fortsätter i den delen.' },
+        ],
+      },
+    ] : undefined,
     closingTitle: 'Redo att ta nästa steg?',
     closingText: `Kontakta ${business} direkt så får du svar på vad som passar bäst.`,
     source: 'fallback',
@@ -384,16 +439,19 @@ function render(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, c:
   const business = decodeText(ctx.facts.business_name || ctx.nicheLabel || 'Företaget')
   const imgs = images(ctx)
   const home = page.slug === 'index'
+  const faqPage = page.pageKind === 'faq'
+  const processPage = page.pageKind === 'process'
+  const contactPage = page.pageKind === 'contact'
   const html = [
     nav(plan, business, page.slug),
     home ? hero(c, imgs[0], ctx) : pageHero(c, imgs[0], ctx),
-    intro(c, imgs[1]),
-    services(c, ctx),
-    sections(c),
-    home ? gallery(ctx, imgs) : '',
-    faq(c),
-    contact(ctx),
-    cta(c, ctx),
+    intro(c, imgs[1], ctx),
+    faqPage ? '' : services(c, ctx),
+    sections(c, processPage),
+    home && !faqPage ? gallery(ctx, imgs) : '',
+    faq(c, faqPage),
+    contact(ctx, c),
+    contactPage ? '' : cta(c, ctx),
     footer(plan, business, ctx),
   ].filter(Boolean).join('\n')
   return `<!DOCTYPE html>
@@ -405,7 +463,7 @@ function render(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, c:
   <meta name='description' content='${attr(c.metaDescription || business)}'>
   <link rel='stylesheet' href='style.css'>
 </head>
-<body>
+<body class='template-${attr(plan.templateFamily || 'service_clarity_default')}'>
 ${html}
 </body>
 </html>`
@@ -421,17 +479,32 @@ function hero(c: FreeformPageContent, img: string, ctx: FreeformCtx): string {
 function pageHero(c: FreeformPageContent, img: string, ctx: FreeformCtx): string {
   return `<section class='page-hero'>${img ? `<img src='${attr(img)}' alt=''>` : ''}<div class='wrap'><p class='eyebrow'>${esc(c.heroEyebrow || 'Information')}</p><h1>${esc(c.heroTitle || 'Tydlig information')}</h1><p class='lead'>${esc(c.heroLead || ctx.nicheLabel)}</p></div></section>`
 }
-function intro(c: FreeformPageContent, img: string): string {
-  return `<section class='section'><div class='wrap split'><div class='stack'><p class='eyebrow'>Första intrycket</p><h2>${esc(c.introTitle || c.heroTitle || 'Byggt för förtroende')}</h2><p class='lead'>${esc(c.introText || '')}</p><div class='tag-row'><span>Personlig rådgivning</span><span>Tydligt utbud</span><span>Lätt att kontakta</span></div></div>${img ? `<article class='media-card'><img src='${attr(img)}' alt=''><div class='media-body'><h3>Känslan före besöket</h3><p>En lugn och tydlig presentation som gör det enklare att förstå utbudet och ta nästa steg.</p></div></article>` : ''}</div></section>`
+function intro(c: FreeformPageContent, img: string, ctx: FreeformCtx): string {
+  const profile = buildProfile(ctx)
+  const tags = profile.kind === 'restaurant'
+    ? ['Mat och dryck', 'Stämning', 'Boka eller besök']
+    : profile.isBeauty
+      ? ['Personlig rådgivning', profile.servicePlural, 'Lätt att kontakta']
+      : ['Tydligt upplägg', profile.servicePlural, 'Snabb kontakt']
+  const mediaTitle = profile.kind === 'restaurant' ? 'En känsla av platsen' : profile.isBeauty ? 'Känslan inför besöket' : 'Tydligt från första intryck'
+  const mediaText = profile.kind === 'restaurant'
+    ? 'Bild, rytm och kort text hjälper gästen förstå atmosfären innan besöket.'
+    : profile.isBeauty
+      ? 'En varm och tydlig presentation som gör det enklare att förstå utbudet innan bokning.'
+      : 'En konkret presentation som gör det enkelt att förstå erbjudandet och ta kontakt.'
+  return `<section class='section'><div class='wrap split'><div class='stack'><p class='eyebrow'>${profile.kind === 'restaurant' ? 'Upplevelse' : 'Första intrycket'}</p><h2>${esc(c.introTitle || c.heroTitle || 'Byggt för förtroende')}</h2><p class='lead'>${esc(c.introText || '')}</p><div class='tag-row'>${tags.map((t) => `<span>${esc(t)}</span>`).join('')}</div></div>${img ? `<article class='media-card'><img src='${attr(img)}' alt=''><div class='media-body'><h3>${esc(mediaTitle)}</h3><p>${esc(mediaText)}</p></div></article>` : ''}</div></section>`
 }
 function services(c: FreeformPageContent, ctx: FreeformCtx): string {
   const profile = buildProfile(ctx)
   const list = (c.services?.length ? c.services : fallbackContent(ctx, { slug: 'x', title: 'x', purpose: '', sections: [] }).services || []).slice(0, 6)
   return `<section class='section section-alt'><div class='wrap'><p class='eyebrow'>${esc(profile.servicePlural)}</p><h2>${esc(profile.servicesHeading)}</h2><p class='lead'>${esc(profile.servicesLead)}</p><div class='grid'>${list.map((s) => `<article class='card'><h3>${esc(s.title)}</h3><p>${esc(s.text)}</p>${s.detail ? `<p>${esc(s.detail)}</p>` : ''}</article>`).join('')}</div></div></section>`
 }
-function sections(c: FreeformPageContent): string {
+function sections(c: FreeformPageContent, processStyle = false): string {
   const list = (c.sections || []).slice(0, 4)
   if (!list.length) return ''
+  if (processStyle) {
+    return `<section class='section'><div class='wrap process-list'>${list.map((s, i) => `<article class='process-step'><span class='process-number'>${String(i + 1).padStart(2, '0')}</span><div><p class='eyebrow'>${esc(s.eyebrow || 'Steg')}</p><h3>${esc(s.title)}</h3><p>${esc(s.text)}</p>${s.bullets?.length ? `<div class='tag-row'>${s.bullets.slice(0, 5).map((b) => `<span>${esc(b)}</span>`).join('')}</div>` : ''}</div></article>`).join('')}</div></section>`
+  }
   return `<section class='section'><div class='wrap stack'>${list.map((s) => `<article class='card'><p class='eyebrow'>${esc(s.eyebrow || 'Detalj')}</p><h2>${esc(s.title)}</h2><p class='lead'>${esc(s.text)}</p>${s.bullets?.length ? `<div class='tag-row'>${s.bullets.slice(0, 5).map((b) => `<span>${esc(b)}</span>`).join('')}</div>` : ''}</article>`).join('')}</div></section>`
 }
 function gallery(ctx: FreeformCtx, imgs: string[]): string {
@@ -439,14 +512,30 @@ function gallery(ctx: FreeformCtx, imgs: string[]): string {
   if (imgs.length < 2) return ''
   return `<section class='section'><div class='wrap split'><div><p class='eyebrow'>${profile.isBeauty ? 'Känsla' : 'Intryck'}</p><h2>${profile.isClinic ? 'En trygg känsla redan innan bokning.' : profile.isBeauty ? 'En visuell känsla som lyfter upplevelsen.' : 'En design som känns arbetad.'}</h2><p class='lead'>Stora bildytor, tydlig rytm och bra kontrast ger ett mer exklusivt första intryck och gör innehållet lättare att ta in.</p></div><div class='gallery-grid'>${imgs.slice(0, 3).map((src) => `<img src='${attr(src)}' alt=''>`).join('')}</div></div></section>`
 }
-function faq(c: FreeformPageContent): string {
-  const list = (c.faqs || []).slice(0, 4)
-  if (!list.length) return ''
-  return `<section class='section section-alt'><div class='wrap'><p class='eyebrow'>Frågor</p><h2>Snabba svar innan kontakt.</h2><div class='faq-list'>${list.map((f) => `<details><summary>${esc(f.question)}</summary><p>${esc(f.answer)}</p></details>`).join('')}</div></div></section>`
+function faq(c: FreeformPageContent, fullPage = false): string {
+  const groups = (c.faqGroups || []).filter((g) => g.title && g.items?.length).slice(0, 3)
+  const flat = (c.faqs || []).slice(0, fullPage ? 8 : 4)
+  if (fullPage && groups.length) {
+    return `<section class='section section-alt'><div class='wrap faq-layout'><aside><p class='eyebrow'>Vanliga frågor</p><h2>${esc(c.introTitle || 'Inför nästa steg.')}</h2><p class='lead'>${esc(c.introText || 'Här samlas frågor som är relevanta inför kontakt och planering.')}</p></aside><div class='faq-groups'>${groups.map((g) => `<section class='faq-category'><h2>${esc(g.title)}</h2><div class='faq-list'>${g.items.slice(0, 5).map((f) => `<details><summary>${esc(f.question)}</summary><p>${esc(f.answer)}</p></details>`).join('')}</div></section>`).join('')}</div></div></section>`
+  }
+  if (!flat.length) return ''
+  return `<section class='section section-alt'><div class='wrap'><p class='eyebrow'>Frågor</p><h2>${fullPage ? 'Frågor inför kontakt.' : 'Snabba svar innan kontakt.'}</h2><div class='faq-list'>${flat.map((f) => `<details><summary>${esc(f.question)}</summary><p>${esc(f.answer)}</p></details>`).join('')}</div></div></section>`
 }
-function contact(ctx: FreeformCtx): string {
+function contact(ctx: FreeformCtx, c: FreeformPageContent): string {
+  const profile = buildProfile(ctx)
+  const business = decodeText(ctx.facts.business_name || ctx.nicheLabel || 'företaget')
+  const title = profile.kind === 'restaurant'
+    ? 'Boka, fråga eller planera ditt besök.'
+    : profile.isBeauty
+      ? `Boka eller fråga ${business}.`
+      : 'Ta kontakt när du vill vidare.'
+  const lead = profile.kind === 'restaurant'
+    ? 'Ring eller mejla för bokning, frågor om besök eller aktuell information.'
+    : profile.isBeauty
+      ? 'Ring eller mejla om du vill boka, fråga om utbudet eller veta vad som passar bäst.'
+      : 'Ring eller mejla för frågor, offert eller nästa steg. Uppgifterna finns samlade här.'
   const rows = [ctx.facts.phone ? `<a href='tel:${attr(ctx.facts.phone.replace(/\s+/g, ''))}'>Telefon<br>${esc(ctx.facts.phone)}</a>` : '', ctx.facts.email ? `<a href='mailto:${attr(ctx.facts.email)}'>E-post<br>${esc(ctx.facts.email)}</a>` : '', ctx.facts.address || ctx.facts.city ? `<span>Adress<br>${esc(decodeText([ctx.facts.address, ctx.facts.city].filter(Boolean).join(', ')))}</span>` : '', ctx.facts.google_maps_url ? `<a href='${attr(ctx.facts.google_maps_url)}'>Google Maps<br>Visa vägbeskrivning</a>` : ''].filter(Boolean).join('')
-  return rows ? `<section id='kontakt' class='section'><div class='wrap contact-grid'><div><p class='eyebrow'>Kontakt</p><h2>Enkel kontakt, utan formulär.</h2><p class='lead'>Besökaren får tydliga vägar vidare direkt, särskilt viktigt på mobil.</p></div><div class='contact-list'>${rows}</div></div></section>` : ''
+  return rows ? `<section id='kontakt' class='section'><div class='wrap contact-grid'><div><p class='eyebrow'>Kontakt</p><h2>${esc(title)}</h2><p class='lead'>${esc(lead)}</p></div><div class='contact-list'>${rows}</div></div></section>` : ''
 }
 function cta(c: FreeformPageContent, ctx: FreeformCtx): string {
   return `<section class='section'><div class='wrap'><div class='cta-band'><div><h2>${esc(c.closingTitle || 'Redo att ta nästa steg?')}</h2><p>${esc(c.closingText || 'Ring eller mejla så blir vägen framåt tydlig.')}</p></div>${buttons(ctx, c)}</div></div></section>`
@@ -463,17 +552,113 @@ function buttons(ctx: FreeformCtx, c: FreeformPageContent): string {
   return parts.length ? `<div class='btn-row'>${parts.join('')}</div>` : ''
 }
 
-function buildCss(ctx: FreeformCtx): string {
+function buildCss(ctx: FreeformCtx, plan?: FreeformPlan): string {
   const p = palette(ctx)
   const display = font(ctx.brandFonts?.[0], isSalon(ctx) ? 'Georgia, Times New Roman, serif' : 'Inter, ui-sans-serif, system-ui, sans-serif')
   const body = font(ctx.brandFonts?.[1], 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif')
+  const template = plan?.templateFamily || selectBlockTemplateFamily({
+    category: ctx.category,
+    niche: ctx.facts.niche,
+    nicheLabel: ctx.nicheLabel,
+    businessName: ctx.facts.business_name,
+    source: sourceFor(ctx, { slug: 'index', title: '', purpose: '', sections: [] }),
+  }).key
   return `
 :root{--primary:${p.primary};--secondary:${p.secondary};--accent:${p.accent};--background:${p.background};--surface:${p.surface};--text-primary:${p.text};--text-secondary:${p.muted};--on-primary:${p.onPrimary};--border:${p.border};--shadow:${p.shadow};--wrap:1180px;--display:${display};--body:${body};--radius:30px}
 *{box-sizing:border-box}html,body{max-width:100%;overflow-x:hidden}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 88% 8%,${p.glow},transparent 32rem),linear-gradient(180deg,var(--background),color-mix(in srgb,var(--surface) 62%,var(--background)));color:var(--text-primary);font-family:var(--body);font-size:16px;line-height:1.7;-webkit-font-smoothing:antialiased}img,svg,video{display:block;max-width:100%;height:auto}a{color:inherit}.wrap{width:min(var(--wrap),calc(100% - 40px));margin-inline:auto}.site-header{position:sticky;top:0;z-index:50;background:color-mix(in srgb,var(--background) 86%,transparent);backdrop-filter:blur(20px);border-bottom:1px solid var(--border)}.nav-shell{min-height:76px;display:flex;align-items:center;justify-content:space-between;gap:20px}.brand{font-family:var(--display);font-size:clamp(20px,2vw,30px);font-weight:850;letter-spacing:-.045em;text-decoration:none;max-width:52vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.nav-desktop{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.nav-desktop a,.nav-drawer a{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:10px 14px;border-radius:999px;text-decoration:none;color:var(--text-secondary);font-weight:800;font-size:14px}.nav-desktop a:hover,.nav-desktop a[aria-current=page],.nav-drawer a:hover,.nav-drawer a[aria-current=page]{background:color-mix(in srgb,var(--primary) 13%,transparent);color:var(--text-primary)}.nav-mobile{display:none;position:relative}.nav-mobile summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:10px;min-height:46px;padding:11px 16px;border:1px solid var(--border);border-radius:999px;background:var(--surface);box-shadow:0 12px 30px var(--shadow);font-weight:850;color:var(--text-primary)}.nav-mobile summary::-webkit-details-marker{display:none}.nav-mobile summary:before{content:'';width:18px;height:12px;background:linear-gradient(var(--text-primary),var(--text-primary)) top/100% 2px no-repeat,linear-gradient(var(--text-primary),var(--text-primary)) center/100% 2px no-repeat,linear-gradient(var(--text-primary),var(--text-primary)) bottom/100% 2px no-repeat}.nav-drawer{position:absolute;right:0;top:calc(100% + 12px);width:min(86vw,360px);max-width:calc(100vw - 32px);padding:12px;border:1px solid var(--border);border-radius:24px;background:color-mix(in srgb,var(--surface) 96%,var(--background));box-shadow:0 26px 70px var(--shadow);display:grid;gap:4px}.nav-drawer a{justify-content:flex-start;width:100%;padding:14px 16px;border-radius:16px;color:var(--text-primary)}.section{padding:clamp(66px,9vw,128px) 0}.section-alt{background:color-mix(in srgb,var(--surface) 58%,transparent)}.stack{display:grid;gap:20px}.split{display:grid;grid-template-columns:minmax(0,1.02fr) minmax(280px,.78fr);gap:clamp(28px,5vw,72px);align-items:center}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px;margin-top:34px}.contact-grid{display:grid;grid-template-columns:minmax(0,.9fr) minmax(280px,1.1fr);gap:28px}.gallery-grid{display:grid;grid-template-columns:1.2fr .8fr .8fr;gap:18px}.eyebrow{display:inline-flex;align-items:center;gap:10px;margin:0 0 18px;color:var(--primary);font-size:12px;font-weight:950;letter-spacing:.22em;text-transform:uppercase}.eyebrow:before{content:'';width:28px;height:1px;background:currentColor}h1,h2,h3,p,li{overflow-wrap:anywhere}h1,h2,h3{font-family:var(--display);margin:0;color:var(--text-primary);letter-spacing:-.045em;line-height:.98}h1{font-size:clamp(42px,7vw,88px);max-width:12ch}h2{font-size:clamp(30px,4.6vw,60px);max-width:14ch}h3{font-size:clamp(21px,2.1vw,30px);line-height:1.08}p{margin:0;color:var(--text-secondary)}.lead{font-size:clamp(17px,1.7vw,21px);line-height:1.72;color:var(--text-secondary);max-width:66ch}.lead.lg{font-size:clamp(18px,2vw,24px)}.btn-row{display:flex;flex-wrap:wrap;gap:12px;margin-top:30px}.btn{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:14px 22px;border:1px solid var(--border);border-radius:999px;background:color-mix(in srgb,var(--surface) 82%,transparent);color:var(--text-primary);font-weight:900;text-decoration:none;box-shadow:0 12px 28px color-mix(in srgb,var(--shadow) 70%,transparent)}.btn-primary{background:var(--primary);border-color:var(--primary);color:var(--on-primary)}.hero{position:relative;isolation:isolate;min-height:min(780px,86svh);display:grid;align-items:end;padding:clamp(92px,11vw,154px) 0 clamp(54px,7vw,88px);overflow:hidden}.hero:before{content:'';position:absolute;inset:0;z-index:-2;background:linear-gradient(110deg,color-mix(in srgb,var(--background) 96%,transparent),color-mix(in srgb,var(--background) 30%,transparent))}.hero img,.page-hero img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:-3;filter:brightness(.84) saturate(.9)}.hero-card{max-width:760px;padding:clamp(26px,4vw,48px);border:1px solid var(--border);border-radius:38px;background:color-mix(in srgb,var(--background) 74%,transparent);backdrop-filter:blur(12px);box-shadow:0 34px 90px var(--shadow)}.hero .lead{margin-top:20px}.page-hero{position:relative;isolation:isolate;padding:clamp(104px,12vw,160px) 0 clamp(58px,8vw,94px);overflow:hidden;background:color-mix(in srgb,var(--surface) 72%,var(--background))}.page-hero:after{content:'';position:absolute;inset:0;z-index:-1;background:linear-gradient(90deg,var(--background),color-mix(in srgb,var(--background) 74%,transparent))}.page-hero .lead{margin-top:20px}.card,.media-card{min-width:0;padding:clamp(22px,3vw,34px);border:1px solid var(--border);border-radius:var(--radius);background:color-mix(in srgb,var(--surface) 91%,var(--background));box-shadow:0 24px 70px var(--shadow)}.card h3,.media-card h3{margin-bottom:12px}.card p+p{margin-top:12px}.media-card{overflow:hidden;padding:0}.media-card img{width:100%;height:260px;object-fit:cover}.media-body{padding:24px}.tag-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}.tag-row span{display:inline-flex;padding:8px 12px;border-radius:999px;background:color-mix(in srgb,var(--primary) 10%,transparent);border:1px solid color-mix(in srgb,var(--primary) 18%,transparent);color:var(--text-primary);font-weight:850;font-size:13px}.gallery-grid img{width:100%;height:260px;object-fit:cover;border-radius:var(--radius);box-shadow:0 24px 70px var(--shadow)}.gallery-grid img:first-child{height:330px}.cta-band{padding:clamp(28px,5vw,56px);border-radius:38px;background:linear-gradient(135deg,var(--primary),color-mix(in srgb,var(--secondary) 65%,var(--primary)));color:var(--on-primary);box-shadow:0 30px 90px var(--shadow);display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:center}.cta-band h2,.cta-band p{color:var(--on-primary)}.cta-band p{opacity:.9}.cta-band .btn{background:var(--on-primary);border-color:transparent;color:var(--primary);box-shadow:none}.contact-list{display:grid;gap:14px}.contact-list a,.contact-list span{display:flex;gap:12px;align-items:flex-start;padding:16px;border:1px solid var(--border);border-radius:18px;background:color-mix(in srgb,var(--surface) 78%,transparent);text-decoration:none;color:var(--text-primary);font-weight:800}.faq-list{display:grid;gap:12px;max-width:900px;margin-top:28px}.faq-list details{border:1px solid var(--border);border-radius:20px;background:color-mix(in srgb,var(--surface) 88%,transparent);padding:18px 20px}.faq-list summary{cursor:pointer;font-weight:900;color:var(--text-primary)}.faq-list p{margin-top:10px}.site-footer{padding:58px 0 34px;background:color-mix(in srgb,var(--text-primary) 8%,var(--surface));border-top:1px solid var(--border)}.footer-grid{display:grid;grid-template-columns:1.2fr .7fr .9fr;gap:28px}.footer-title{font-family:var(--display);font-weight:900;font-size:20px;letter-spacing:-.03em;margin-bottom:12px;color:var(--text-primary)}.site-footer a{color:var(--text-primary);text-decoration:none}.foot-bottom{margin-top:32px;padding-top:22px;border-top:1px solid var(--border);font-size:13px;color:var(--text-secondary)}
 @media(max-width:960px){.wrap{width:min(100% - 32px,var(--wrap))}.nav-desktop{display:none!important}.nav-mobile{display:block!important}.brand{max-width:calc(100vw - 140px)}.split,.contact-grid,.footer-grid,.cta-band{grid-template-columns:1fr}.grid{grid-template-columns:1fr 1fr}.gallery-grid{grid-template-columns:1fr 1fr}.hero{min-height:auto;align-items:center}}
 @media(min-width:961px){.nav-mobile{display:none!important}.nav-desktop{display:flex!important}}
 @media(max-width:640px){body{font-size:15px}.wrap{width:calc(100% - 28px)}.nav-shell{min-height:68px}.brand{font-size:19px;max-width:calc(100vw - 122px)}.section{padding:58px 0}.hero{padding:72px 0 44px}.hero-card{padding:24px;border-radius:24px}h1{font-size:clamp(38px,13vw,58px);max-width:11ch}h2{font-size:clamp(29px,10vw,44px)}.lead{font-size:16px}.grid,.gallery-grid{grid-template-columns:1fr}.btn-row{display:grid}.btn{width:100%;min-height:52px}.media-card img,.gallery-grid img,.gallery-grid img:first-child{height:230px}.cta-band{border-radius:24px;padding:26px}}
+${templateCss(template)}
 `.trim()
+}
+
+function templateCss(template: BlockTemplateFamilyKey): string {
+  if (template === 'bistro_atmospheric_landing') return `
+body.template-bistro_atmospheric_landing{--radius:26px;background:#090806;color:#fff7ed}
+.template-bistro_atmospheric_landing .site-header{background:rgba(9,8,6,.72);border-bottom-color:rgba(255,255,255,.13)}
+.template-bistro_atmospheric_landing .brand{font-family:Georgia,Times New Roman,serif;letter-spacing:-.055em}
+.template-bistro_atmospheric_landing .hero{min-height:96svh;align-items:end;padding-top:130px}
+.template-bistro_atmospheric_landing .hero:before{background:linear-gradient(90deg,rgba(8,7,5,.9),rgba(8,7,5,.35) 58%,rgba(8,7,5,.72)),radial-gradient(circle at 78% 20%,rgba(245,158,11,.24),transparent 30rem)}
+.template-bistro_atmospheric_landing .hero-card{max-width:860px;background:rgba(9,8,6,.54);border-color:rgba(255,255,255,.18);box-shadow:0 38px 120px rgba(0,0,0,.52)}
+.template-bistro_atmospheric_landing h1{max-width:10.5ch;font-size:clamp(48px,8.4vw,112px)}
+.template-bistro_atmospheric_landing h2{font-family:Georgia,Times New Roman,serif}
+.template-bistro_atmospheric_landing .section-alt{background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.015))}
+.template-bistro_atmospheric_landing .card,.template-bistro_atmospheric_landing .media-card,.template-bistro_atmospheric_landing .faq-list details{background:rgba(255,255,255,.055);border-color:rgba(255,255,255,.14)}
+.template-bistro_atmospheric_landing .gallery-grid img{filter:saturate(.9) contrast(1.05);border-radius:34px}
+.template-bistro_atmospheric_landing .contact-list a,.template-bistro_atmospheric_landing .contact-list span{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.14)}
+`.trim()
+
+  if (template === 'byggform_architectural_trust') return `
+body.template-byggform_architectural_trust{--primary:#73553b;--secondary:#354034;--accent:#997453;--background:#faf9f5;--surface:#f1eee7;--text-primary:#252921;--text-secondary:#52574f;--border:rgba(37,41,33,.16);--shadow:rgba(26,30,24,.14);--radius:2px;background:var(--background)}
+.template-byggform_architectural_trust .site-header{background:color-mix(in srgb,var(--background) 92%,transparent);border-bottom-color:var(--border)}
+.template-byggform_architectural_trust .brand{font-family:Inter,ui-sans-serif,system-ui,sans-serif;letter-spacing:-.02em}
+.template-byggform_architectural_trust .nav-desktop a,.template-byggform_architectural_trust .nav-drawer a{border-radius:2px;text-transform:uppercase;letter-spacing:.06em;font-size:12px}
+.template-byggform_architectural_trust .hero{min-height:100svh;align-items:end}
+.template-byggform_architectural_trust .hero:before{background:linear-gradient(90deg,rgba(21,25,20,.9),rgba(21,25,20,.48) 62%,rgba(21,25,20,.16)),linear-gradient(0deg,rgba(21,25,20,.5),transparent 55%)}
+.template-byggform_architectural_trust .hero-card{max-width:900px;border-radius:0;border-color:rgba(255,255,255,.2);background:rgba(21,25,20,.56);box-shadow:0 22px 80px rgba(0,0,0,.32)}
+.template-byggform_architectural_trust .hero-card h1,.template-byggform_architectural_trust .hero-card p,.template-byggform_architectural_trust .hero-card .eyebrow{color:#fff}
+.template-byggform_architectural_trust h1,.template-byggform_architectural_trust h2{font-family:Georgia,Times New Roman,serif;font-weight:400;letter-spacing:-.035em}
+.template-byggform_architectural_trust h1{max-width:13ch;font-size:clamp(48px,7vw,102px)}
+.template-byggform_architectural_trust h2{max-width:16ch}
+.template-byggform_architectural_trust .section-alt{background:#f1eee7}
+.template-byggform_architectural_trust .grid{display:grid;grid-template-columns:repeat(6,1fr);gap:0;border-top:1px solid var(--border);border-left:1px solid var(--border)}
+.template-byggform_architectural_trust .grid .card{grid-column:span 2;min-height:285px;border:0;border-right:1px solid var(--border);border-bottom:1px solid var(--border);border-radius:0;background:rgba(255,255,255,.25);box-shadow:none}
+.template-byggform_architectural_trust .grid .card:nth-child(4),.template-byggform_architectural_trust .grid .card:nth-child(5){grid-column:span 3}
+.template-byggform_architectural_trust .card,.template-byggform_architectural_trust .media-card{border-radius:0;background:color-mix(in srgb,var(--surface) 86%,white);box-shadow:0 22px 65px var(--shadow)}
+.template-byggform_architectural_trust .process-list{border-top:1px solid var(--border)}
+.template-byggform_architectural_trust .process-step{display:grid;grid-template-columns:64px 1fr;gap:24px;padding:34px 0;border-bottom:1px solid var(--border)}
+.template-byggform_architectural_trust .process-number{color:var(--primary);font-weight:850;font-size:12px;letter-spacing:.12em}
+.template-byggform_architectural_trust .process-step h3{font-family:Georgia,Times New Roman,serif;font-weight:400;font-size:clamp(24px,2.4vw,34px)}
+.template-byggform_architectural_trust .faq-layout{display:grid;grid-template-columns:minmax(260px,.72fr) minmax(0,1.28fr);gap:clamp(40px,7vw,100px);align-items:start}
+.template-byggform_architectural_trust .faq-layout aside{position:sticky;top:110px}
+.template-byggform_architectural_trust .faq-category+.faq-category{margin-top:56px}
+.template-byggform_architectural_trust .faq-category h2{font-size:clamp(28px,3vw,43px);margin-bottom:18px}
+.template-byggform_architectural_trust .faq-list details{border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;box-shadow:none;padding:22px 0}
+.template-byggform_architectural_trust .faq-list summary{font-size:17px}
+.template-byggform_architectural_trust .contact-grid{align-items:start}
+.template-byggform_architectural_trust .cta-band{border-radius:0;background:#dcd7cd;color:#252921;box-shadow:none}
+.template-byggform_architectural_trust .cta-band h2,.template-byggform_architectural_trust .cta-band p{color:#252921}
+.template-byggform_architectural_trust .site-footer{background:#1b1e19}
+@media(max-width:960px){.template-byggform_architectural_trust .grid{grid-template-columns:1fr 1fr}.template-byggform_architectural_trust .grid .card,.template-byggform_architectural_trust .grid .card:nth-child(4),.template-byggform_architectural_trust .grid .card:nth-child(5){grid-column:auto}.template-byggform_architectural_trust .faq-layout{grid-template-columns:1fr}.template-byggform_architectural_trust .faq-layout aside{position:static}}
+@media(max-width:640px){.template-byggform_architectural_trust .grid{grid-template-columns:1fr}.template-byggform_architectural_trust .process-step{grid-template-columns:40px 1fr;gap:14px}.template-byggform_architectural_trust h1{font-size:clamp(44px,14vw,68px)}}
+`.trim()
+
+  if (template === 'salon_editorial_luxury') return `
+body.template-salon_editorial_luxury{--radius:34px}
+.template-salon_editorial_luxury .site-header{background:color-mix(in srgb,var(--background) 78%,transparent)}
+.template-salon_editorial_luxury .hero{min-height:min(820px,88svh);align-items:center}
+.template-salon_editorial_luxury .hero:before{background:linear-gradient(105deg,color-mix(in srgb,var(--background) 97%,transparent),color-mix(in srgb,var(--background) 42%,transparent) 58%,color-mix(in srgb,var(--surface) 26%,transparent)),radial-gradient(circle at 80% 20%,color-mix(in srgb,var(--accent) 34%,transparent),transparent 28rem)}
+.template-salon_editorial_luxury .hero-card{max-width:790px;border-radius:44px;background:color-mix(in srgb,var(--surface) 72%,transparent)}
+.template-salon_editorial_luxury .grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+.template-salon_editorial_luxury .card:nth-child(2n){transform:translateY(18px)}
+.template-salon_editorial_luxury .media-card img{height:340px}
+.template-salon_editorial_luxury .gallery-grid{grid-template-columns:1.05fr .75fr .9fr}
+.template-salon_editorial_luxury .gallery-grid img:first-child{height:410px}
+.template-salon_editorial_luxury .cta-band{border-radius:46px}
+@media(max-width:960px){.template-salon_editorial_luxury .grid{grid-template-columns:1fr 1fr}.template-salon_editorial_luxury .card:nth-child(2n){transform:none}}
+@media(max-width:640px){.template-salon_editorial_luxury .grid{grid-template-columns:1fr}.template-salon_editorial_luxury .media-card img,.template-salon_editorial_luxury .gallery-grid img:first-child{height:250px}}
+`.trim()
+
+  return `
+body.template-service_clarity_default .hero-card{max-width:820px}
+body.template-service_clarity_default .grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+body.template-service_clarity_default .card{border-radius:24px}
+@media(max-width:960px){body.template-service_clarity_default .grid{grid-template-columns:1fr 1fr}}
+@media(max-width:640px){body.template-service_clarity_default .grid{grid-template-columns:1fr}}
+`.trim()
+}
+
+function shouldIncludeFaqPage(ctx: FreeformCtx, profile: BusinessProfile, template: BlockTemplateFamilyKey): boolean {
+  if (template !== 'byggform_architectural_trust') return false
+  const source = sourceFor(ctx, { slug: 'index', title: '', purpose: '', sections: [] })
+  const serviceCount = serviceIdeas(ctx).filter(isGoodServiceTitle).length
+  const questionSignals = (source.match(/\?/g) || []).length
+  const processSignals = (source.match(/\b(process|planering|offert|förfrågan|projekt|ritning|underlag|renovering|installation|service|genomförande|omfattning|kontakt)\b/gi) || []).length
+  const categoryScore = ctx.category ? 2 : 0
+  const projectKindScore = /construction|electrical|plumbing|cleaning|general/.test(String(profile.kind || '')) ? 2 : 0
+  const sourceScore = Math.min(4, Math.floor(source.length / 650))
+  return categoryScore + projectKindScore + sourceScore + Math.min(3, serviceCount) + Math.min(3, questionSignals + Math.floor(processSignals / 4)) >= 8
 }
 
 function sourceFor(ctx: FreeformCtx, page: FreeformPageSpec): string {
@@ -560,6 +745,7 @@ function cleanContentMap(input: any): Record<string, FreeformPageContent> {
 }
 function cleanContent(v: any, ctx: FreeformCtx | null, page: FreeformPageSpec): FreeformPageContent {
   const arr = (a: any) => Array.isArray(a) ? a : []
+  const faqItems = (items: any) => arr(items).map((f: any) => ({ question: clean(decodeText(String(f?.question ?? ''))).slice(0, 90), answer: clean(decodeText(String(f?.answer ?? ''))).slice(0, 260) })).filter((f: any) => f.question && f.answer).slice(0, 6)
   return {
     metaTitle: clean(decodeText(String(v?.metaTitle ?? ''))).slice(0, 80) || page.title,
     metaDescription: clean(decodeText(String(v?.metaDescription ?? ''))).slice(0, 155),
@@ -572,7 +758,8 @@ function cleanContent(v: any, ctx: FreeformCtx | null, page: FreeformPageSpec): 
     secondaryCta: clean(decodeText(String(v?.secondaryCta ?? ''))).slice(0, 34),
     services: arr(v?.services).map((s: any) => ({ title: clean(decodeText(String(s?.title ?? ''))).slice(0, 58), text: clean(decodeText(String(s?.text ?? ''))).slice(0, 240), detail: clean(decodeText(String(s?.detail ?? ''))).slice(0, 180) })).filter((s: any) => s.title && s.text).slice(0, 6),
     sections: arr(v?.sections).map((s: any) => ({ eyebrow: clean(decodeText(String(s?.eyebrow ?? ''))).slice(0, 34), title: clean(decodeText(String(s?.title ?? ''))).slice(0, 85), text: clean(decodeText(String(s?.text ?? ''))).slice(0, 420), bullets: arr(s?.bullets).map((b: any) => clean(decodeText(String(b)))).filter(Boolean).slice(0, 5) })).filter((s: any) => s.title && s.text).slice(0, 5),
-    faqs: arr(v?.faqs).map((f: any) => ({ question: clean(decodeText(String(f?.question ?? ''))).slice(0, 90), answer: clean(decodeText(String(f?.answer ?? ''))).slice(0, 260) })).filter((f: any) => f.question && f.answer).slice(0, 5),
+    faqs: faqItems(v?.faqs).slice(0, 5),
+    faqGroups: arr(v?.faqGroups).map((g: any) => ({ title: clean(decodeText(String(g?.title ?? ''))).slice(0, 52), items: faqItems(g?.items) })).filter((g: any) => g.title && g.items.length).slice(0, 3),
     closingTitle: clean(decodeText(String(v?.closingTitle ?? ''))).slice(0, 90),
     closingText: clean(decodeText(String(v?.closingText ?? ''))).slice(0, 260),
     source: v?.source === 'fallback' ? 'fallback' : v?.source === 'polished' ? 'polished' : v?.source === 'ai' ? 'ai' : undefined,
@@ -588,6 +775,10 @@ function repairContent(ctx: FreeformCtx, input: FreeformPageContent): FreeformPa
     .filter((s, i, arr) => arr.findIndex((x) => x.title.toLowerCase() === s.title.toLowerCase()) === i)
     .slice(0, 6)
   const faqs = (input.faqs || []).filter((f) => f.question && f.answer && !/anpassad efter företaget|sidan|webbplats/i.test(`${f.question} ${f.answer}`)).slice(0, 4)
+  const faqGroups = (input.faqGroups || [])
+    .map((g) => ({ ...g, items: (g.items || []).filter((f) => f.question && f.answer && !/anpassad efter företaget|sidan|webbplats|random|mall/i.test(`${f.question} ${f.answer}`)).slice(0, 5) }))
+    .filter((g) => g.title && g.items.length >= 2)
+    .slice(0, 3)
   return {
     ...input,
     heroEyebrow: badText(input.heroEyebrow) ? profile.heroEyebrow : decodeText(input.heroEyebrow || ''),
@@ -598,6 +789,7 @@ function repairContent(ctx: FreeformCtx, input: FreeformPageContent): FreeformPa
     services: services.length >= 3 ? services : fallback.services,
     sections: (input.sections || []).filter((s) => !badText(s.title) && !badText(s.text)).slice(0, 4).length ? (input.sections || []).filter((s) => !badText(s.title) && !badText(s.text)).slice(0, 4) : fallback.sections,
     faqs: faqs.length >= 3 ? faqs : fallback.faqs,
+    faqGroups: faqGroups.length ? faqGroups : fallback.faqGroups,
     closingTitle: badText(input.closingTitle) ? fallback.closingTitle : decodeText(input.closingTitle || ''),
     closingText: badText(input.closingText) ? fallback.closingText : decodeText(input.closingText || ''),
   }
@@ -690,7 +882,7 @@ async function callModel(key: string, model: string, label: string, system: stri
   const controller = new AbortController()
   const id = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const resp = await fetch(OPENROUTER_URL, { method: 'POST', signal: controller.signal, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'HTTP-Referer': 'https://emailsbotlio.lovable.app', 'X-Title': 'Botlio Freeform Site Builder V5' }, body: JSON.stringify({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], temperature: .55, max_tokens: maxTokens, response_format: { type: 'json_object' } }) })
+    const resp = await fetch(OPENROUTER_URL, { method: 'POST', signal: controller.signal, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'HTTP-Referer': 'https://emailsbotlio.lovable.app', 'X-Title': 'Botlio Freeform Site Builder V7' }, body: JSON.stringify({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], temperature: .55, max_tokens: maxTokens, response_format: { type: 'json_object' } }) })
     if (!resp.ok) throw new Error(`${model} ${resp.status}: ${(await resp.text()).slice(0, 300)}`)
     const data = await resp.json()
     const content = data.choices?.[0]?.message?.content
