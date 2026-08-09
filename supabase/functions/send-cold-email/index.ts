@@ -6,6 +6,8 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+const STOCKHOLM_TZ = 'Europe/Stockholm'
+
 function interpolate(tpl: string, vars: Record<string, any>): string {
   return tpl.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, k) => {
     const v = k.split('.').reduce((acc: any, p: string) => (acc == null ? acc : acc[p]), vars)
@@ -85,6 +87,17 @@ function normaliseFollowupSubject(orig: string): string {
   if (!trimmed) return 'Re: (follow-up)'
   if (/^re:\s*/i.test(trimmed)) return trimmed // already prefixed
   return `Re: ${trimmed}`
+}
+
+function startOfStockholmDayUtc(now = new Date()): Date {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: STOCKHOLM_TZ,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now).map((p) => [p.type, p.value])) as any
+  return new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), 0, 0, 0))
 }
 
 Deno.serve(async (req) => {
@@ -254,6 +267,64 @@ Deno.serve(async (req) => {
     company,
     (domainRow as any).postal_address ?? null,
   )
+
+  // Final safety rails before creating a queued row.
+  if (enrollment_id) {
+    const { count: sentCount } = await supabase
+      .from('sent_emails')
+      .select('id', { count: 'exact', head: true })
+      .eq('enrollment_id', enrollment_id)
+      .in('status', ['sent', 'queued'])
+
+    if ((sentCount ?? 0) >= 4) {
+      await supabase.from('enrollments').update({
+        status: 'completed',
+        current_step: 4,
+        next_send_at: null,
+        deferred_at: null,
+        last_error: null,
+        error_at: null,
+      }).eq('id', enrollment_id)
+      return new Response(JSON.stringify({ skipped: 'sequence_limit_reached' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60_000).toISOString()
+    const { data: recentDuplicate } = await supabase
+      .from('sent_emails')
+      .select('id, sent_at, subject, status')
+      .eq('enrollment_id', enrollment_id)
+      .eq('recipient_email', contact.email)
+      .in('status', ['sent', 'queued'])
+      .gte('sent_at', tenMinutesAgo)
+      .order('sent_at', { ascending: false })
+      .limit(1)
+
+    if ((recentDuplicate ?? []).length > 0) {
+      return new Response(JSON.stringify({ skipped: 'recent_duplicate_blocked' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+  }
+
+  {
+    const startOfDay = startOfStockholmDayUtc()
+    const { data: alreadyToday } = await supabase
+      .from('sent_emails')
+      .select('id, sent_at')
+      .eq('contact_id', contact.id ?? null)
+      .eq('user_id', user_id)
+      .in('status', ['sent', 'queued'])
+      .gte('sent_at', startOfDay.toISOString())
+      .limit(1)
+
+    if ((alreadyToday ?? []).length > 0) {
+      return new Response(JSON.stringify({ skipped: 'already_sent_today' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+  }
 
   // Log pending
   await supabase.from('sent_emails').insert({

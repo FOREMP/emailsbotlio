@@ -30,10 +30,9 @@ type EnrollRow = {
 type SentRow = {
   id: string; sent_at: string; subject: string | null; body: string | null;
   recipient_email: string; status: string; open_count: number; opened_at: string | null;
-  contact_id: string | null;
+  contact_id: string | null; enrollment_id?: string | null;
 };
 
-const STEP_LABEL: Record<number, string> = { 1: "Mail 1", 2: "Mail 2", 3: "Mail 3", 4: "Mail 4" };
 const STATUS_COLOR: Record<string, string> = {
   active: "bg-emerald-500",
   waiting_capacity: "bg-amber-500",
@@ -54,6 +53,7 @@ export default function SiteOutreach() {
   const [dirty, setDirty] = useState<Record<string, any>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
   const [savingLimit, setSavingLimit] = useState(false);
+  const [allSentRows, setAllSentRows] = useState<SentEmailRow[]>([]);
 
   const load = useCallback(async () => {
     // Internal tool — sequence is shared across all logged-in operators.
@@ -83,37 +83,31 @@ export default function SiteOutreach() {
     const enrsWithContact = enrs.map((e: any) => ({ ...e, contact: contactMap.get(e.contact_id) ?? null }));
 
     const enrIds = enrs.map((e: any) => e.id);
-    const { data: sent } = enrIds.length
-      ? await supabase
-          .from("sent_emails")
-          .select("id, sent_at, subject, body, recipient_email, status, open_count, opened_at, contact_id")
-          .in("enrollment_id", enrIds)
-          .order("sent_at", { ascending: false })
-          .limit(5)
-      : { data: [] as SentRow[] };
-
-    // Statistik: hämta ALLA enrollment-ids för sekvensen (lätt query) och sedan
-    // sent_emails senaste 30 dagarna, chunkat för att undvika 414-URL-längd.
+    // Hämta ALLA sent_emails för sekvensen så att UI:n kan visa korrekt nästa steg
+    // och rätt antal skickade per kontakt. Separat 30-dagarsfilter görs för graf/KPI.
     const { data: allEnrIdsRaw } = await supabase
       .from("enrollments").select("id").eq("sequence_id", s.id);
     const allEnrIds = (allEnrIdsRaw ?? []).map((r: any) => r.id);
     const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    const stats: SentEmailRow[] = [];
+    const allSent: SentEmailRow[] = [];
     for (let i = 0; i < allEnrIds.length; i += 200) {
       const chunk = allEnrIds.slice(i, i + 200);
       const { data } = await supabase
         .from("sent_emails")
-        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject")
+        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject, body, open_count, contact_id")
         .in("enrollment_id", chunk)
-        .gte("sent_at", since30)
-        .limit(2000);
-      if (data) stats.push(...(data as SentEmailRow[]));
+        .order("sent_at", { ascending: false })
+        .limit(5000);
+      if (data) allSent.push(...(data as SentEmailRow[]));
     }
+    const stats = allSent.filter((r) => new Date(r.sent_at).toISOString() >= since30);
+    const sent = allSent.slice().sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime()).slice(0, 5) as SentRow[];
 
     setNodes((ns ?? []) as Node[]);
     setEnrollments(enrsWithContact as any);
     setRecent((sent ?? []) as SentRow[]);
     setStatsRows(stats);
+    setAllSentRows(allSent);
     setLoading(false);
   }, []);
 
@@ -139,13 +133,33 @@ export default function SiteOutreach() {
   const dailyLimitNode = throttleNodes[0] ?? null;
   const dailyLimit = Number(dailyLimitNode ? cfgVal(dailyLimitNode, "max_per_day") : 16) || 16;
 
+  const sentCountByEnrollment = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const row of allSentRows) {
+      const eid = (row as any).enrollment_id as string | null;
+      if (!eid) continue;
+      if (row.status !== "sent" && row.status !== "queued") continue;
+      map.set(eid, (map.get(eid) ?? 0) + 1);
+    }
+    return map;
+  }, [allSentRows]);
+
+  const displayStep = useCallback((e: EnrollRow) => {
+    const sentCount = Math.min(sentCountByEnrollment.get(e.id) ?? 0, 4);
+    if (e.status === "completed" || sentCount >= 4) return "Klar (4/4)";
+    if (e.status === "stopped" || e.status === "unsubscribed") return "Stoppad";
+    if (e.status === "failed") return `Avbruten (${sentCount}/4)`;
+    const nextMail = Math.min(sentCount + 1, 4);
+    return `Mail ${nextMail} av 4`;
+  }, [sentCountByEnrollment]);
+
   const counts = useMemo(() => {
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
-    const active = enrollments.filter((e) => e.status === "active" || e.status === "waiting_capacity").length;
-    const waitingRows = enrollments.filter((e) => e.status === "waiting_capacity");
-    const waiting = waitingRows.length;
-    const waitingFirst = waitingRows.filter((e) => !e.last_sent_at).length;
+    const queuedRows = enrollments.filter((e) => e.status === "active" || e.status === "waiting_capacity");
+    const active = queuedRows.length;
+    const waiting = queuedRows.length;
+    const waitingFirst = queuedRows.filter((e) => (sentCountByEnrollment.get(e.id) ?? 0) === 0).length;
     const waitingFollowup = waiting - waitingFirst;
     const completed = enrollments.filter((e) => e.status === "completed").length;
     const stopped = enrollments.filter((e) => e.status === "stopped" || e.status === "unsubscribed").length;
@@ -174,7 +188,7 @@ export default function SiteOutreach() {
       newLast24h, sentFirstToday, sentFollowupToday,
       sentToday: sentFirstToday + sentFollowupToday,
     };
-  }, [enrollments, statsRows]);
+  }, [enrollments, statsRows, sentCountByEnrollment]);
 
 
   const stopEnrollment = async (id: string, reason: string) => {
@@ -345,8 +359,9 @@ export default function SiteOutreach() {
                 <tr>
                   <th className="py-2 pr-3">Företag</th>
                   <th className="py-2 pr-3">Email</th>
-                  <th className="py-2 pr-3">Steg</th>
+                  <th className="py-2 pr-3">Nästa steg</th>
                   <th className="py-2 pr-3">Status</th>
+                  <th className="py-2 pr-3">Skickat</th>
                   <th className="py-2 pr-3">Nästa sändning</th>
                   <th className="py-2 pr-3">Senast skickat</th>
                   <th className="py-2 pr-3 text-right">Åtgärd</th>
@@ -359,9 +374,12 @@ export default function SiteOutreach() {
                     <tr key={e.id} className="border-b border-border/60">
                       <td className="py-2 pr-3 font-medium">{company}</td>
                       <td className="py-2 pr-3 text-muted-foreground">{e.contact?.email ?? "—"}</td>
-                      <td className="py-2 pr-3">{STEP_LABEL[e.current_step] ?? `step ${e.current_step}`}</td>
+                      <td className="py-2 pr-3">{displayStep(e)}</td>
                       <td className="py-2 pr-3">
                         <Badge className={STATUS_COLOR[e.status] ?? "bg-slate-500"}>{e.status}</Badge>
+                      </td>
+                      <td className="py-2 pr-3 text-xs text-muted-foreground">
+                        {Math.min(sentCountByEnrollment.get(e.id) ?? 0, 4)}/4
                       </td>
                       <td className="py-2 pr-3 text-xs text-muted-foreground">
                         {e.next_send_at ? new Date(e.next_send_at).toLocaleString("sv-SE") : "—"}

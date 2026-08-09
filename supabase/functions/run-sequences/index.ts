@@ -236,6 +236,15 @@ Deno.serve(async (req) => {
     return g
   }
 
+  async function getEnrollmentSendCount(enrollmentId: string): Promise<number> {
+    const { count } = await supabase
+      .from('sent_emails')
+      .select('id', { count: 'exact', head: true })
+      .eq('enrollment_id', enrollmentId)
+      .in('status', ['sent', 'queued'])
+    return count ?? 0
+  }
+
   for (const enr of due ?? []) {
     processed++
     try {
@@ -259,6 +268,21 @@ Deno.serve(async (req) => {
       const graph = await getSequenceGraph(enr.sequence_id)
       const nodes = graph.nodes
       const edges = graph.edges
+      let sentCount = await getEnrollmentSendCount(enr.id)
+
+      if (sentCount >= 4) {
+        await supabase.from('enrollments').update({
+          status: 'completed',
+          current_step: 4,
+          next_send_at: null,
+          deferred_at: null,
+          last_error: null,
+          error_at: null,
+        }).eq('id', enr.id)
+        console.log(`[enr ${enr.id}] already at ${sentCount} sends → completed`)
+        continue
+      }
+
       const { data: contact } = await supabase.from('contacts').select('*').eq('id', enr.contact_id).maybeSingle()
 
       if (!contact) {
@@ -371,7 +395,15 @@ Deno.serve(async (req) => {
         }
         // Capacity available — advance and remember which throttle gated the next send.
         const next = nextEdgeFrom(nodes ?? [], edges ?? [], currentNode.id)
-        if (!next) { await supabase.from('enrollments').update({ status: 'completed' }).eq('id', enr.id); continue }
+        if (!next) {
+          await supabase.from('enrollments').update({
+            status: 'completed',
+            current_step: Math.min(4, sentCount),
+            next_send_at: null,
+            deferred_at: null,
+          }).eq('id', enr.id)
+          continue
+        }
         await supabase.from('enrollments').update({
           current_node_id: next.target_node_id,
           next_send_at: nowIso,
@@ -383,10 +415,24 @@ Deno.serve(async (req) => {
       }
 
       if (currentNode.node_type === 'send_email') {
+        // Hard stop: never let one enrollment send more than 4 emails total.
+        if (sentCount >= 4) {
+          await supabase.from('enrollments').update({
+            status: 'completed',
+            current_step: 4,
+            next_send_at: null,
+            deferred_at: null,
+            last_error: null,
+            error_at: null,
+          }).eq('id', enr.id)
+          console.log(`[enr ${enr.id}] hard stop at ${sentCount} sends → completed`)
+          continue
+        }
+
         // Global sequence daily limit: counts NEW first-mail sends only.
-        // Follow-ups (current_step > 1) bypass the cap so long threads always finish.
+        // Follow-ups bypass the cap so long threads always finish.
         const cap = sequenceDailyCap(nodes ?? [])
-        if (cap && (enr.current_step ?? 1) <= 1) {
+        if (cap && !enr.last_sent_at) {
           const startOfDay = startOfStockholmDayUtc()
           // Count sends that already passed through ANY throttle in this sequence today.
           const { count } = await supabase
@@ -660,6 +706,40 @@ Deno.serve(async (req) => {
             is_followup: isFollowup,
           },
         })
+        const skipped = (r.data as any)?.skipped
+        if (skipped) {
+          if (skipped === 'sequence_limit_reached') {
+            await supabase.from('enrollments').update({
+              status: 'completed',
+              current_step: 4,
+              next_send_at: null,
+              deferred_at: null,
+              attempt_count: 0,
+              last_error: null,
+              error_at: null,
+            }).eq('id', enr.id)
+            console.log(`[enr ${enr.id}] send skipped: limit reached → completed`)
+            continue
+          }
+
+          if (skipped === 'already_sent_today' || skipped === 'recent_duplicate_blocked') {
+            const tomorrow = nextStockholmMidnightUtc()
+            const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
+            await supabase.from('enrollments').update({
+              current_node_id: upstreamSched ?? enr.current_node_id,
+              next_send_at: tomorrow.toISOString(),
+              deferred_at: nowIso,
+              status: 'active',
+              attempt_count: 0,
+              last_error: skipped === 'already_sent_today'
+                ? 'same-day double-send guard — already sent to this contact today'
+                : 'recent duplicate send blocked — resumed next send day',
+              error_at: nowIso,
+            }).eq('id', enr.id)
+            console.log(`[enr ${enr.id}] send skipped: ${skipped} → deferred`)
+            continue
+          }
+        }
         if (r.error || (r.data as any)?.error) {
           const msg = (r.data as any)?.error || r.error?.message || 'unknown send error'
           const nextAttempt = (enr.attempt_count ?? 0) + 1
@@ -702,13 +782,17 @@ Deno.serve(async (req) => {
         }
 
         const next = nextEdgeFrom(nodes ?? [], edges ?? [], currentNode.id)
-        if (!next) {
+        const sentCountAfterThisSend = sentCount + 1
+
+        if (!next || sentCountAfterThisSend >= 4) {
           await supabase.from('enrollments').update({
             status: 'completed', last_sent_at: nowIso, deferred_at: null,
+            current_step: Math.min(4, sentCountAfterThisSend),
+            next_send_at: null,
             attempt_count: 0, last_error: null,
             ...stickyUpdate,
           }).eq('id', enr.id)
-          console.log(`[enr ${enr.id}] no next after send → completed`)
+          console.log(`[enr ${enr.id}] send #${sentCountAfterThisSend} reached terminal state → completed`)
           continue
         }
         await supabase.from('enrollments').update({
@@ -717,6 +801,7 @@ Deno.serve(async (req) => {
           next_send_at: nowIso,
           deferred_at: null,
           status: 'active',
+          current_step: sentCountAfterThisSend,
           attempt_count: 0,
           last_error: null,
           ...stickyUpdate,
@@ -727,7 +812,15 @@ Deno.serve(async (req) => {
 
       if (currentNode.node_type === 'schedule') {
         const next = nextEdgeFrom(nodes ?? [], edges ?? [], currentNode.id)
-        if (!next) { await supabase.from('enrollments').update({ status: 'completed' }).eq('id', enr.id); continue }
+        if (!next) {
+          await supabase.from('enrollments').update({
+            status: 'completed',
+            current_step: Math.min(4, sentCount),
+            next_send_at: null,
+            deferred_at: null,
+          }).eq('id', enr.id)
+          continue
+        }
         const tod = String(cfg.time_of_day ?? '09:00')
         const [hh, mm] = tod.split(':').map((x: string) => Number(x))
         const allowedDays: string[] = Array.isArray(cfg.days) ? cfg.days : []
@@ -801,7 +894,15 @@ Deno.serve(async (req) => {
 
       if (currentNode.node_type === 'wait') {
         const next = nextEdgeFrom(nodes ?? [], edges ?? [], currentNode.id)
-        if (!next) { await supabase.from('enrollments').update({ status: 'completed' }).eq('id', enr.id); continue }
+        if (!next) {
+          await supabase.from('enrollments').update({
+            status: 'completed',
+            current_step: Math.min(4, sentCount),
+            next_send_at: null,
+            deferred_at: null,
+          }).eq('id', enr.id)
+          continue
+        }
         const waitMs = msFromUnit(Number(cfg.duration ?? 1), cfg.unit ?? 'days')
         const nextAt = new Date(Date.now() + waitMs).toISOString()
         await supabase.from('enrollments').update({
@@ -823,7 +924,15 @@ Deno.serve(async (req) => {
           metadata: { note: cfg.note ?? null },
         })
         const next = nextEdgeFrom(nodes ?? [], edges ?? [], currentNode.id)
-        if (!next) { await supabase.from('enrollments').update({ status: 'completed' }).eq('id', enr.id); continue }
+        if (!next) {
+          await supabase.from('enrollments').update({
+            status: 'completed',
+            current_step: Math.min(4, sentCount),
+            next_send_at: null,
+            deferred_at: null,
+          }).eq('id', enr.id)
+          continue
+        }
         await supabase.from('enrollments').update({
           current_node_id: next.target_node_id,
           next_send_at: nowIso,
@@ -835,7 +944,15 @@ Deno.serve(async (req) => {
       if (currentNode.node_type === 'condition') {
         const next = (edges ?? []).find((e: any) => e.source_node_id === currentNode.id && e.source_handle === 'false')
           ?? (edges ?? []).find((e: any) => e.source_node_id === currentNode.id)
-        if (!next) { await supabase.from('enrollments').update({ status: 'completed' }).eq('id', enr.id); continue }
+        if (!next) {
+          await supabase.from('enrollments').update({
+            status: 'completed',
+            current_step: Math.min(4, sentCount),
+            next_send_at: null,
+            deferred_at: null,
+          }).eq('id', enr.id)
+          continue
+        }
         await supabase.from('enrollments').update({
           current_node_id: next.target_node_id,
           next_send_at: nowIso,
@@ -845,7 +962,12 @@ Deno.serve(async (req) => {
       }
 
       if (currentNode.node_type === 'end') {
-        await supabase.from('enrollments').update({ status: 'completed' }).eq('id', enr.id)
+        await supabase.from('enrollments').update({
+          status: 'completed',
+          current_step: Math.min(4, sentCount),
+          next_send_at: null,
+          deferred_at: null,
+        }).eq('id', enr.id)
         console.log(`[enr ${enr.id}] end → completed`)
         continue
       }
