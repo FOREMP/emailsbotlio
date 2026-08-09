@@ -213,7 +213,7 @@ async function recoverStuckGenerations(
 
   const { data: leads, error: leadErr } = await supabase
     .from('site_leads')
-    .select('id, generated_site_id')
+    .select('id, generated_site_id, feedback')
     .eq('status', 'generating')
     .not('generated_site_id', 'is', null)
     .limit(50)
@@ -267,6 +267,7 @@ async function recoverStuckGenerations(
     }
 
     if (gs.status === 'failed') {
+      if (await autoRetryTransient(supabase, lead, gs)) { recovered++; continue }
       await supabase.from('site_leads').update({
         status: 'failed',
         feedback: `Site pipeline failed: ${(gs.error_message ?? '').slice(0, 400)}`,
@@ -274,6 +275,7 @@ async function recoverStuckGenerations(
       recovered++
       continue
     }
+
 
     await supabase.from('generated_sites').update({
       status: 'failed',
@@ -303,7 +305,7 @@ async function reconcile(
   // Only look at leads currently mid-flight
   const { data: leads } = await supabase
     .from('site_leads')
-    .select('id, status, generated_site_id')
+    .select('id, status, generated_site_id, feedback')
     .eq('status', 'generating')
     .not('generated_site_id', 'is', null)
     .limit(50)
@@ -337,6 +339,7 @@ async function reconcile(
       }).eq('id', lead.id)
       moved++
     } else if (gs.status === 'failed') {
+      if (await autoRetryTransient(supabase, lead, gs)) { moved++; continue }
       await supabase.from('site_leads').update({
         status: 'failed',
         feedback: `Site pipeline failed: ${(gs.error_message ?? '').slice(0, 400)}`,
@@ -346,6 +349,29 @@ async function reconcile(
   }
   return moved
 }
+
+// A dead worker / timeout is infrastructure noise, not a bad lead. Requeue the
+// whole pipeline once automatically instead of demanding a manual click.
+const RETRY_MARKER = '[auto-retry]'
+const TRANSIENT_RE = /(worker died|timed out|no worker progress|resource limit|stale .* was reset)/i
+
+async function autoRetryTransient(
+  supabase: ReturnType<typeof createClient>,
+  lead: { id: string; feedback?: string | null },
+  gs: { id: string; error_message?: string | null },
+): Promise<boolean> {
+  const msg = gs.error_message ?? ''
+  if (!TRANSIENT_RE.test(msg)) return false
+  if ((lead.feedback ?? '').includes(RETRY_MARKER)) return false
+
+  await supabase.from('site_leads').update({
+    status: 'needs_site',
+    generated_site_id: null,
+    feedback: `${RETRY_MARKER} Automatisk omkörning efter tekniskt avbrott: ${msg.slice(0, 200)}`,
+  }).eq('id', lead.id)
+  return true
+}
+
 
 // ---------------------------------------------------------------------------
 // AUDIT — Firecrawl (markdown + screenshot) + Gemini vision (deterministic).
