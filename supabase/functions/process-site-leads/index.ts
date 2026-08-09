@@ -267,6 +267,7 @@ async function recoverStuckGenerations(
     }
 
     if (gs.status === 'failed') {
+      if (await autoRetryTransient(supabase, lead, gs)) { recovered++; continue }
       await supabase.from('site_leads').update({
         status: 'failed',
         feedback: `Site pipeline failed: ${(gs.error_message ?? '').slice(0, 400)}`,
@@ -274,6 +275,7 @@ async function recoverStuckGenerations(
       recovered++
       continue
     }
+
 
     await supabase.from('generated_sites').update({
       status: 'failed',
