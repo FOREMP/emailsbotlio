@@ -213,7 +213,7 @@ async function recoverStuckGenerations(
 
   const { data: leads, error: leadErr } = await supabase
     .from('site_leads')
-    .select('id, generated_site_id')
+    .select('id, generated_site_id, feedback')
     .eq('status', 'generating')
     .not('generated_site_id', 'is', null)
     .limit(50)
