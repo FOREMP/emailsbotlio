@@ -8,6 +8,8 @@ import {
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 export const BUILD_MODEL = 'deepseek/deepseek-v4-flash-0731'
+export const BUILD_FALLBACK_MODEL = 'deepseek/deepseek-chat-v3.1'
+export const BUILD_LAST_RESORT_MODEL = 'openai/gpt-4.1-mini'
 export const LANG_MODEL = 'openai/gpt-4.1-mini'
 const VERSION = 7
 const MAX_PAGES = 6
@@ -124,7 +126,7 @@ export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<st
       const got = await pageContent(ctx, plan, next)
       content[next.slug] = got.content
       const done = plan.pages.every((p) => content[p.slug])
-      return step(false, files, meta({ ...progress, stage: done ? 'polish_content' : 'content', content, lastStage: `content:${next.slug}`, lastError: got.error ?? progress.lastError, fallbacksUsed: got.source === 'fallback' ? addFallback(progress, `content:${next.slug}`) : progress.fallbacksUsed }), `${got.source} content ready for ${next.slug}`)
+      return step(false, files, meta({ ...progress, stage: done ? 'polish_content' : 'content', content, lastStage: `content:${next.slug}`, lastError: got.error ?? progress.lastError, fallbacksUsed: got.source === 'fallback' ? addFallback(progress, `content:${next.slug}`) : progress.fallbacksUsed }), `${got.source} content ready for ${next.slug}${got.model ? ` via ${got.model}` : ''}`)
     }
     return step(false, files, meta({ ...progress, stage: 'polish_content', content, lastStage: 'content:complete' }), 'v7 content complete')
   }
@@ -137,7 +139,7 @@ export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<st
       content[next.slug] = repairContent(ctx, got.content)
       const nowPolished = Array.from(new Set([...polished, next.slug]))
       const done = plan.pages.every((p) => nowPolished.includes(p.slug))
-      return step(false, files, meta({ ...progress, stage: done ? 'render' : 'polish_content', content, polished: nowPolished, lastStage: `polish:${next.slug}`, lastError: got.error ?? progress.lastError, fallbacksUsed: got.source === 'fallback' ? addFallback(progress, `polish:${next.slug}`) : progress.fallbacksUsed }), `${got.source} polish ready for ${next.slug}`)
+      return step(false, files, meta({ ...progress, stage: done ? 'render' : 'polish_content', content, polished: nowPolished, lastStage: `polish:${next.slug}`, lastError: got.error ?? progress.lastError, fallbacksUsed: got.source === 'fallback' ? addFallback(progress, `polish:${next.slug}`) : progress.fallbacksUsed }), `${got.source} polish ready for ${next.slug}${got.model ? ` via ${got.model}` : ''}`)
     }
     return step(false, files, meta({ ...progress, stage: 'render', content, lastStage: 'polish:complete' }), 'v7 polish complete')
   }
@@ -281,7 +283,7 @@ function buildFactPack(ctx: FreeformCtx): FactPack {
   }
 }
 
-async function pageContent(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec): Promise<{ source: 'ai' | 'fallback'; content: FreeformPageContent; error?: string }> {
+async function pageContent(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec): Promise<{ source: 'ai' | 'fallback'; content: FreeformPageContent; error?: string; model?: string }> {
   const profile = buildProfile(ctx)
   const pack = buildFactPack(ctx)
   const system = `Du skriver första utkastet till innehåll för en svensk premium-webbplats. Svara endast med JSON. Ingen HTML. Ingen CSS.
@@ -325,11 +327,12 @@ Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","he
     sourceFor(ctx, page).slice(0, 2200) || '[Tunt underlag. Använd säker branschcopy utan påhittade fakta.]',
   ].filter(Boolean).join('\n')
   try {
-    const raw = await callModel(ctx.openrouterKey, BUILD_MODEL, `freeform-v7-content:${page.slug}`, system, user, 3200, 38_000)
+    const got = await callBuildModelCascade(ctx.openrouterKey, `freeform-v7-content:${page.slug}`, system, user, 3200)
+    const raw = got.text
     const parsed = parseJson(raw)
     const c = repairContent(ctx, cleanContent(parsed, ctx, page))
     if (!c.heroTitle || !c.heroLead) throw new Error('missing hero fields')
-    return { source: 'ai', content: { ...c, source: 'ai' } }
+    return { source: 'ai', content: { ...c, source: 'ai' }, model: got.model }
   } catch (e) {
     const error = (e as Error).message
     console.warn(`[freeform-v7] content fallback for ${page.slug}: ${error}`)
@@ -337,7 +340,7 @@ Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","he
   }
 }
 
-async function polishContent(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, draft: FreeformPageContent): Promise<{ source: 'polished' | 'fallback'; content: FreeformPageContent; error?: string }> {
+async function polishContent(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, draft: FreeformPageContent): Promise<{ source: 'polished' | 'fallback'; content: FreeformPageContent; error?: string; model?: string }> {
   const profile = buildProfile(ctx)
   const pack = buildFactPack(ctx)
   const system = `Du är en senior svensk redaktör och conversion copywriter. Du får JSON-innehåll till EN sida.
@@ -379,7 +382,7 @@ HÅRDA REGLER:
     const parsed = parseJson(raw)
     const c = repairContent(ctx, cleanContent(parsed, ctx, page))
     if (!c.heroTitle || !c.heroLead) throw new Error('polish missing hero fields')
-    return { source: 'polished', content: { ...c, source: 'polished' } }
+    return { source: 'polished', content: { ...c, source: 'polished' }, model: LANG_MODEL }
   } catch (e) {
     const error = (e as Error).message
     console.warn(`[freeform-v7] polish fallback for ${page.slug}: ${error}`)
@@ -442,15 +445,19 @@ function render(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, c:
   const faqPage = page.pageKind === 'faq'
   const processPage = page.pageKind === 'process'
   const contactPage = page.pageKind === 'contact'
+  const showServices = shouldRenderServices(plan, page)
+  const showIntro = shouldRenderIntro(plan, page)
+  const showGallery = shouldRenderGallery(plan, page, home)
+  const showContact = shouldRenderContact(plan, page)
   const html = [
     nav(plan, business, page.slug),
     home ? hero(c, imgs[0], ctx) : pageHero(c, imgs[0], ctx),
-    intro(c, imgs[1], ctx),
-    faqPage ? '' : services(c, ctx),
+    showIntro ? intro(c, imgs[1], ctx) : '',
+    showServices ? services(c, ctx) : '',
     sections(c, processPage),
-    home && !faqPage ? gallery(ctx, imgs) : '',
+    showGallery ? gallery(ctx, imgs) : '',
     faq(c, faqPage),
-    contact(ctx, c),
+    showContact ? contact(ctx, c) : '',
     contactPage ? '' : cta(c, ctx),
     footer(plan, business, ctx),
   ].filter(Boolean).join('\n')
@@ -658,7 +665,31 @@ function shouldIncludeFaqPage(ctx: FreeformCtx, profile: BusinessProfile, templa
   const categoryScore = ctx.category ? 2 : 0
   const projectKindScore = /construction|electrical|plumbing|cleaning|general/.test(String(profile.kind || '')) ? 2 : 0
   const sourceScore = Math.min(4, Math.floor(source.length / 650))
-  return categoryScore + projectKindScore + sourceScore + Math.min(3, serviceCount) + Math.min(3, questionSignals + Math.floor(processSignals / 4)) >= 8
+  return categoryScore + projectKindScore + sourceScore + Math.min(3, serviceCount) + Math.min(3, questionSignals + Math.floor(processSignals / 4)) >= 6
+}
+
+function shouldRenderServices(plan: FreeformPlan, page: FreeformPageSpec): boolean {
+  if (plan.templateFamily === 'byggform_architectural_trust') return page.pageKind === 'landing' || page.pageKind === 'services'
+  if (plan.templateFamily === 'service_clarity_default') return page.pageKind === 'landing' || page.pageKind === 'services'
+  if (plan.templateFamily === 'salon_editorial_luxury') return page.pageKind === 'landing' || page.pageKind === 'services'
+  return page.pageKind !== 'faq'
+}
+
+function shouldRenderIntro(plan: FreeformPlan, page: FreeformPageSpec): boolean {
+  if (plan.templateFamily === 'byggform_architectural_trust') return page.pageKind === 'landing' || page.pageKind === 'services' || page.pageKind === 'about'
+  if (plan.templateFamily === 'service_clarity_default') return page.pageKind !== 'faq'
+  return page.pageKind !== 'faq'
+}
+
+function shouldRenderGallery(plan: FreeformPlan, page: FreeformPageSpec, home: boolean): boolean {
+  if (!home || page.pageKind === 'faq') return false
+  if (plan.templateFamily === 'byggform_architectural_trust') return false
+  return true
+}
+
+function shouldRenderContact(plan: FreeformPlan, page: FreeformPageSpec): boolean {
+  if (plan.templateFamily === 'byggform_architectural_trust') return page.pageKind === 'landing' || page.pageKind === 'contact' || page.pageKind === 'faq'
+  return page.pageKind !== 'contact'
 }
 
 function sourceFor(ctx: FreeformCtx, page: FreeformPageSpec): string {
@@ -895,4 +926,22 @@ async function callModel(key: string, model: string, label: string, system: stri
   } finally {
     clearTimeout(id)
   }
+}
+
+async function callBuildModelCascade(key: string, label: string, system: string, user: string, maxTokens: number): Promise<{ model: string; text: string }> {
+  const attempts: { model: string; timeoutMs: number }[] = [
+    { model: BUILD_MODEL, timeoutMs: 38_000 },
+    { model: BUILD_FALLBACK_MODEL, timeoutMs: 42_000 },
+    { model: BUILD_LAST_RESORT_MODEL, timeoutMs: 42_000 },
+  ]
+  const errors: string[] = []
+  for (const attempt of attempts) {
+    try {
+      const text = await callModel(key, attempt.model, label, system, user, maxTokens, attempt.timeoutMs)
+      return { model: attempt.model, text }
+    } catch (error) {
+      errors.push(`${attempt.model}: ${(error as Error).message}`)
+    }
+  }
+  throw new Error(errors.join(' | '))
 }

@@ -178,8 +178,8 @@ export const BLOCK_TEMPLATE_FAMILIES: Record<BlockTemplateFamilyKey, BlockTempla
 
 const RESTAURANT_RE = /(restaurang|restaurant|bistro|bar\b|pub\b|café|cafe|pizzeria|bageri|catering|mat|lunch|krog|diner|brasserie|trattoria)/i
 const EDITORIAL_SERVICE_RE = /(frisör|frisor|hair|barber|salong|skönhet|beauty|nagel|nail|frans|bryn|lash|brow|spa\b|massage|klinik|clinic|hudvård|skin|wellness|terapi|terapeut|kosmetisk|makeup|stylist|studio)/i
-const ARCHITECTURAL_TRUST_RE = /(bygg|renover|snick|tak|fasad|måleri|markarbete|anlägg|platt|kakel|badrum|golv|elektriker|elinstall|elfirma|vvs|rör|städ|lokalvård|flyttstäd|teknisk service|montage|installation|projekt)/i
-const PRACTICAL_SERVICE_RE = /(bilverkstad|mekaniker|auto|däck|bilservice|bilrekond|billack|bilglas|allmän service|lokalt företag)/i
+const AUTOMOTIVE_RE = /(bilverkstad|mekaniker|auto|däck|bilservice|bilrekond|billack|bilglas|car repair|auto shop|tyre|motorverkstad)/i
+const ARCHITECTURAL_TRUST_RE = /(bygg|renover|snick|tak|fasad|måleri|markarbete|anlägg|platt|kakel|badrum|golv|elektriker|elinstall|elfirma|vvs|rör|städ|lokalvård|flyttstäd|teknisk service|montage|installation|projekt|serviceföretag|entreprenad|underhåll|offert|förfrågan|planering|konsultation|företagstjänst|fastighet|lokal|hemservice)/i
 
 export function selectBlockTemplateFamily(input: {
   category?: string | null
@@ -197,15 +197,19 @@ export function selectBlockTemplateFamily(input: {
   // The uploaded category is the strongest signal. It is what Eric maps from the scraper.
   const primary = [category, niche, nicheLabel, businessName].filter(Boolean).join(' ')
   if (RESTAURANT_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.bistro_atmospheric_landing
-  if (ARCHITECTURAL_TRUST_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.byggform_architectural_trust
-  if (PRACTICAL_SERVICE_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.service_clarity_default
   if (EDITORIAL_SERVICE_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.salon_editorial_luxury
+  if (AUTOMOTIVE_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.service_clarity_default
+  if (ARCHITECTURAL_TRUST_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.byggform_architectural_trust
+
+  // If the lead already has a category and it is not restaurant/beauty/auto,
+  // prefer the stronger Byggform-style family rather than the old generic one.
+  if (category) return BLOCK_TEMPLATE_FAMILIES.byggform_architectural_trust
 
   // Source text is intentionally weaker so a random scraped word does not hijack the niche.
   if (!category && RESTAURANT_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.bistro_atmospheric_landing
-  if (!category && ARCHITECTURAL_TRUST_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.byggform_architectural_trust
-  if (!category && PRACTICAL_SERVICE_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.service_clarity_default
   if (!category && EDITORIAL_SERVICE_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.salon_editorial_luxury
+  if (!category && AUTOMOTIVE_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.service_clarity_default
+  if (!category && ARCHITECTURAL_TRUST_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.byggform_architectural_trust
 
   return BLOCK_TEMPLATE_FAMILIES.service_clarity_default
 }
