@@ -128,19 +128,39 @@ Deno.serve(async (req) => {
       .select('id', { count: 'exact', head: true })
       .gte('created_at', `${today}T00:00:00Z`)
 
-    // Usable stock = leads that can still be sent out (in flight, waiting for
-    // review, or approved but not yet emailed). Parked/rejected are excluded.
+    // Usable stock = sites still being built/reviewed plus contacts that are
+    // actually waiting for their first email in Site Demo Outreach.
+    //
+    // Do not use site_leads.status='approved' + last_email_sent_at here. Older
+    // approvals never had that mirror field updated, so they remained counted
+    // forever even though they had no enrollment. That made stock look full
+    // (111 stale rows in production) while the real first-mail queue only had
+    // 9 contacts, preventing the seven missing replacement sites from being
+    // generated.
     const { count: pendingReview } = await supabase
       .from('site_leads')
       .select('id', { count: 'exact', head: true })
       .in('status', ['generating', 'awaiting_approval'])
-    const { count: approvedUnsent } = await supabase
-      .from('site_leads')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'approved')
-      .is('last_email_sent_at', null)
 
-    const stock = (pendingReview ?? 0) + (approvedUnsent ?? 0)
+    const { data: outreachSequence } = await supabase
+      .from('sequences')
+      .select('id')
+      .eq('name', 'Site Demo Outreach')
+      .eq('status', 'active')
+      .maybeSingle()
+
+    let queuedFirstEmails = 0
+    if (outreachSequence?.id) {
+      const { count } = await supabase
+        .from('enrollments')
+        .select('id', { count: 'exact', head: true })
+        .eq('sequence_id', outreachSequence.id)
+        .in('status', ['active', 'waiting_capacity'])
+        .is('last_sent_at', null)
+      queuedFirstEmails = count ?? 0
+    }
+
+    const stock = (pendingReview ?? 0) + queuedFirstEmails
     const stockNeeded = Math.max(0, dailyCap - stock)
     // Safety valve so a big rejection spree can't burn unlimited credits in a
     // single day: never build more than 2x the daily send capacity per day.
