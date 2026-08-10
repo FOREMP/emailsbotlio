@@ -118,15 +118,36 @@ Deno.serve(async (req) => {
     const dailyCap = (dailySenders ?? []).reduce((s: number, r: any) => s + (r.daily_limit ?? 0), 0)
       || DAILY_GEN_CAP_FALLBACK
 
-    // Count builds actually STARTED today. Using site_leads.updated_at made
-    // approvals of older leads eat today's quota, starving generation.
+    // Stock-based capacity: we want at least `dailyCap` demo sites available
+    // for tomorrow's sends at all times. Anything parked/rejected drops out of
+    // the stock, so the pipeline immediately refills instead of waiting for
+    // the next calendar day.
     const today = new Date().toISOString().slice(0, 10)
-    const { count: doneToday } = await supabase
+    const { count: builtToday } = await supabase
       .from('generated_sites')
       .select('id', { count: 'exact', head: true })
       .gte('created_at', `${today}T00:00:00Z`)
-    const capacity = Math.max(0, dailyCap - (doneToday ?? 0))
+
+    // Usable stock = leads that can still be sent out (in flight, waiting for
+    // review, or approved but not yet emailed). Parked/rejected are excluded.
+    const { count: pendingReview } = await supabase
+      .from('site_leads')
+      .select('id', { count: 'exact', head: true })
+      .in('status', ['generating', 'awaiting_approval'])
+    const { count: approvedUnsent } = await supabase
+      .from('site_leads')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'approved')
+      .is('last_email_sent_at', null)
+
+    const stock = (pendingReview ?? 0) + (approvedUnsent ?? 0)
+    const stockNeeded = Math.max(0, dailyCap - stock)
+    // Safety valve so a big rejection spree can't burn unlimited credits in a
+    // single day: never build more than 2x the daily send capacity per day.
+    const dailyBudget = Math.max(0, dailyCap * 2 - (builtToday ?? 0))
+    const capacity = Math.min(stockNeeded, dailyBudget)
     report.capacity = capacity
+
 
     if (capacity > 0) {
       // Bounded-concurrency pipeline: keep up to MAX_CONCURRENT_GEN leads
