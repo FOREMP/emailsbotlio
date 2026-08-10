@@ -27,7 +27,7 @@ const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
 
 const AUDIT_PER_TICK = 3    // Firecrawl+Gemini per invocation — keep memory low
 const GEN_PER_TICK = 3      // how many new pipelines may START per tick
-const MAX_CONCURRENT_GEN = 5 // how many leads may be mid-pipeline at once
+const MAX_CONCURRENT_GEN = 8 // enough headroom to refill a 7-site approval gap without serial starvation
 const DAILY_GEN_CAP_FALLBACK = 16  // used only if we can't read sender limits
 const OUTREACH_DOMAIN = 'foremp.email'  // sites/day tracks daily send capacity on this domain
 const GHOST_LIST_NAME = 'Site Leads (auto)'
