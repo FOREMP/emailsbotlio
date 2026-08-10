@@ -198,14 +198,23 @@ Deno.serve(async (req) => {
           report.errors.push('idle: no needs_site leads ready')
         }
 
-        for (const lead of needsSite ?? []) {
-          try {
-            await startGeneration(supabase, supabaseUrl, serviceKey, lead as any)
+        // Scraping can take long enough that starting leads serially exhausts
+        // the edge invocation after only one site. Start this tick's bounded
+        // batch concurrently so all available slots are actually filled.
+        const starts = await Promise.allSettled(
+          (needsSite ?? []).map((lead) =>
+            startGeneration(supabase, supabaseUrl, serviceKey, lead as any)
+              .then(() => lead.id),
+          ),
+        )
+        starts.forEach((result, index) => {
+          if (result.status === 'fulfilled') {
             report.generated++
-          } catch (e) {
-            report.errors.push(`gen ${lead.id}: ${(e as Error).message}`)
+          } else {
+            const leadId = needsSite?.[index]?.id ?? 'unknown'
+            report.errors.push(`gen ${leadId}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`)
           }
-        }
+        })
       }
     }
 
