@@ -12,6 +12,10 @@ const corsHeaders = {
 }
 
 const VERCEL = 'https://api.vercel.com'
+// All demos deploy through one reusable Vercel project. Creating one project
+// per lead eventually hits Vercel's project-count limit and blocks the whole
+// outreach pipeline. Each deployment still receives its own readable alias.
+const SHARED_PROJECT = 'foremp-site-demos'
 
 interface Req {
   generated_site_id?: string
@@ -49,6 +53,17 @@ Deno.serve(async (req) => {
       .filter(([, data]) => typeof data === 'string' && data.length > 0)
       .map(([file, data]) => ({ file, data }))
 
+    // Reuse any existing demo project immediately, including accounts that
+    // have already reached their Vercel project limit.
+    const { data: reusable } = await supabase
+      .from('generated_sites')
+      .select('vercel_project_id')
+      .not('vercel_project_id', 'is', null)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const projectTarget = reusable?.vercel_project_id || SHARED_PROJECT
+
     // Prefer the real company name for a human-readable URL: demo-<company>.vercel.app
     let companyName = ''
     if (site.site_lead_id) {
@@ -73,12 +88,12 @@ Deno.serve(async (req) => {
 
     // Short names avoid global name collisions and over-long hostnames.
     const companySlug = slug(companyName, 30) || 'site'
-    const primaryName = trimName(`demo-${companySlug}`)
-    const fallbackName = trimName(`demo-${companySlug}-${site.id.slice(0, 4)}`)
+    const primaryAlias = `${trimName(`demo-${companySlug}`)}.vercel.app`
+    const fallbackAlias = `${trimName(`demo-${companySlug}-${site.id.slice(0, 4)}`)}.vercel.app`
 
     await supabase.from('generated_sites').update({ status: 'deploying', error_message: null }).eq('id', generated_site_id)
 
-    const deploy = async (projectName: string) => {
+    const deploy = async () => {
       const resp = await fetch(`${VERCEL}/v13/deployments`, {
         method: 'POST',
         headers: {
@@ -86,8 +101,8 @@ Deno.serve(async (req) => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          name: projectName,
-          project: projectName,
+          name: SHARED_PROJECT,
+          project: projectTarget,
           target: 'production',
           files: filesArray,
           projectSettings: {
@@ -99,16 +114,10 @@ Deno.serve(async (req) => {
           },
         }),
       })
-      return { resp, data: await resp.json(), projectName }
+      return { resp, data: await resp.json() }
     }
 
-    let out = await deploy(primaryName)
-    if (!out.resp.ok && (out.resp.status === 409 || out.resp.status === 403 || out.resp.status === 400)) {
-      // Name already taken by another project → add a short unique suffix.
-      out = await deploy(fallbackName)
-    }
-
-    const { resp: deployResp, data: deployData, projectName } = out
+    const { resp: deployResp, data: deployData } = await deploy()
     if (!deployResp.ok) {
       await supabase.from('generated_sites').update({
         status: 'failed',
@@ -123,14 +132,17 @@ Deno.serve(async (req) => {
     // Disable Vercel deployment protection (SSO/password) so the demo is publicly viewable.
     if (deployData.projectId) await disableProtection(vercelToken, deployData.projectId)
 
-    // Try to actually claim the pretty alias instead of assuming Vercel gave it to us.
+    // Claim a company-readable alias. If that alias is already attached to a
+    // different demo, use the stable site-id suffix instead.
+    let assignedAlias: string | null = null
     if (deploymentId) {
-      await assignAlias(vercelToken, deploymentId, `${projectName}.vercel.app`)
+      if (await assignAlias(vercelToken, deploymentId, primaryAlias)) assignedAlias = primaryAlias
+      else if (await assignAlias(vercelToken, deploymentId, fallbackAlias)) assignedAlias = fallbackAlias
     }
 
     // Build the candidate list from what Vercel really reported, then verify.
     const candidates = uniq([
-      `https://${projectName}.vercel.app`,
+      ...(assignedAlias ? [`https://${assignedAlias}`] : []),
       ...((deployData.alias as string[] | undefined) ?? []).map((a) => `https://${a}`),
       ...(deployData.projectId ? await projectDomains(vercelToken, deployData.projectId) : []),
       deploymentUrl,
