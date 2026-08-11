@@ -122,12 +122,6 @@ Deno.serve(async (req) => {
     // for tomorrow's sends at all times. Anything parked/rejected drops out of
     // the stock, so the pipeline immediately refills instead of waiting for
     // the next calendar day.
-    const today = new Date().toISOString().slice(0, 10)
-    const { count: builtToday } = await supabase
-      .from('generated_sites')
-      .select('id', { count: 'exact', head: true })
-      .gte('created_at', `${today}T00:00:00Z`)
-
     // Usable stock = sites still being built/reviewed plus contacts that are
     // actually waiting for their first email in Site Demo Outreach.
     //
@@ -162,10 +156,10 @@ Deno.serve(async (req) => {
 
     const stock = (pendingReview ?? 0) + queuedFirstEmails
     const stockNeeded = Math.max(0, dailyCap - stock)
-    // Safety valve so a big rejection spree can't burn unlimited credits in a
-    // single day: never build more than 2x the daily send capacity per day.
-    const dailyBudget = Math.max(0, dailyCap * 2 - (builtToday ?? 0))
-    const capacity = Math.min(stockNeeded, dailyBudget)
+    // Refill from real usable stock. Failed/retried builds and sites already
+    // sent must not consume tomorrow's inventory allowance; the stock target
+    // itself is the safety bound.
+    const capacity = stockNeeded
     report.capacity = capacity
 
 
