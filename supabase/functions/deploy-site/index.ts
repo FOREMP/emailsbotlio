@@ -53,6 +53,17 @@ Deno.serve(async (req) => {
       .filter(([, data]) => typeof data === 'string' && data.length > 0)
       .map(([file, data]) => ({ file, data }))
 
+    // Reuse any existing demo project immediately, including accounts that
+    // have already reached their Vercel project limit.
+    const { data: reusable } = await supabase
+      .from('generated_sites')
+      .select('vercel_project_id')
+      .not('vercel_project_id', 'is', null)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const projectTarget = reusable?.vercel_project_id || SHARED_PROJECT
+
     // Prefer the real company name for a human-readable URL: demo-<company>.vercel.app
     let companyName = ''
     if (site.site_lead_id) {
@@ -91,7 +102,7 @@ Deno.serve(async (req) => {
         },
         body: JSON.stringify({
           name: SHARED_PROJECT,
-          project: SHARED_PROJECT,
+          project: projectTarget,
           target: 'production',
           files: filesArray,
           projectSettings: {
