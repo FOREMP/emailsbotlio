@@ -608,7 +608,7 @@ body.template-bistro_atmospheric_landing{--radius:26px;background:#090806;color:
 .template-byggform_architectural_trust h1,.template-byggform_architectural_trust h2{font-family:Georgia,Times New Roman,serif;font-weight:400;letter-spacing:-.035em}
 .template-byggform_architectural_trust h1{max-width:13ch;font-size:clamp(48px,7vw,102px)}
 .template-byggform_architectural_trust h2{max-width:16ch}
-.template-byggform_architectural_trust .section-alt{background:#f1eee7}
+.template-byggform_architectural_trust .section-alt{background:var(--surface)}
 .template-byggform_architectural_trust .grid{display:grid;grid-template-columns:repeat(6,1fr);gap:0;border-top:1px solid var(--border);border-left:1px solid var(--border)}
 .template-byggform_architectural_trust .grid .card{grid-column:span 2;min-height:285px;border:0;border-right:1px solid var(--border);border-bottom:1px solid var(--border);border-radius:0;background:rgba(255,255,255,.25);box-shadow:none}
 .template-byggform_architectural_trust .grid .card:nth-child(4),.template-byggform_architectural_trust .grid .card:nth-child(5){grid-column:span 3}
@@ -624,9 +624,9 @@ body.template-bistro_atmospheric_landing{--radius:26px;background:#090806;color:
 .template-byggform_architectural_trust .faq-list details{border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;box-shadow:none;padding:22px 0}
 .template-byggform_architectural_trust .faq-list summary{font-size:17px}
 .template-byggform_architectural_trust .contact-grid{align-items:start}
-.template-byggform_architectural_trust .cta-band{border-radius:0;background:#dcd7cd;color:#252921;box-shadow:none}
-.template-byggform_architectural_trust .cta-band h2,.template-byggform_architectural_trust .cta-band p{color:#252921}
-.template-byggform_architectural_trust .site-footer{background:#1b1e19}
+.template-byggform_architectural_trust .cta-band{border-radius:0;background:var(--primary);color:var(--on-primary);box-shadow:none}
+.template-byggform_architectural_trust .cta-band h2,.template-byggform_architectural_trust .cta-band p{color:var(--on-primary)}
+.template-byggform_architectural_trust .site-footer{background:var(--surface)}
 @media(max-width:960px){.template-byggform_architectural_trust .grid{grid-template-columns:1fr 1fr}.template-byggform_architectural_trust .grid .card,.template-byggform_architectural_trust .grid .card:nth-child(4),.template-byggform_architectural_trust .grid .card:nth-child(5){grid-column:auto}.template-byggform_architectural_trust .faq-layout{grid-template-columns:1fr}.template-byggform_architectural_trust .faq-layout aside{position:static}}
 @media(max-width:640px){.template-byggform_architectural_trust .grid{grid-template-columns:1fr}.template-byggform_architectural_trust .process-step{grid-template-columns:40px 1fr;gap:14px}.template-byggform_architectural_trust h1{font-size:clamp(44px,14vw,68px)}}
 `.trim()
