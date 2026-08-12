@@ -317,6 +317,32 @@ async function assignAlias(token: string, deploymentId: string, alias: string): 
   }
 }
 
+/** A *.vercel.app alias must belong to the project before it can be assigned. */
+async function addProjectDomain(token: string, projectId: string, name: string): Promise<boolean> {
+  try {
+    const resp = await fetch(`${VERCEL}/v10/projects/${projectId}/domains`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    if (resp.ok) return true
+    const text = (await resp.text()).slice(0, 200)
+    // Already attached to this project is fine; taken elsewhere is not.
+    if (resp.status === 409 && /already/i.test(text)) return true
+    console.warn('add domain failed', name, resp.status, text)
+    return false
+  } catch (e) {
+    console.warn('add domain error', e)
+    return false
+  }
+}
+
+function hostOf(value: string): string {
+  try { return new URL(value.startsWith('http') ? value : `https://${value}`).hostname } catch { return '' }
+}
+
+
+
 async function projectDomains(token: string, projectId: string): Promise<string[]> {
   try {
     const resp = await fetch(`${VERCEL}/v9/projects/${projectId}/domains?limit=20`, {
