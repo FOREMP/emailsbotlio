@@ -109,7 +109,10 @@ Deno.serve(async (req) => {
         body: JSON.stringify({
           name: SHARED_PROJECT,
           project: projectTarget,
-          target: 'production',
+          // NOT production: every demo shares one Vercel project, and a
+          // production deploy moves the project's shared domain to the newest
+          // build — which made every demo link show the last generated site.
+          // A preview deploy gets its own permanent URL instead.
           files: filesArray,
           projectSettings: {
             framework: null,
@@ -138,21 +141,39 @@ Deno.serve(async (req) => {
     // Disable Vercel deployment protection (SSO/password) so the demo is publicly viewable.
     if (deployData.projectId) await disableProtection(vercelToken, deployData.projectId)
 
-    // Claim a company-readable alias. If that alias is already attached to a
-    // different demo, use the stable site-id suffix instead.
+    // Domains owned by the shared project can never identify a single demo —
+    // they always serve whatever was deployed last. Never use them as a URL.
+    const sharedDomains = new Set(
+      (deployData.projectId ? await projectDomains(vercelToken, deployData.projectId) : [])
+        .map(hostOf)
+        .filter(Boolean) as string[],
+    )
+
+    // Claim a company-readable alias. A *.vercel.app alias only works once the
+    // domain belongs to the project, so register it first and only trust it if
+    // both steps succeeded.
     let assignedAlias: string | null = null
-    if (deploymentId) {
-      if (await assignAlias(vercelToken, deploymentId, primaryAlias)) assignedAlias = primaryAlias
-      else if (await assignAlias(vercelToken, deploymentId, fallbackAlias)) assignedAlias = fallbackAlias
+    if (deploymentId && deployData.projectId) {
+      for (const candidateAlias of [primaryAlias, fallbackAlias]) {
+        if (sharedDomains.has(candidateAlias)) continue
+        if (!(await addProjectDomain(vercelToken, deployData.projectId, candidateAlias))) continue
+        if (await assignAlias(vercelToken, deploymentId, candidateAlias)) {
+          assignedAlias = candidateAlias
+          sharedDomains.add(candidateAlias) // now unique to this demo, keep it
+          break
+        }
+      }
     }
 
     // Build the candidate list from what Vercel really reported, then verify.
     const candidates = uniq([
       ...(assignedAlias ? [`https://${assignedAlias}`] : []),
-      ...((deployData.alias as string[] | undefined) ?? []).map((a) => `https://${a}`),
-      ...(deployData.projectId ? await projectDomains(vercelToken, deployData.projectId) : []),
+      ...((deployData.alias as string[] | undefined) ?? [])
+        .filter((a) => a === assignedAlias || !sharedDomains.has(a))
+        .map((a) => `https://${a}`),
       deploymentUrl,
     ].filter(Boolean) as string[])
+
 
     const workingUrl = await firstWorking(candidates, 10)
 
