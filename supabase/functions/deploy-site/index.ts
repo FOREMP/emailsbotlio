@@ -206,17 +206,66 @@ Deno.serve(async (req) => {
 })
 
 // ---------------------------------------------------------------------------
-// REPAIR — find 'live' sites whose stored URL is dead and point them at a
-// working Vercel URL (project alias or the raw deployment URL).
+// UNSHARE — sites that were deployed into the shared project as production all
+// stored the same project domain, so every demo link showed the last generated
+// site. Each of them already has its own unique deployment URL: point them at
+// it, verify it answers, and flag the ones that need a fresh deploy.
 // ---------------------------------------------------------------------------
-async function repair(
+async function unshare(
   supabase: ReturnType<typeof createClient>,
-  vercelToken: string,
   limit: number,
 ): Promise<Response> {
   const { data: sites } = await supabase
     .from('generated_sites')
-    .select('id, site_lead_id, demo_site_url, vercel_deployment_url, vercel_project_id')
+    .select('id, site_lead_id, demo_site_url, vercel_deployment_url')
+    .not('demo_site_url', 'is', null)
+    .order('updated_at', { ascending: false })
+    .limit(limit)
+
+  const rows = (sites ?? []) as any[]
+  // A demo_site_url used by more than one site is by definition a shared domain.
+  const counts = new Map<string, number>()
+  for (const s of rows) counts.set(s.demo_site_url, (counts.get(s.demo_site_url) ?? 0) + 1)
+
+  const result = { checked: 0, shared: 0, fixed: 0, needs_redeploy: [] as string[] }
+
+  for (const s of rows) {
+    result.checked++
+    if ((counts.get(s.demo_site_url) ?? 0) < 2) continue
+    result.shared++
+
+    const unique = s.vercel_deployment_url as string | null
+    if (unique && unique !== s.demo_site_url && await isUp(unique)) {
+      await supabase.from('generated_sites').update({ demo_site_url: unique }).eq('id', s.id)
+      if (s.site_lead_id) {
+        await supabase.from('site_leads').update({ demo_url: unique }).eq('id', s.site_lead_id)
+      }
+      result.fixed++
+    } else {
+      await supabase.from('generated_sites').update({
+        status: 'generated',
+        error_message: 'Delad demo-URL — behöver ny deploy för egen adress.',
+      }).eq('id', s.id)
+      result.needs_redeploy.push(s.id)
+    }
+  }
+
+  return json({ ok: true, ...result })
+}
+
+// ---------------------------------------------------------------------------
+// REPAIR — find 'live' sites whose stored URL is dead and point them at their
+// own unique deployment URL. Shared project domains are never used: they serve
+// whatever was deployed last and would show the wrong company.
+// ---------------------------------------------------------------------------
+async function repair(
+  supabase: ReturnType<typeof createClient>,
+  _vercelToken: string,
+  limit: number,
+): Promise<Response> {
+  const { data: sites } = await supabase
+    .from('generated_sites')
+    .select('id, site_lead_id, demo_site_url, vercel_deployment_url')
     .eq('status', 'live')
     .not('demo_site_url', 'is', null)
     .order('updated_at', { ascending: false })
@@ -228,10 +277,7 @@ async function repair(
     result.checked++
     if (await isUp(s.demo_site_url)) { result.ok++; continue }
 
-    const candidates = uniq([
-      ...(s.vercel_project_id ? await projectDomains(vercelToken, s.vercel_project_id) : []),
-      s.vercel_deployment_url,
-    ].filter(Boolean) as string[])
+    const candidates = uniq([s.vercel_deployment_url].filter(Boolean) as string[])
 
     const working = await firstWorking(candidates, 1)
     if (working) {
@@ -251,6 +297,7 @@ async function repair(
 
   return json({ ok: true, ...result })
 }
+
 
 // ---------------------------------------------------------------------------
 // Vercel helpers
