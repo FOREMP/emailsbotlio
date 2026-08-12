@@ -23,6 +23,7 @@ const SHARED_PROJECT = 'foremp-site-demos'
 interface Req {
   generated_site_id?: string
   repair?: boolean
+  unshare?: boolean
   limit?: number
 }
 
@@ -39,7 +40,9 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     )
 
+    if (body.unshare) return await unshare(supabase, body.limit ?? 200)
     if (body.repair) return await repair(supabase, vercelToken, body.limit ?? 40)
+
 
     const generated_site_id = body.generated_site_id
     if (!generated_site_id) return json({ error: 'generated_site_id required' }, 400)
