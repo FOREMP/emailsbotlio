@@ -1,9 +1,12 @@
 // Deploys the generated HTML to Vercel as a static site.
 // Uses Vercel's v13 deployments API with inline files — no GitHub repo involved.
 //
-// Two modes:
+// Modes:
 //   POST { generated_site_id }  → deploy one site, alias it, VERIFY the URL
 //   POST { repair: true }       → scan existing 'live' sites and fix dead URLs
+//   POST { unshare: true }      → re-point sites stuck on the shared project
+//                                 domain to their own unique deployment URL
+
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const corsHeaders = {
