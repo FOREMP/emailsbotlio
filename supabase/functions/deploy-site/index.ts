@@ -1,9 +1,12 @@
 // Deploys the generated HTML to Vercel as a static site.
 // Uses Vercel's v13 deployments API with inline files — no GitHub repo involved.
 //
-// Two modes:
+// Modes:
 //   POST { generated_site_id }  → deploy one site, alias it, VERIFY the URL
 //   POST { repair: true }       → scan existing 'live' sites and fix dead URLs
+//   POST { unshare: true }      → re-point sites stuck on the shared project
+//                                 domain to their own unique deployment URL
+
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const corsHeaders = {
@@ -20,6 +23,7 @@ const SHARED_PROJECT = 'foremp-site-demos'
 interface Req {
   generated_site_id?: string
   repair?: boolean
+  unshare?: boolean
   limit?: number
 }
 
@@ -36,7 +40,9 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     )
 
+    if (body.unshare) return await unshare(supabase, body.limit ?? 200)
     if (body.repair) return await repair(supabase, vercelToken, body.limit ?? 40)
+
 
     const generated_site_id = body.generated_site_id
     if (!generated_site_id) return json({ error: 'generated_site_id required' }, 400)
@@ -103,7 +109,10 @@ Deno.serve(async (req) => {
         body: JSON.stringify({
           name: SHARED_PROJECT,
           project: projectTarget,
-          target: 'production',
+          // NOT production: every demo shares one Vercel project, and a
+          // production deploy moves the project's shared domain to the newest
+          // build — which made every demo link show the last generated site.
+          // A preview deploy gets its own permanent URL instead.
           files: filesArray,
           projectSettings: {
             framework: null,
@@ -132,21 +141,39 @@ Deno.serve(async (req) => {
     // Disable Vercel deployment protection (SSO/password) so the demo is publicly viewable.
     if (deployData.projectId) await disableProtection(vercelToken, deployData.projectId)
 
-    // Claim a company-readable alias. If that alias is already attached to a
-    // different demo, use the stable site-id suffix instead.
+    // Domains owned by the shared project can never identify a single demo —
+    // they always serve whatever was deployed last. Never use them as a URL.
+    const sharedDomains = new Set(
+      (deployData.projectId ? await projectDomains(vercelToken, deployData.projectId) : [])
+        .map(hostOf)
+        .filter(Boolean) as string[],
+    )
+
+    // Claim a company-readable alias. A *.vercel.app alias only works once the
+    // domain belongs to the project, so register it first and only trust it if
+    // both steps succeeded.
     let assignedAlias: string | null = null
-    if (deploymentId) {
-      if (await assignAlias(vercelToken, deploymentId, primaryAlias)) assignedAlias = primaryAlias
-      else if (await assignAlias(vercelToken, deploymentId, fallbackAlias)) assignedAlias = fallbackAlias
+    if (deploymentId && deployData.projectId) {
+      for (const candidateAlias of [primaryAlias, fallbackAlias]) {
+        if (sharedDomains.has(candidateAlias)) continue
+        if (!(await addProjectDomain(vercelToken, deployData.projectId, candidateAlias))) continue
+        if (await assignAlias(vercelToken, deploymentId, candidateAlias)) {
+          assignedAlias = candidateAlias
+          sharedDomains.add(candidateAlias) // now unique to this demo, keep it
+          break
+        }
+      }
     }
 
     // Build the candidate list from what Vercel really reported, then verify.
     const candidates = uniq([
       ...(assignedAlias ? [`https://${assignedAlias}`] : []),
-      ...((deployData.alias as string[] | undefined) ?? []).map((a) => `https://${a}`),
-      ...(deployData.projectId ? await projectDomains(vercelToken, deployData.projectId) : []),
+      ...((deployData.alias as string[] | undefined) ?? [])
+        .filter((a) => a === assignedAlias || !sharedDomains.has(a))
+        .map((a) => `https://${a}`),
       deploymentUrl,
     ].filter(Boolean) as string[])
+
 
     const workingUrl = await firstWorking(candidates, 10)
 
@@ -179,17 +206,66 @@ Deno.serve(async (req) => {
 })
 
 // ---------------------------------------------------------------------------
-// REPAIR — find 'live' sites whose stored URL is dead and point them at a
-// working Vercel URL (project alias or the raw deployment URL).
+// UNSHARE — sites that were deployed into the shared project as production all
+// stored the same project domain, so every demo link showed the last generated
+// site. Each of them already has its own unique deployment URL: point them at
+// it, verify it answers, and flag the ones that need a fresh deploy.
 // ---------------------------------------------------------------------------
-async function repair(
+async function unshare(
   supabase: ReturnType<typeof createClient>,
-  vercelToken: string,
   limit: number,
 ): Promise<Response> {
   const { data: sites } = await supabase
     .from('generated_sites')
-    .select('id, site_lead_id, demo_site_url, vercel_deployment_url, vercel_project_id')
+    .select('id, site_lead_id, demo_site_url, vercel_deployment_url')
+    .not('demo_site_url', 'is', null)
+    .order('updated_at', { ascending: false })
+    .limit(limit)
+
+  const rows = (sites ?? []) as any[]
+  // A demo_site_url used by more than one site is by definition a shared domain.
+  const counts = new Map<string, number>()
+  for (const s of rows) counts.set(s.demo_site_url, (counts.get(s.demo_site_url) ?? 0) + 1)
+
+  const result = { checked: 0, shared: 0, fixed: 0, needs_redeploy: [] as string[] }
+
+  for (const s of rows) {
+    result.checked++
+    if ((counts.get(s.demo_site_url) ?? 0) < 2) continue
+    result.shared++
+
+    const unique = s.vercel_deployment_url as string | null
+    if (unique && unique !== s.demo_site_url && await isUp(unique)) {
+      await supabase.from('generated_sites').update({ demo_site_url: unique }).eq('id', s.id)
+      if (s.site_lead_id) {
+        await supabase.from('site_leads').update({ demo_url: unique }).eq('id', s.site_lead_id)
+      }
+      result.fixed++
+    } else {
+      await supabase.from('generated_sites').update({
+        status: 'generated',
+        error_message: 'Delad demo-URL — behöver ny deploy för egen adress.',
+      }).eq('id', s.id)
+      result.needs_redeploy.push(s.id)
+    }
+  }
+
+  return json({ ok: true, ...result })
+}
+
+// ---------------------------------------------------------------------------
+// REPAIR — find 'live' sites whose stored URL is dead and point them at their
+// own unique deployment URL. Shared project domains are never used: they serve
+// whatever was deployed last and would show the wrong company.
+// ---------------------------------------------------------------------------
+async function repair(
+  supabase: ReturnType<typeof createClient>,
+  _vercelToken: string,
+  limit: number,
+): Promise<Response> {
+  const { data: sites } = await supabase
+    .from('generated_sites')
+    .select('id, site_lead_id, demo_site_url, vercel_deployment_url')
     .eq('status', 'live')
     .not('demo_site_url', 'is', null)
     .order('updated_at', { ascending: false })
@@ -201,10 +277,7 @@ async function repair(
     result.checked++
     if (await isUp(s.demo_site_url)) { result.ok++; continue }
 
-    const candidates = uniq([
-      ...(s.vercel_project_id ? await projectDomains(vercelToken, s.vercel_project_id) : []),
-      s.vercel_deployment_url,
-    ].filter(Boolean) as string[])
+    const candidates = uniq([s.vercel_deployment_url].filter(Boolean) as string[])
 
     const working = await firstWorking(candidates, 1)
     if (working) {
@@ -225,6 +298,7 @@ async function repair(
   return json({ ok: true, ...result })
 }
 
+
 // ---------------------------------------------------------------------------
 // Vercel helpers
 // ---------------------------------------------------------------------------
@@ -242,6 +316,32 @@ async function assignAlias(token: string, deploymentId: string, alias: string): 
     return false
   }
 }
+
+/** A *.vercel.app alias must belong to the project before it can be assigned. */
+async function addProjectDomain(token: string, projectId: string, name: string): Promise<boolean> {
+  try {
+    const resp = await fetch(`${VERCEL}/v10/projects/${projectId}/domains`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    if (resp.ok) return true
+    const text = (await resp.text()).slice(0, 200)
+    // Already attached to this project is fine; taken elsewhere is not.
+    if (resp.status === 409 && /already/i.test(text)) return true
+    console.warn('add domain failed', name, resp.status, text)
+    return false
+  } catch (e) {
+    console.warn('add domain error', e)
+    return false
+  }
+}
+
+function hostOf(value: string): string {
+  try { return new URL(value.startsWith('http') ? value : `https://${value}`).hostname } catch { return '' }
+}
+
+
 
 async function projectDomains(token: string, projectId: string): Promise<string[]> {
   try {
