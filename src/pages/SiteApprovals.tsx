@@ -14,6 +14,7 @@ import { ExternalLink, Check, RefreshCw, XCircle, RotateCw, Loader2 } from "luci
 type LeadRow = {
   id: string;
   company_name: string;
+  language: string;
   email: string | null;
   website: string | null;
   phone: string | null;
@@ -44,11 +45,12 @@ export default function SiteApprovals() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [ticking, setTicking] = useState(false);
   const [filter, setFilter] = useState<string>("awaiting_approval");
+  const [languageFilter, setLanguageFilter] = useState<string>("all");
 
   const load = async () => {
     const { data } = await supabase
       .from("site_leads")
-      .select("id, company_name, email, website, phone, category, status, audit_score, audit_reason, audit_details, demo_url, generated_site_id, feedback, updated_at")
+      .select("id, company_name, language, email, website, phone, category, status, audit_score, audit_reason, audit_details, demo_url, generated_site_id, feedback, updated_at")
       .in("status", ["awaiting_approval", "generating", "failed", "approved", "site_good_enough"])
       .order("updated_at", { ascending: false })
       .limit(400);
@@ -91,14 +93,15 @@ export default function SiteApprovals() {
       if (!uid) throw new Error("Ej inloggad");
 
       // 1. Look up the Site Demo Outreach sequence + its contact list + trigger node
+      const sequenceName = row.language === "en" ? "Site Demo Outreach EN" : "Site Demo Outreach";
       const { data: seq, error: seqErr } = await supabase
         .from("sequences")
         .select("id, contact_list_id")
         .eq("user_id", uid)
-        .eq("name", "Site Demo Outreach")
+        .eq("name", sequenceName)
         .maybeSingle();
       if (seqErr) throw seqErr;
-      if (!seq?.id || !seq.contact_list_id) throw new Error("Site Demo Outreach-sekvensen saknas — kör seed-migrationen.");
+      if (!seq?.id || !seq.contact_list_id) throw new Error(`${sequenceName}-sekvensen saknas — kör seed-migrationen.`);
 
       const { data: triggerNode } = await supabase
         .from("sequence_nodes")
@@ -120,6 +123,7 @@ export default function SiteApprovals() {
         audit_weakness: weakness,
         audit_score: row.audit_score ?? "",
         category: row.category ?? "",
+        language: row.language ?? "sv",
       };
 
       const { data: existing } = await supabase
@@ -190,7 +194,7 @@ export default function SiteApprovals() {
         .update({ status: "approved", approved_at: new Date().toISOString() })
         .eq("id", row.id);
 
-      toast({ title: "Godkänd & enrollad", description: `${row.company_name} börjar få mail inom några minuter.` });
+      toast({ title: "Godkänd & enrollad", description: `${row.company_name} börjar få mail inom några minuter (${row.language === "en" ? "EN" : "SV"}).` });
       load();
     } catch (e) {
       toast({ title: "Kunde inte godkänna", description: (e as Error).message, variant: "destructive" });
@@ -318,24 +322,34 @@ export default function SiteApprovals() {
             {f.label} ({f.key === "all" ? rows.length : counts[f.key] ?? 0})
           </Button>
         ))}
+        <Button size="sm" variant={languageFilter === "all" ? "default" : "outline"} onClick={() => setLanguageFilter("all")}>
+          Alla språk
+        </Button>
+        <Button size="sm" variant={languageFilter === "sv" ? "default" : "outline"} onClick={() => setLanguageFilter("sv")}>
+          Svenska
+        </Button>
+        <Button size="sm" variant={languageFilter === "en" ? "default" : "outline"} onClick={() => setLanguageFilter("en")}>
+          English
+        </Button>
       </div>
 
       {loading && <div className="text-sm text-muted-foreground">Laddar…</div>}
 
-      {!loading && rows.filter((r) => filter === "all" || r.status === filter).length === 0 && (
+      {!loading && rows.filter((r) => (filter === "all" || r.status === filter) && (languageFilter === "all" || (r.language ?? "sv") === languageFilter)).length === 0 && (
         <Card className="p-8 text-center text-muted-foreground">
           Inga leads i denna vy just nu.
         </Card>
       )}
 
       <div className="grid gap-6">
-        {rows.filter((r) => filter === "all" || r.status === filter).map((row) => (
+        {rows.filter((r) => (filter === "all" || r.status === filter) && (languageFilter === "all" || (r.language ?? "sv") === languageFilter)).map((row) => (
           <Card key={row.id} className="p-5 space-y-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2">
                   <h2 className="text-lg font-semibold">{row.company_name}</h2>
                   <Badge className={STATUS_BADGE[row.status] ?? "bg-slate-500"}>{row.status}</Badge>
+                  <Badge variant="outline">{(row.language ?? "sv").toUpperCase()}</Badge>
                   {row.audit_score != null && (
                     <Badge variant="outline">Audit {row.audit_score}/10</Badge>
                   )}

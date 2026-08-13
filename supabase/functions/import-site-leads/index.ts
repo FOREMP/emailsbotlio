@@ -42,6 +42,7 @@ type ImportRole =
   | 'review'
 
 type ImportRow = Record<string, string | number | null | undefined>
+type LeadLanguage = 'sv' | 'en'
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
@@ -62,6 +63,7 @@ Deno.serve(async (req) => {
     const rows = Array.isArray(body.rows) ? body.rows.slice(0, MAX_ROWS_PER_CALL) as ImportRow[] : []
     const mapping = isPlainObject(body.mapping) ? body.mapping as Record<string, ImportRole> : {}
     const source_file_id = typeof body.source_file_id === 'string' ? body.source_file_id : null
+    const language: LeadLanguage = body.language === 'en' ? 'en' : 'sv'
     // Niche is no longer required: it is derived per row from the mapped
     // `category` column. An explicit niche (if sent) acts as a fallback only.
     const ALLOWED_NICHES = new Set(['auto_workshop', 'hair_salon', 'construction'])
@@ -126,6 +128,7 @@ Deno.serve(async (req) => {
         rating: n.rating ?? null,
         reviews_count: n.reviews_count ?? null,
         review_snippets: n.review_snippets ?? null,
+        language,
         status,
         niche: classifyNiche(n.category, n.company_name) ?? fallbackNiche ?? 'other',
         source_file_id: source_file_id ?? null,

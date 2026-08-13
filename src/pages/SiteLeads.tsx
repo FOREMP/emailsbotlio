@@ -14,6 +14,7 @@ import * as XLSX from "xlsx";
 
 type Lead = {
   id: string;
+  language: string;
   company_name: string;
   email: string | null;
   website: string | null;
@@ -95,6 +96,11 @@ const NICHE_OPTIONS: { value: string; label: string }[] = [
   { value: "construction", label: "Byggföretag" },
 ];
 
+const LANGUAGE_OPTIONS = [
+  { value: "sv", label: "Svenska leads" },
+  { value: "en", label: "English leads" },
+];
+
 export default function SiteLeads() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -102,6 +108,7 @@ export default function SiteLeads() {
   const [parsed, setParsed] = useState<ParsedData | null>(null);
   const [mapping, setMapping] = useState<Record<string, ImportRole>>({});
   const [niche, setNiche] = useState<string>("");
+  const [importLanguage, setImportLanguage] = useState<"sv" | "en">("sv");
   const [progress, setProgress] = useState(0);
   const [editing, setEditing] = useState<Lead | null>(null);
   const [saving, setSaving] = useState(false);
@@ -110,6 +117,7 @@ export default function SiteLeads() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [nicheFilter, setNicheFilter] = useState<string>("all");
+  const [languageFilter, setLanguageFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<string>("created_desc");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -215,7 +223,7 @@ export default function SiteLeads() {
   const load = async () => {
     const { data } = await supabase
       .from("site_leads")
-      .select("id, company_name, email, website, phone, address, category, niche, rating, reviews_count, review_snippets, feedback, status, audit_score, demo_url, created_at")
+      .select("id, company_name, email, website, phone, address, category, niche, rating, reviews_count, review_snippets, feedback, status, audit_score, demo_url, created_at, language")
       .order("created_at", { ascending: false })
       .limit(500);
     setLeads((data ?? []) as Lead[]);
@@ -231,6 +239,7 @@ export default function SiteLeads() {
   const visible = leads
     .filter((l) => (statusFilter === "all" ? true : l.status === statusFilter))
     .filter((l) => (nicheFilter === "all" ? true : (l.niche ?? "") === nicheFilter))
+    .filter((l) => (languageFilter === "all" ? true : (l.language ?? "sv") === languageFilter))
     .filter((l) => {
       const q = search.trim().toLowerCase();
       if (!q) return true;
@@ -326,7 +335,7 @@ export default function SiteLeads() {
       for (let i = 0; i < parsed.rows.length; i += BATCH_SIZE) {
         const rows = parsed.rows.slice(i, i + BATCH_SIZE).map((row) => slimRow(row, mapping));
         const { data, error } = await supabase.functions.invoke("import-site-leads", {
-          body: { rows, mapping, ...(niche ? { niche } : {}) },
+          body: { rows, mapping, language: importLanguage, ...(niche ? { niche } : {}) },
         });
         if (error) {
           totals.failed_batches += 1;
@@ -389,6 +398,7 @@ export default function SiteLeads() {
           review_snippets: snippets.length ? snippets : null,
           feedback: editing.feedback || null,
           niche: editing.niche || "auto_workshop",
+          language: editing.language || "sv",
           status,
         })
         .eq("id", editing.id);
@@ -445,6 +455,21 @@ export default function SiteLeads() {
             <span className="text-muted-foreground">— {parsed.rows.length} rader, {parsed.headers.length} kolumner</span>
             {uploading && <span className="text-muted-foreground">Importerar {progress}/{parsed.rows.length}</span>}
             <Button variant="ghost" size="sm" className="ml-auto" disabled={uploading} onClick={() => setParsed(null)}>Avbryt</Button>
+          </div>
+
+          <div className="grid gap-1 max-w-sm">
+            <Label className="text-xs uppercase text-muted-foreground">Språk för denna fil</Label>
+            <Select value={importLanguage} onValueChange={(v: "sv" | "en") => setImportLanguage(v)} disabled={uploading}>
+              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {LANGUAGE_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Detta styr språk för approvals, outreach och hemsidetext för hela batchen.
+            </p>
           </div>
 
           <div className="grid gap-1 max-w-sm">
@@ -572,6 +597,13 @@ export default function SiteLeads() {
             {NICHE_OPTIONS.map((n) => <SelectItem key={n.value} value={n.value}>{n.label}</SelectItem>)}
           </SelectContent>
         </Select>
+        <Select value={languageFilter} onValueChange={setLanguageFilter}>
+          <SelectTrigger className="h-9 w-[190px]"><SelectValue placeholder="Språk" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Alla språk</SelectItem>
+            {LANGUAGE_OPTIONS.map((opt) => <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
         <Select value={sortBy} onValueChange={setSortBy}>
           <SelectTrigger className="h-9 w-[190px]"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -627,6 +659,7 @@ export default function SiteLeads() {
               </th>
               <th className="text-left p-3">Företag</th>
               <th className="text-left p-3">Bransch</th>
+              <th className="text-left p-3">Språk</th>
               <th className="text-left p-3">Email</th>
               <th className="text-left p-3">Website</th>
               <th className="text-left p-3">Status</th>
@@ -644,6 +677,9 @@ export default function SiteLeads() {
                 <td className="p-3 font-medium">{l.company_name}</td>
                 <td className="p-3 text-muted-foreground text-xs">
                   {NICHE_OPTIONS.find((n) => n.value === l.niche)?.label ?? l.niche ?? "—"}
+                </td>
+                <td className="p-3">
+                  <Badge variant="outline">{(l.language ?? "sv").toUpperCase()}</Badge>
                 </td>
                 <td className="p-3 text-muted-foreground">{l.email ?? "—"}</td>
                 <td className="p-3 text-muted-foreground truncate max-w-[200px]">
@@ -664,7 +700,7 @@ export default function SiteLeads() {
               </tr>
             ))}
             {visible.length === 0 && (
-              <tr><td colSpan={9} className="p-6 text-center text-muted-foreground">
+              <tr><td colSpan={10} className="p-6 text-center text-muted-foreground">
                 {leads.length === 0 ? "Inga leads än. Ladda upp en CSV för att börja." : "Inga leads matchar filtret."}
               </td></tr>
             )}
@@ -712,6 +748,14 @@ export default function SiteLeads() {
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {STATUS_OPTIONS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Språk">
+                  <Select value={editing.language ?? "sv"} onValueChange={(v) => setEditing({ ...editing, language: v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {LANGUAGE_OPTIONS.map((opt) => <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </Field>

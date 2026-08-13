@@ -17,8 +17,8 @@ const corsHeaders = {
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 // Fast model for the content plan. DeepSeek V3.1 was frequently queued on
 // OpenRouter for 60s+, which is what killed most generations.
-const MODEL = 'openai/gpt-4.1-mini'
-const POLISH_MODEL = 'openai/gpt-4.1-mini'
+const MODEL = 'openai/gpt-4o-mini'
+const POLISH_MODEL = 'openai/gpt-4o-mini'
 // When plan + polish use the same model we merge them into ONE call — the
 // second round-trip roughly doubled wall time for no measurable gain.
 const SKIP_POLISH = MODEL === POLISH_MODEL
@@ -778,7 +778,7 @@ Deno.serve(async (req) => {
     const { data: siteLead } = siteLeadId
       ? await supabase
         .from('site_leads')
-        .select('niche, category, company_name')
+        .select('niche, category, company_name, language')
         .eq('id', siteLeadId)
         .maybeSingle()
       : { data: null }
@@ -924,6 +924,7 @@ Deno.serve(async (req) => {
           // electricians.
           niche: (siteLead?.niche as string) ?? (typeof cf.niche === 'string' ? cf.niche : '') ?? '',
         },
+        language: siteLead?.language === 'en' ? 'en' : 'sv',
         nicheLabel: siteLead?.category ? '' : (siteLead?.niche && siteLead.niche !== 'other' ? nc.label : ''),
         category: siteLead?.category ?? (typeof cf.category === 'string' ? cf.category : null),
         // Only inherit colors when the lead site really had branding; otherwise
@@ -1070,7 +1071,7 @@ Deno.serve(async (req) => {
               { role: 'user', content: userContent },
             ],
             temperature: 0.6,
-            max_tokens: 5000,
+            max_tokens: 4000,
             response_format: { type: 'json_object' },
           }),
         })
@@ -1113,6 +1114,7 @@ Deno.serve(async (req) => {
               facts,
               openrouterKey,
               nc: ncFinal,
+              language: siteLead?.language === 'en' ? 'en' : 'sv',
             }).catch((e) => {
               console.warn('copy polish failed, using plan as-is:', (e as Error).message)
               return parsed!
@@ -1166,16 +1168,18 @@ async function polishCopyWithClaude(args: {
   facts: Record<string, unknown>
   openrouterKey: string
   nc: NicheConfig
+  language?: 'sv' | 'en'
 }): Promise<SitePlan> {
-  const { plan, facts, openrouterKey, nc } = args
+  const { plan, facts, openrouterKey, nc, language } = args
+  const english = language === 'en'
 
-  const user = `FAKTA (påhittad information är förbjuden — håll dig till dessa):
+  const user = `${english ? 'FACTS (do not invent information — stay inside these facts):' : 'FAKTA (påhittad information är förbjuden — håll dig till dessa):'}
 ${JSON.stringify(facts, null, 2)}
 
-INNEHÅLLSPLAN ATT SKRIVA OM (behåll struktur, förbättra bara språket):
+${english ? 'CONTENT PLAN TO REWRITE (keep structure, improve only the language):' : 'INNEHÅLLSPLAN ATT SKRIVA OM (behåll struktur, förbättra bara språket):'}
 ${JSON.stringify(plan, null, 2)}
 
-Returnera samma JSON med förbättrad svensk copy.`
+${english ? 'Return the same JSON with improved natural English copy.' : 'Returnera samma JSON med förbättrad svensk copy.'}`
 
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 45_000)
@@ -1190,13 +1194,13 @@ Returnera samma JSON med förbättrad svensk copy.`
         'X-Title': 'Botlio Site Copy Polish',
       },
       body: JSON.stringify({
-        model: 'openai/gpt-4.1-mini',
+        model: 'openai/gpt-4o-mini',
         messages: [
-          { role: 'system', content: nc.polishSystemPrompt },
+          { role: 'system', content: english ? 'You are a senior English copy editor for premium small-business websites. Keep the JSON structure exactly, improve the language, and never invent facts.' : nc.polishSystemPrompt },
           { role: 'user', content: user },
         ],
         temperature: 0.7,
-        max_tokens: 4000,
+        max_tokens: 3000,
         response_format: { type: 'json_object' },
       }),
     })

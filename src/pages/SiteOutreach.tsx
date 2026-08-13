@@ -43,6 +43,7 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 export default function SiteOutreach() {
+  const [language, setLanguage] = useState<"sv" | "en">("sv");
   const [seq, setSeq] = useState<Seq | null>(null);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [enrollments, setEnrollments] = useState<EnrollRow[]>([]);
@@ -56,11 +57,12 @@ export default function SiteOutreach() {
   const [allSentRows, setAllSentRows] = useState<SentEmailRow[]>([]);
 
   const load = useCallback(async () => {
+    const sequenceName = language === "en" ? "Site Demo Outreach EN" : "Site Demo Outreach";
     // Internal tool — sequence is shared across all logged-in operators.
     const { data: s } = await supabase
       .from("sequences")
       .select("id, contact_list_id")
-      .eq("name", "Site Demo Outreach")
+      .eq("name", sequenceName)
       .maybeSingle();
     if (!s?.id) { setLoading(false); return; }
     setSeq(s as Seq);
@@ -101,7 +103,7 @@ export default function SiteOutreach() {
       if (data) allSent.push(...(data as SentEmailRow[]));
     }
     const stats = allSent.filter((r) => new Date(r.sent_at).toISOString() >= since30);
-    const sent = allSent.slice().sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime()).slice(0, 5) as unknown as SentRow[];
+    const sent = allSent.slice().sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime()).slice(0, 5) as SentRow[];
 
     setNodes((ns ?? []) as Node[]);
     setEnrollments(enrsWithContact as any);
@@ -109,7 +111,7 @@ export default function SiteOutreach() {
     setStatsRows(stats);
     setAllSentRows(allSent);
     setLoading(false);
-  }, []);
+  }, [language]);
 
   useEffect(() => {
     load();
@@ -236,7 +238,7 @@ export default function SiteOutreach() {
           .select("id")
           .eq("user_id", uid)
           .eq("is_active", true)
-          .ilike("from_email", "%@foremp.email");
+          .ilike("from_email", language === "en" ? "%@foremp.eu" : "%@foremp.email");
         const perSender = Math.max(1, Math.ceil(nextLimit / Math.max((forempSenders ?? []).length, 1)));
         for (const s of forempSenders ?? []) {
           const { error } = await supabase.from("senders").update({ daily_limit: perSender }).eq("id", s.id);
@@ -269,7 +271,7 @@ export default function SiteOutreach() {
   if (!seq) {
     return (
       <Card className="p-8 text-center space-y-2">
-        <h2 className="text-lg font-semibold">Site Demo Outreach saknas</h2>
+        <h2 className="text-lg font-semibold">{language === "en" ? "Site Demo Outreach EN saknas" : "Site Demo Outreach saknas"}</h2>
         <p className="text-sm text-muted-foreground">Kör seed-migrationen för att skapa sekvensen.</p>
       </Card>
     );
@@ -279,8 +281,16 @@ export default function SiteOutreach() {
     <div className="space-y-8">
       <div>
         <h1 className="text-2xl font-bold">Demo Outreach</h1>
+        <div className="flex gap-2 mt-3">
+          <Button size="sm" variant={language === "sv" ? "default" : "outline"} onClick={() => setLanguage("sv")}>
+            Svenska
+          </Button>
+          <Button size="sm" variant={language === "en" ? "default" : "outline"} onClick={() => setLanguage("en")}>
+            English
+          </Button>
+        </div>
         <p className="text-sm text-muted-foreground">
-          4-mails svensk sekvens från @foremp.email — <strong>skickas endast måndag–fredag 09:00 Stockholm-tid</strong>.
+          {language === "en" ? "4-mail English sequence from @foremp.eu" : "4-mails svensk sekvens från @foremp.email"} — <strong>skickas endast måndag–fredag 09:00 Stockholm-tid</strong>.
           Fylls på automatiskt när du godkänner demos i Approvals (kontakt, hemsidelänk och audit-info följer med).
         </p>
       </div>
@@ -290,7 +300,9 @@ export default function SiteOutreach() {
           <h2 className="text-lg font-semibold flex items-center gap-2"><Gauge className="h-4 w-4" /> Daglig utskicksgräns</h2>
           <p className="text-xs text-muted-foreground">
             Räknar endast <strong>nya första mail</strong> per dag. Follow-ups skickas alltid ovanpå detta.
-            Totalen delas jämnt mellan aktiva @foremp.email-sender (t.ex. 10 = 5 per sender).
+            {language === "en"
+              ? " Totalen delas mellan aktiva @foremp.eu-senders."
+              : " Totalen delas jämnt mellan aktiva @foremp.email-sender (t.ex. 10 = 5 per sender)."}
           </p>
         </div>
         <div className="flex items-end gap-2">
@@ -330,6 +342,7 @@ export default function SiteOutreach() {
           <div>
             <h2 className="text-lg font-semibold flex items-center gap-2"><BarChart3 className="h-4 w-4" /> Statistik (senaste 30 dagar)</h2>
             <p className="text-xs text-muted-foreground">Skickade, öppnade och besvarade mail per dag för Site Demo Outreach.</p>
+            <p className="text-xs text-muted-foreground">Visar nu: {language === "en" ? "English / foremp.eu" : "Svenska / foremp.email"}.</p>
           </div>
           {(() => {
             const k = computeKpis(statsRows);
@@ -455,7 +468,7 @@ export default function SiteOutreach() {
                 <div>
                   <div className="font-medium">Mail {i + 1}</div>
                   <div className="text-xs text-muted-foreground">
-                    Modell: {n.config?.model ?? "gpt-4.1-mini"} · Sender-domain: {n.config?.sender_domain ?? "foremp.email"}
+                    Modell: {n.config?.model ?? "gpt-4o-mini"} · Sender-domain: {n.config?.sender_domain ?? (language === "en" ? "foremp.eu" : "foremp.email")}
                     {wait && ` · väntar ${wait.config?.duration ?? "?"} ${wait.config?.unit ?? "days"} innan nästa`}
                   </div>
                 </div>

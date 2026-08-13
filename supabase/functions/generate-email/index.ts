@@ -3,7 +3,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const DEFAULT_MODEL = "gpt-4.1-mini";
+const DEFAULT_MODEL = "gpt-4o-mini";
 
 // Strip trailing sign-off blocks the model may add — the send function appends its own footer.
 function stripSignOff(text: string): string {

@@ -301,6 +301,7 @@ export type Database = {
           generation_mode: string
           github_repo_url: string | null
           id: string
+          language: string
           last_clicked_at: string | null
           queued_at: string | null
           scraped_content: Json | null
@@ -329,6 +330,7 @@ export type Database = {
           generation_mode?: string
           github_repo_url?: string | null
           id?: string
+          language?: string
           last_clicked_at?: string | null
           queued_at?: string | null
           scraped_content?: Json | null
@@ -357,6 +359,7 @@ export type Database = {
           generation_mode?: string
           github_repo_url?: string | null
           id?: string
+          language?: string
           last_clicked_at?: string | null
           queued_at?: string | null
           scraped_content?: Json | null
@@ -1011,6 +1014,7 @@ export type Database = {
           generated_site_id: string | null
           id: string
           last_email_sent_at: string | null
+          language: string
           niche: string
           phone: string | null
           rating: number | null
@@ -1041,6 +1045,7 @@ export type Database = {
           generated_site_id?: string | null
           id?: string
           last_email_sent_at?: string | null
+          language?: string
           niche?: string
           phone?: string | null
           rating?: number | null
@@ -1071,6 +1076,7 @@ export type Database = {
           generated_site_id?: string | null
           id?: string
           last_email_sent_at?: string | null
+          language?: string
           niche?: string
           phone?: string | null
           rating?: number | null

@@ -9,9 +9,9 @@ import {
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 export const BUILD_MODEL = 'deepseek/deepseek-v4-flash-0731'
 export const BUILD_FALLBACK_MODEL = 'deepseek/deepseek-chat-v3.1'
-export const BUILD_LAST_RESORT_MODEL = 'openai/gpt-4.1-mini'
-export const LANG_MODEL = 'openai/gpt-4.1-mini'
-const VERSION = 7
+export const BUILD_LAST_RESORT_MODEL = 'openai/gpt-4o-mini'
+export const LANG_MODEL = 'openai/gpt-4o-mini'
+const VERSION = 10
 const MAX_PAGES = 6
 type Stage = 'plan' | 'theme' | 'content' | 'polish_content' | 'render' | 'quality_check' | 'done'
 
@@ -37,6 +37,7 @@ export interface FreeformCtx {
   brandFonts: string[]
   imagePool: string[]
   regenFeedback: string | null
+  language?: 'sv' | 'en'
   progress: FreeformProgress | null
 }
 export interface FreeformPageSpec { slug: string; title: string; purpose: string; sections: string[]; pageKind?: 'landing' | 'services' | 'process' | 'about' | 'faq' | 'contact'; templateFamily?: BlockTemplateFamilyKey }
@@ -159,7 +160,11 @@ function step(done: boolean, files: Record<string, string>, progress: FreeformPr
   return { done, files, progress, note }
 }
 function meta(p: FreeformProgress): FreeformProgress {
-  return { ...p, version: VERSION, model: BUILD_MODEL, updatedAt: new Date().toISOString() }
+  return { ...p, version: VERSION, updatedAt: new Date().toISOString() }
+}
+
+function isEnglish(ctx: FreeformCtx): boolean {
+  return ctx.language === 'en'
 }
 
 function buildPlan(ctx: FreeformCtx): FreeformPlan {
@@ -223,6 +228,7 @@ function matchKind(text: string): { kind: BizKind; label: string } | null {
 }
 
 function buildProfile(ctx: FreeformCtx): BusinessProfile {
+  const en = isEnglish(ctx)
   const category = clean(decodeText(ctx.category || '')).toLowerCase()
   const nicheTag = NEUTRAL_NICHE.test(String(ctx.facts.niche || '')) ? '' : String(ctx.facts.niche || '')
   const companyName = clean(decodeText(ctx.facts.business_name || ''))
@@ -246,13 +252,17 @@ function buildProfile(ctx: FreeformCtx): BusinessProfile {
   // uploaded category wording when it is short and specific.
   let businessType = hit?.label || ''
   if (category && category.length <= 34 && !/,|;/.test(category)) businessType = category
-  if (!businessType) businessType = nicheTag ? titleCaseSv(nicheTag.replace(/_/g, ' ')) : 'Företag'
+  if (!businessType) businessType = nicheTag ? titleCaseSv(nicheTag.replace(/_/g, ' ')) : (en ? 'Business' : 'Företag')
   businessType = titleCaseSv(businessType)
 
-  const city = ctx.facts.city ? ` i ${decodeText(ctx.facts.city)}` : ''
-  const venueNoun = clinic ? 'kliniken' : salon ? 'salongen' : kind === 'nails' || kind === 'beauty' ? 'studion' : kind === 'restaurant' ? 'restaurangen' : 'verksamheten'
-  const servicePlural = beauty ? 'Behandlingar' : 'Tjänster'
-  const aboutTitle = clinic ? 'Om kliniken' : salon ? 'Om salongen' : kind === 'nails' || kind === 'beauty' ? 'Om studion' : 'Om oss'
+  const city = ctx.facts.city ? `${en ? ' in ' : ' i '}${decodeText(ctx.facts.city)}` : ''
+  const venueNoun = en
+    ? clinic ? 'clinic' : salon ? 'salon' : kind === 'nails' || kind === 'beauty' ? 'studio' : kind === 'restaurant' ? 'restaurant' : 'business'
+    : clinic ? 'kliniken' : salon ? 'salongen' : kind === 'nails' || kind === 'beauty' ? 'studion' : kind === 'restaurant' ? 'restaurangen' : 'verksamheten'
+  const servicePlural = en ? (beauty ? 'Treatments' : 'Services') : (beauty ? 'Behandlingar' : 'Tjänster')
+  const aboutTitle = en
+    ? clinic ? 'About the clinic' : salon ? 'About the salon' : kind === 'nails' || kind === 'beauty' ? 'About the studio' : 'About us'
+    : clinic ? 'Om kliniken' : salon ? 'Om salongen' : kind === 'nails' || kind === 'beauty' ? 'Om studion' : 'Om oss'
 
   return {
     category: ctx.category || nicheTag || '',
@@ -261,10 +271,16 @@ function buildProfile(ctx: FreeformCtx): BusinessProfile {
     servicePlural,
     aboutTitle,
     heroEyebrow: `${businessType}${city}`,
-    servicesHeading: beauty ? 'Behandlingar med tydlig väg in.' : 'Tjänster som är lätta att förstå.',
-    servicesLead: beauty
-      ? 'Besökaren ska snabbt förstå vad som erbjuds, vad som passar och hur nästa steg tas.'
-      : 'Erbjudandet presenteras konkret med tydliga vägar till kontakt.',
+    servicesHeading: en
+      ? beauty ? 'Treatments presented clearly.' : 'Services explained clearly.'
+      : beauty ? 'Behandlingar med tydlig väg in.' : 'Tjänster som är lätta att förstå.',
+    servicesLead: en
+      ? beauty
+        ? 'The visitor should quickly understand what is offered, what fits, and how to take the next step.'
+        : 'The offer should feel concrete, clear and easy to act on.'
+      : beauty
+        ? 'Besökaren ska snabbt förstå vad som erbjuds, vad som passar och hur nästa steg tas.'
+        : 'Erbjudandet presenteras konkret med tydliga vägar till kontakt.',
     isBeauty: beauty,
     isClinic: clinic,
     kind,
@@ -286,9 +302,11 @@ function buildFactPack(ctx: FreeformCtx): FactPack {
 async function pageContent(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec): Promise<{ source: 'ai' | 'fallback'; content: FreeformPageContent; error?: string; model?: string }> {
   const profile = buildProfile(ctx)
   const pack = buildFactPack(ctx)
-  const system = `Du skriver första utkastet till innehåll för en svensk premium-webbplats. Svara endast med JSON. Ingen HTML. Ingen CSS.
+  const system = `${isEnglish(ctx)
+    ? 'You are writing the first draft for a premium English-language website. If any instruction below is in Swedish, interpret it and still produce final website copy in natural English. Respond only with JSON. No HTML. No CSS.'
+    : 'Du skriver första utkastet till innehåll för en svensk premium-webbplats. Svara endast med JSON. Ingen HTML. Ingen CSS.'}
 HÅRDA REGLER:
-- All text ska vara på svenska. Översätt källtext som är på engelska.
+- ${isEnglish(ctx) ? 'All final text must be in English. Translate Swedish source material when needed.' : 'All text ska vara på svenska. Översätt källtext som är på engelska.'}
 - VERKSAMHETSTYPEN i profilen (härledd från uppladdad kategori) är sanning. Skriv ALDRIG om en annan bransch.
 - Om källtexten tydligt motsäger verksamhetstypen (t.ex. el, rör, bygg, bil) ska du följa källtexten, aldrig en skönhets- eller salongsvinkel.
 - Använd bara branschord som passar verksamheten. Skriv inte "behandling", "salong" eller "klinik" om det inte är ett skönhets-/vårdföretag.
@@ -327,7 +345,7 @@ Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","he
     sourceFor(ctx, page).slice(0, 2200) || '[Tunt underlag. Använd säker branschcopy utan påhittade fakta.]',
   ].filter(Boolean).join('\n')
   try {
-    const got = await callBuildModelCascade(ctx.openrouterKey, `freeform-v7-content:${page.slug}`, system, user, 3200)
+    const got = await callBuildModelCascade(ctx, ctx.openrouterKey, `freeform-v7-content:${page.slug}`, system, user, 3000)
     const raw = got.text
     const parsed = parseJson(raw)
     const c = repairContent(ctx, cleanContent(parsed, ctx, page))
@@ -343,14 +361,15 @@ Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","he
 async function polishContent(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, draft: FreeformPageContent): Promise<{ source: 'polished' | 'fallback'; content: FreeformPageContent; error?: string; model?: string }> {
   const profile = buildProfile(ctx)
   const pack = buildFactPack(ctx)
-  const system = `Du är en senior svensk redaktör och conversion copywriter. Du får JSON-innehåll till EN sida.
-Uppgift: skriv om till naturlig, korrekt, premium svensk text och fyll ut tunt innehåll med försiktig, relevant copy från faktapaketet.
+  const system = `${isEnglish(ctx)
+    ? 'You are a senior English editor and conversion copywriter. You receive JSON content for one page. Rewrite it into natural, polished English and improve thin content carefully using the approved fact pack.'
+    : 'Du är en senior svensk redaktör och conversion copywriter. Du får JSON-innehåll till EN sida. Uppgift: skriv om till naturlig, korrekt, premium svensk text och fyll ut tunt innehåll med försiktig, relevant copy från faktapaketet.'}
 
 HÅRDA REGLER:
 - Svara endast med samma JSON-schema. Ingen markdown.
 - Behåll hårda fakta exakt: namn, telefon, e-post, adress, stad.
 - Lägg aldrig till priser, årtal, certifikat, kundnamn, recensioner, personalnamn eller öppettider.
-- All text ska vara svenska. Ingen engelska.
+- ${isEnglish(ctx) ? 'All final text must be English.' : 'All text ska vara svenska. Ingen engelska.'}
 - Ta bort allt som låter internt: "sidan", "webbplats", "demo", "AI", "anpassad efter företaget".
 - Korrigera mojibake, t.ex. VÃ¥rvÃ¤dersvÃ¤gen -> Vårvädersvägen.
 - FAQ ska vara kundnyttig och verksamhetsspecifik.
@@ -378,7 +397,7 @@ HÅRDA REGLER:
     JSON.stringify(draft),
   ].filter(Boolean).join('\n')
   try {
-    const raw = await callModel(ctx.openrouterKey, LANG_MODEL, `freeform-v7-polish:${page.slug}`, system, user, 3600, 36_000)
+    const raw = await callModel(ctx.openrouterKey, LANG_MODEL, `freeform-v7-polish:${page.slug}`, system, user, 3000, 36_000)
     const parsed = parseJson(raw)
     const c = repairContent(ctx, cleanContent(parsed, ctx, page))
     if (!c.heroTitle || !c.heroLead) throw new Error('polish missing hero fields')
@@ -450,7 +469,7 @@ function render(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, c:
   const showGallery = shouldRenderGallery(plan, page, home)
   const showContact = shouldRenderContact(plan, page)
   const html = [
-    nav(plan, business, page.slug),
+    nav(plan, business, page.slug, ctx),
     home ? hero(c, imgs[0], ctx) : pageHero(c, imgs[0], ctx),
     showIntro ? intro(c, imgs[1], ctx) : '',
     showServices ? services(c, ctx) : '',
@@ -462,7 +481,7 @@ function render(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, c:
     footer(plan, business, ctx),
   ].filter(Boolean).join('\n')
   return `<!DOCTYPE html>
-<html lang='sv'>
+<html lang='${isEnglish(ctx) ? 'en' : 'sv'}'>
 <head>
   <meta charset='UTF-8'>
   <meta name='viewport' content='width=device-width, initial-scale=1'>
@@ -476,9 +495,10 @@ ${html}
 </html>`
 }
 
-function nav(plan: FreeformPlan, business: string, active: string): string {
-  const links = plan.pages.map((p) => `<a href='${attr(fileNameFor(p.slug))}'${p.slug === active ? ` aria-current='page'` : ''}>${esc(p.slug === 'index' ? 'Hem' : p.title)}</a>`).join('')
-  return `<header class='site-header'><div class='wrap nav-shell'><a class='brand' href='index.html'>${esc(business)}</a><nav class='nav-desktop' aria-label='Huvudmeny'>${links}</nav><details class='nav-mobile'><summary>Meny</summary><nav class='nav-drawer' aria-label='Mobilmeny'>${links}</nav></details></div></header>`
+function nav(plan: FreeformPlan, business: string, active: string, ctx: FreeformCtx): string {
+  const en = isEnglish(ctx)
+  const links = plan.pages.map((p) => `<a href='${attr(fileNameFor(p.slug))}'${p.slug === active ? ` aria-current='page'` : ''}>${esc(p.slug === 'index' ? (en ? 'Home' : 'Hem') : p.title)}</a>`).join('')
+  return `<header class='site-header'><div class='wrap nav-shell'><a class='brand' href='index.html'>${esc(business)}</a><nav class='nav-desktop' aria-label='${en ? 'Main menu' : 'Huvudmeny'}'>${links}</nav><details class='nav-mobile'><summary>${en ? 'Menu' : 'Meny'}</summary><nav class='nav-drawer' aria-label='${en ? 'Mobile menu' : 'Mobilmeny'}'>${links}</nav></details></div></header>`
 }
 function hero(c: FreeformPageContent, img: string, ctx: FreeformCtx): string {
   return `<section class='hero'>${img ? `<img src='${attr(img)}' alt=''>` : ''}<div class='wrap'><div class='hero-card'><p class='eyebrow'>${esc(c.heroEyebrow || 'Utvald upplevelse')}</p><h1>${esc(c.heroTitle || 'En modern webbplats med tydligt första intryck')}</h1><p class='lead lg'>${esc(c.heroLead || '')}</p>${buttons(ctx, c)}</div></div></section>`
@@ -529,33 +549,52 @@ function faq(c: FreeformPageContent, fullPage = false): string {
   return `<section class='section section-alt'><div class='wrap'><p class='eyebrow'>Frågor</p><h2>${fullPage ? 'Frågor inför kontakt.' : 'Snabba svar innan kontakt.'}</h2><div class='faq-list'>${flat.map((f) => `<details><summary>${esc(f.question)}</summary><p>${esc(f.answer)}</p></details>`).join('')}</div></div></section>`
 }
 function contact(ctx: FreeformCtx, c: FreeformPageContent): string {
+  const en = isEnglish(ctx)
   const profile = buildProfile(ctx)
   const business = decodeText(ctx.facts.business_name || ctx.nicheLabel || 'företaget')
-  const title = profile.kind === 'restaurant'
-    ? 'Boka, fråga eller planera ditt besök.'
-    : profile.isBeauty
-      ? `Boka eller fråga ${business}.`
-      : 'Ta kontakt när du vill vidare.'
-  const lead = profile.kind === 'restaurant'
-    ? 'Ring eller mejla för bokning, frågor om besök eller aktuell information.'
-    : profile.isBeauty
-      ? 'Ring eller mejla om du vill boka, fråga om utbudet eller veta vad som passar bäst.'
-      : 'Ring eller mejla för frågor, offert eller nästa steg. Uppgifterna finns samlade här.'
-  const rows = [ctx.facts.phone ? `<a href='tel:${attr(ctx.facts.phone.replace(/\s+/g, ''))}'>Telefon<br>${esc(ctx.facts.phone)}</a>` : '', ctx.facts.email ? `<a href='mailto:${attr(ctx.facts.email)}'>E-post<br>${esc(ctx.facts.email)}</a>` : '', ctx.facts.address || ctx.facts.city ? `<span>Adress<br>${esc(decodeText([ctx.facts.address, ctx.facts.city].filter(Boolean).join(', ')))}</span>` : '', ctx.facts.google_maps_url ? `<a href='${attr(ctx.facts.google_maps_url)}'>Google Maps<br>Visa vägbeskrivning</a>` : ''].filter(Boolean).join('')
+  const title = en
+    ? profile.kind === 'restaurant'
+      ? 'Book, ask or plan your visit.'
+      : profile.isBeauty
+        ? `Book or ask ${business}.`
+        : 'Get in touch when you are ready.'
+    : profile.kind === 'restaurant'
+      ? 'Boka, fråga eller planera ditt besök.'
+      : profile.isBeauty
+        ? `Boka eller fråga ${business}.`
+        : 'Ta kontakt när du vill vidare.'
+  const lead = en
+    ? profile.kind === 'restaurant'
+      ? 'Call or email for bookings, visit questions or current information.'
+      : profile.isBeauty
+        ? 'Call or email if you want to book, ask about the offer, or understand what fits best.'
+        : 'Call or email for questions, a quote, or the next step.'
+    : profile.kind === 'restaurant'
+      ? 'Ring eller mejla för bokning, frågor om besök eller aktuell information.'
+      : profile.isBeauty
+        ? 'Ring eller mejla om du vill boka, fråga om utbudet eller veta vad som passar bäst.'
+        : 'Ring eller mejla för frågor, offert eller nästa steg. Uppgifterna finns samlade här.'
+  const rows = [
+    ctx.facts.phone ? `<a href='tel:${attr(ctx.facts.phone.replace(/\s+/g, ''))}'>${en ? 'Phone' : 'Telefon'}<br>${esc(ctx.facts.phone)}</a>` : '',
+    ctx.facts.email ? `<a href='mailto:${attr(ctx.facts.email)}'>${en ? 'Email' : 'E-post'}<br>${esc(ctx.facts.email)}</a>` : '',
+    ctx.facts.address || ctx.facts.city ? `<span>${en ? 'Address' : 'Adress'}<br>${esc(decodeText([ctx.facts.address, ctx.facts.city].filter(Boolean).join(', ')))}</span>` : '',
+    ctx.facts.google_maps_url ? `<a href='${attr(ctx.facts.google_maps_url)}'>Google Maps<br>${en ? 'Get directions' : 'Visa vägbeskrivning'}</a>` : '',
+  ].filter(Boolean).join('')
   return rows ? `<section id='kontakt' class='section'><div class='wrap contact-grid'><div><p class='eyebrow'>Kontakt</p><h2>${esc(title)}</h2><p class='lead'>${esc(lead)}</p></div><div class='contact-list'>${rows}</div></div></section>` : ''
 }
 function cta(c: FreeformPageContent, ctx: FreeformCtx): string {
-  return `<section class='section'><div class='wrap'><div class='cta-band'><div><h2>${esc(c.closingTitle || 'Redo att ta nästa steg?')}</h2><p>${esc(c.closingText || 'Ring eller mejla så blir vägen framåt tydlig.')}</p></div>${buttons(ctx, c)}</div></div></section>`
+  return `<section class='section'><div class='wrap'><div class='cta-band'><div><h2>${esc(c.closingTitle || (isEnglish(ctx) ? 'Ready for the next step?' : 'Redo att ta nästa steg?'))}</h2><p>${esc(c.closingText || (isEnglish(ctx) ? 'Call or email to make the next step clear.' : 'Ring eller mejla så blir vägen framåt tydlig.'))}</p></div>${buttons(ctx, c)}</div></div></section>`
 }
 function footer(plan: FreeformPlan, business: string, ctx: FreeformCtx): string {
-  const links = plan.pages.map((p) => `<a href='${attr(fileNameFor(p.slug))}'>${esc(p.slug === 'index' ? 'Hem' : p.title)}</a>`).join('<br>')
+  const en = isEnglish(ctx)
+  const links = plan.pages.map((p) => `<a href='${attr(fileNameFor(p.slug))}'>${esc(p.slug === 'index' ? (en ? 'Home' : 'Hem') : p.title)}</a>`).join('<br>')
   const info = [ctx.facts.phone, ctx.facts.email, decodeText([ctx.facts.address, ctx.facts.city].filter(Boolean).join(', '))].filter(Boolean).map((v) => esc(String(v))).join('<br>')
-  return `<footer class='site-footer'><div class='wrap'><div class='footer-grid'><div><div class='footer-title'>${esc(business)}</div><p>Tydlig information, varm känsla och enkel kontakt inför nästa steg.</p></div><div><div class='footer-title'>Navigering</div><p>${links}</p></div><div><div class='footer-title'>Kontakt</div><p>${info || 'Kontakta företaget för mer information.'}</p></div></div><p class='foot-bottom'>© ${new Date().getFullYear()} ${esc(business)}</p></div></footer>`
+  return `<footer class='site-footer'><div class='wrap'><div class='footer-grid'><div><div class='footer-title'>${esc(business)}</div><p>${en ? 'Clear information, a warm tone and an easy next step.' : 'Tydlig information, varm känsla och enkel kontakt inför nästa steg.'}</p></div><div><div class='footer-title'>${en ? 'Navigation' : 'Navigering'}</div><p>${links}</p></div><div><div class='footer-title'>${en ? 'Contact' : 'Kontakt'}</div><p>${info || (en ? 'Contact the business for more information.' : 'Kontakta företaget för mer information.')}</p></div></div><p class='foot-bottom'>© ${new Date().getFullYear()} ${esc(business)}</p></div></footer>`
 }
 function buttons(ctx: FreeformCtx, c: FreeformPageContent): string {
   const parts: string[] = []
-  if (ctx.facts.phone) parts.push(`<a class='btn btn-primary' href='tel:${attr(ctx.facts.phone.replace(/\s+/g, ''))}'>${esc(c.primaryCta || 'Ring oss')}</a>`)
-  if (ctx.facts.email) parts.push(`<a class='btn btn-secondary' href='mailto:${attr(ctx.facts.email)}'>${esc(c.secondaryCta || 'Mejla oss')}</a>`)
+  if (ctx.facts.phone) parts.push(`<a class='btn btn-primary' href='tel:${attr(ctx.facts.phone.replace(/\s+/g, ''))}'>${esc(c.primaryCta || (isEnglish(ctx) ? 'Call us' : 'Ring oss'))}</a>`)
+  if (ctx.facts.email) parts.push(`<a class='btn btn-secondary' href='mailto:${attr(ctx.facts.email)}'>${esc(c.secondaryCta || (isEnglish(ctx) ? 'Email us' : 'Mejla oss'))}</a>`)
   return parts.length ? `<div class='btn-row'>${parts.join('')}</div>` : ''
 }
 
@@ -571,8 +610,8 @@ function buildCss(ctx: FreeformCtx, plan?: FreeformPlan): string {
     source: sourceFor(ctx, { slug: 'index', title: '', purpose: '', sections: [] }),
   }).key
   return `
-:root{--primary:${p.primary};--secondary:${p.secondary};--accent:${p.accent};--accent-text:${p.accentText};--background:${p.background};--surface:${p.surface};--text-primary:${p.text};--text-secondary:${p.muted};--on-primary:${p.onPrimary};--border:${p.border};--shadow:${p.shadow};--wrap:1180px;--display:${display};--body:${body};--radius:30px}
-*{box-sizing:border-box}html,body{max-width:100%;overflow-x:hidden}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 88% 8%,${p.glow},transparent 32rem),linear-gradient(180deg,var(--background),color-mix(in srgb,var(--surface) 62%,var(--background)));color:var(--text-primary);font-family:var(--body);font-size:16px;line-height:1.7;-webkit-font-smoothing:antialiased}img,svg,video{display:block;max-width:100%;height:auto}a{color:inherit}.wrap{width:min(var(--wrap),calc(100% - 40px));margin-inline:auto}.site-header{position:sticky;top:0;z-index:50;background:color-mix(in srgb,var(--background) 86%,transparent);backdrop-filter:blur(20px);border-bottom:1px solid var(--border)}.nav-shell{min-height:76px;display:flex;align-items:center;justify-content:space-between;gap:20px}.brand{font-family:var(--display);font-size:clamp(20px,2vw,30px);font-weight:850;letter-spacing:-.045em;text-decoration:none;max-width:52vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.nav-desktop{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.nav-desktop a,.nav-drawer a{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:10px 14px;border-radius:999px;text-decoration:none;color:var(--text-secondary);font-weight:800;font-size:14px}.nav-desktop a:hover,.nav-desktop a[aria-current=page],.nav-drawer a:hover,.nav-drawer a[aria-current=page]{background:color-mix(in srgb,var(--primary) 13%,transparent);color:var(--text-primary)}.nav-mobile{display:none;position:relative}.nav-mobile summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:10px;min-height:46px;padding:11px 16px;border:1px solid var(--border);border-radius:999px;background:var(--surface);box-shadow:0 12px 30px var(--shadow);font-weight:850;color:var(--text-primary)}.nav-mobile summary::-webkit-details-marker{display:none}.nav-mobile summary:before{content:'';width:18px;height:12px;background:linear-gradient(var(--text-primary),var(--text-primary)) top/100% 2px no-repeat,linear-gradient(var(--text-primary),var(--text-primary)) center/100% 2px no-repeat,linear-gradient(var(--text-primary),var(--text-primary)) bottom/100% 2px no-repeat}.nav-drawer{position:absolute;right:0;top:calc(100% + 12px);width:min(86vw,360px);max-width:calc(100vw - 32px);padding:12px;border:1px solid var(--border);border-radius:24px;background:color-mix(in srgb,var(--surface) 96%,var(--background));box-shadow:0 26px 70px var(--shadow);display:grid;gap:4px}.nav-drawer a{justify-content:flex-start;width:100%;padding:14px 16px;border-radius:16px;color:var(--text-primary)}.section{padding:clamp(66px,9vw,128px) 0}.section-alt{background:color-mix(in srgb,var(--surface) 58%,transparent)}.stack{display:grid;gap:20px}.split{display:grid;grid-template-columns:minmax(0,1.02fr) minmax(280px,.78fr);gap:clamp(28px,5vw,72px);align-items:center}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px;margin-top:34px}.contact-grid{display:grid;grid-template-columns:minmax(0,.9fr) minmax(280px,1.1fr);gap:28px}.gallery-grid{display:grid;grid-template-columns:1.2fr .8fr .8fr;gap:18px}.eyebrow{display:inline-flex;align-items:center;gap:10px;margin:0 0 18px;color:var(--accent-text);font-size:12px;font-weight:950;letter-spacing:.22em;text-transform:uppercase}.eyebrow:before{content:'';width:28px;height:1px;background:currentColor}h1,h2,h3,p,li{overflow-wrap:anywhere}h1,h2,h3{font-family:var(--display);margin:0;color:var(--text-primary);letter-spacing:-.045em;line-height:.98}h1{font-size:clamp(42px,7vw,88px);max-width:12ch}h2{font-size:clamp(30px,4.6vw,60px);max-width:14ch}h3{font-size:clamp(21px,2.1vw,30px);line-height:1.08}p{margin:0;color:var(--text-secondary)}.lead{font-size:clamp(17px,1.7vw,21px);line-height:1.72;color:var(--text-secondary);max-width:66ch}.lead.lg{font-size:clamp(18px,2vw,24px)}.btn-row{display:flex;flex-wrap:wrap;gap:12px;margin-top:30px}.btn{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:14px 22px;border:1px solid var(--border);border-radius:999px;background:color-mix(in srgb,var(--surface) 82%,transparent);color:var(--text-primary);font-weight:900;text-decoration:none;box-shadow:0 12px 28px color-mix(in srgb,var(--shadow) 70%,transparent)}.btn-primary{background:var(--primary);border-color:var(--primary);color:var(--on-primary)}.hero{position:relative;isolation:isolate;min-height:min(780px,86svh);display:grid;align-items:end;padding:clamp(92px,11vw,154px) 0 clamp(54px,7vw,88px);overflow:hidden}.hero:before{content:'';position:absolute;inset:0;z-index:-2;background:linear-gradient(110deg,color-mix(in srgb,var(--background) 96%,transparent),color-mix(in srgb,var(--background) 30%,transparent))}.hero img,.page-hero img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:-3;filter:brightness(.84) saturate(.9)}.hero-card{max-width:760px;padding:clamp(26px,4vw,48px);border:1px solid var(--border);border-radius:38px;background:color-mix(in srgb,var(--background) 74%,transparent);backdrop-filter:blur(12px);box-shadow:0 34px 90px var(--shadow)}.hero .lead{margin-top:20px}.page-hero{position:relative;isolation:isolate;padding:clamp(104px,12vw,160px) 0 clamp(58px,8vw,94px);overflow:hidden;background:color-mix(in srgb,var(--surface) 72%,var(--background))}.page-hero:after{content:'';position:absolute;inset:0;z-index:-1;background:linear-gradient(90deg,var(--background),color-mix(in srgb,var(--background) 74%,transparent))}.page-hero .lead{margin-top:20px}.card,.media-card{min-width:0;padding:clamp(22px,3vw,34px);border:1px solid var(--border);border-radius:var(--radius);background:color-mix(in srgb,var(--surface) 91%,var(--background));box-shadow:0 24px 70px var(--shadow)}.card h3,.media-card h3{margin-bottom:12px}.card p+p{margin-top:12px}.media-card{overflow:hidden;padding:0}.media-card img{width:100%;height:260px;object-fit:cover}.media-body{padding:24px}.tag-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}.tag-row span{display:inline-flex;padding:8px 12px;border-radius:999px;background:color-mix(in srgb,var(--primary) 10%,transparent);border:1px solid color-mix(in srgb,var(--primary) 18%,transparent);color:var(--text-primary);font-weight:850;font-size:13px}.gallery-grid img{width:100%;height:260px;object-fit:cover;border-radius:var(--radius);box-shadow:0 24px 70px var(--shadow)}.gallery-grid img:first-child{height:330px}.cta-band{padding:clamp(28px,5vw,56px);border-radius:38px;background:var(--primary);color:var(--on-primary);box-shadow:0 30px 90px var(--shadow);display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:center}.cta-band h2,.cta-band p{color:var(--on-primary)}.cta-band p{opacity:.9}.cta-band .btn{background:var(--on-primary);border-color:transparent;color:var(--primary);box-shadow:none}.contact-list{display:grid;gap:14px}.contact-list a,.contact-list span{display:flex;gap:12px;align-items:flex-start;padding:16px;border:1px solid var(--border);border-radius:18px;background:color-mix(in srgb,var(--surface) 78%,transparent);text-decoration:none;color:var(--text-primary);font-weight:800}.faq-list{display:grid;gap:12px;max-width:900px;margin-top:28px}.faq-list details{border:1px solid var(--border);border-radius:20px;background:color-mix(in srgb,var(--surface) 88%,transparent);padding:18px 20px}.faq-list summary{cursor:pointer;font-weight:900;color:var(--text-primary)}.faq-list p{margin-top:10px}.site-footer{padding:58px 0 34px;background:color-mix(in srgb,var(--text-primary) 8%,var(--surface));border-top:1px solid var(--border)}.footer-grid{display:grid;grid-template-columns:1.2fr .7fr .9fr;gap:28px}.footer-title{font-family:var(--display);font-weight:900;font-size:20px;letter-spacing:-.03em;margin-bottom:12px;color:var(--text-primary)}.site-footer a{color:var(--text-primary);text-decoration:none}.foot-bottom{margin-top:32px;padding-top:22px;border-top:1px solid var(--border);font-size:13px;color:var(--text-secondary)}
+:root{--primary:${p.primary};--secondary:${p.secondary};--accent:${p.accent};--background:${p.background};--surface:${p.surface};--text-primary:${p.text};--text-secondary:${p.muted};--on-primary:${p.onPrimary};--border:${p.border};--shadow:${p.shadow};--wrap:1180px;--display:${display};--body:${body};--radius:30px}
+*{box-sizing:border-box}html,body{max-width:100%;overflow-x:hidden}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 88% 8%,${p.glow},transparent 32rem),linear-gradient(180deg,var(--background),color-mix(in srgb,var(--surface) 62%,var(--background)));color:var(--text-primary);font-family:var(--body);font-size:16px;line-height:1.7;-webkit-font-smoothing:antialiased}img,svg,video{display:block;max-width:100%;height:auto}a{color:inherit}.wrap{width:min(var(--wrap),calc(100% - 40px));margin-inline:auto}.site-header{position:sticky;top:0;z-index:50;background:color-mix(in srgb,var(--background) 86%,transparent);backdrop-filter:blur(20px);border-bottom:1px solid var(--border)}.nav-shell{min-height:76px;display:flex;align-items:center;justify-content:space-between;gap:20px}.brand{font-family:var(--display);font-size:clamp(20px,2vw,30px);font-weight:850;letter-spacing:-.045em;text-decoration:none;max-width:52vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.nav-desktop{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.nav-desktop a,.nav-drawer a{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:10px 14px;border-radius:999px;text-decoration:none;color:var(--text-secondary);font-weight:800;font-size:14px}.nav-desktop a:hover,.nav-desktop a[aria-current=page],.nav-drawer a:hover,.nav-drawer a[aria-current=page]{background:color-mix(in srgb,var(--primary) 13%,transparent);color:var(--text-primary)}.nav-mobile{display:none;position:relative}.nav-mobile summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:10px;min-height:46px;padding:11px 16px;border:1px solid var(--border);border-radius:999px;background:var(--surface);box-shadow:0 12px 30px var(--shadow);font-weight:850;color:var(--text-primary)}.nav-mobile summary::-webkit-details-marker{display:none}.nav-mobile summary:before{content:'';width:18px;height:12px;background:linear-gradient(var(--text-primary),var(--text-primary)) top/100% 2px no-repeat,linear-gradient(var(--text-primary),var(--text-primary)) center/100% 2px no-repeat,linear-gradient(var(--text-primary),var(--text-primary)) bottom/100% 2px no-repeat}.nav-drawer{position:absolute;right:0;top:calc(100% + 12px);width:min(86vw,360px);max-width:calc(100vw - 32px);padding:12px;border:1px solid var(--border);border-radius:24px;background:color-mix(in srgb,var(--surface) 96%,var(--background));box-shadow:0 26px 70px var(--shadow);display:grid;gap:4px}.nav-drawer a{justify-content:flex-start;width:100%;padding:14px 16px;border-radius:16px;color:var(--text-primary)}.section{padding:clamp(66px,9vw,128px) 0}.section-alt{background:color-mix(in srgb,var(--surface) 58%,transparent)}.stack{display:grid;gap:20px}.split{display:grid;grid-template-columns:minmax(0,1.02fr) minmax(280px,.78fr);gap:clamp(28px,5vw,72px);align-items:center}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px;margin-top:34px}.contact-grid{display:grid;grid-template-columns:minmax(0,.9fr) minmax(280px,1.1fr);gap:28px}.gallery-grid{display:grid;grid-template-columns:1.2fr .8fr .8fr;gap:18px}.eyebrow{display:inline-flex;align-items:center;gap:10px;margin:0 0 18px;color:var(--primary);font-size:12px;font-weight:950;letter-spacing:.22em;text-transform:uppercase}.eyebrow:before{content:'';width:28px;height:1px;background:currentColor}h1,h2,h3,p,li{overflow-wrap:anywhere}h1,h2,h3{font-family:var(--display);margin:0;color:var(--text-primary);letter-spacing:-.045em;line-height:.98}h1{font-size:clamp(42px,7vw,88px);max-width:12ch}h2{font-size:clamp(30px,4.6vw,60px);max-width:14ch}h3{font-size:clamp(21px,2.1vw,30px);line-height:1.08}p{margin:0;color:var(--text-secondary)}.lead{font-size:clamp(17px,1.7vw,21px);line-height:1.72;color:var(--text-secondary);max-width:66ch}.lead.lg{font-size:clamp(18px,2vw,24px)}.btn-row{display:flex;flex-wrap:wrap;gap:12px;margin-top:30px}.btn{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:14px 22px;border:1px solid var(--border);border-radius:999px;background:color-mix(in srgb,var(--surface) 82%,transparent);color:var(--text-primary);font-weight:900;text-decoration:none;box-shadow:0 12px 28px color-mix(in srgb,var(--shadow) 70%,transparent)}.btn-primary{background:var(--primary);border-color:var(--primary);color:var(--on-primary)}.hero{position:relative;isolation:isolate;min-height:min(780px,86svh);display:grid;align-items:end;padding:clamp(92px,11vw,154px) 0 clamp(54px,7vw,88px);overflow:hidden}.hero:before{content:'';position:absolute;inset:0;z-index:-2;background:linear-gradient(110deg,color-mix(in srgb,var(--background) 96%,transparent),color-mix(in srgb,var(--background) 30%,transparent))}.hero img,.page-hero img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:-3;filter:brightness(.84) saturate(.9)}.hero-card{max-width:760px;padding:clamp(26px,4vw,48px);border:1px solid var(--border);border-radius:38px;background:color-mix(in srgb,var(--background) 74%,transparent);backdrop-filter:blur(12px);box-shadow:0 34px 90px var(--shadow)}.hero .lead{margin-top:20px}.page-hero{position:relative;isolation:isolate;padding:clamp(104px,12vw,160px) 0 clamp(58px,8vw,94px);overflow:hidden;background:color-mix(in srgb,var(--surface) 72%,var(--background))}.page-hero:after{content:'';position:absolute;inset:0;z-index:-1;background:linear-gradient(90deg,var(--background),color-mix(in srgb,var(--background) 74%,transparent))}.page-hero .lead{margin-top:20px}.card,.media-card{min-width:0;padding:clamp(22px,3vw,34px);border:1px solid var(--border);border-radius:var(--radius);background:color-mix(in srgb,var(--surface) 91%,var(--background));box-shadow:0 24px 70px var(--shadow)}.card h3,.media-card h3{margin-bottom:12px}.card p+p{margin-top:12px}.media-card{overflow:hidden;padding:0}.media-card img{width:100%;height:260px;object-fit:cover}.media-body{padding:24px}.tag-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}.tag-row span{display:inline-flex;padding:8px 12px;border-radius:999px;background:color-mix(in srgb,var(--primary) 10%,transparent);border:1px solid color-mix(in srgb,var(--primary) 18%,transparent);color:var(--text-primary);font-weight:850;font-size:13px}.gallery-grid img{width:100%;height:260px;object-fit:cover;border-radius:var(--radius);box-shadow:0 24px 70px var(--shadow)}.gallery-grid img:first-child{height:330px}.cta-band{padding:clamp(28px,5vw,56px);border-radius:38px;background:linear-gradient(135deg,var(--primary),color-mix(in srgb,var(--secondary) 65%,var(--primary)));color:var(--on-primary);box-shadow:0 30px 90px var(--shadow);display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:center}.cta-band h2,.cta-band p{color:var(--on-primary)}.cta-band p{opacity:.9}.cta-band .btn{background:var(--on-primary);border-color:transparent;color:var(--primary);box-shadow:none}.contact-list{display:grid;gap:14px}.contact-list a,.contact-list span{display:flex;gap:12px;align-items:flex-start;padding:16px;border:1px solid var(--border);border-radius:18px;background:color-mix(in srgb,var(--surface) 78%,transparent);text-decoration:none;color:var(--text-primary);font-weight:800}.faq-list{display:grid;gap:12px;max-width:900px;margin-top:28px}.faq-list details{border:1px solid var(--border);border-radius:20px;background:color-mix(in srgb,var(--surface) 88%,transparent);padding:18px 20px}.faq-list summary{cursor:pointer;font-weight:900;color:var(--text-primary)}.faq-list p{margin-top:10px}.site-footer{padding:58px 0 34px;background:color-mix(in srgb,var(--text-primary) 8%,var(--surface));border-top:1px solid var(--border)}.footer-grid{display:grid;grid-template-columns:1.2fr .7fr .9fr;gap:28px}.footer-title{font-family:var(--display);font-weight:900;font-size:20px;letter-spacing:-.03em;margin-bottom:12px;color:var(--text-primary)}.site-footer a{color:var(--text-primary);text-decoration:none}.foot-bottom{margin-top:32px;padding-top:22px;border-top:1px solid var(--border);font-size:13px;color:var(--text-secondary)}
 @media(max-width:960px){.wrap{width:min(100% - 32px,var(--wrap))}.nav-desktop{display:none!important}.nav-mobile{display:block!important}.brand{max-width:calc(100vw - 140px)}.split,.contact-grid,.footer-grid,.cta-band{grid-template-columns:1fr}.grid{grid-template-columns:1fr 1fr}.gallery-grid{grid-template-columns:1fr 1fr}.hero{min-height:auto;align-items:center}}
 @media(min-width:961px){.nav-mobile{display:none!important}.nav-desktop{display:flex!important}}
 @media(max-width:640px){body{font-size:15px}.wrap{width:calc(100% - 28px)}.nav-shell{min-height:68px}.brand{font-size:19px;max-width:calc(100vw - 122px)}.section{padding:58px 0}.hero{padding:72px 0 44px}.hero-card{padding:24px;border-radius:24px}h1{font-size:clamp(38px,13vw,58px);max-width:11ch}h2{font-size:clamp(29px,10vw,44px)}.lead{font-size:16px}.grid,.gallery-grid{grid-template-columns:1fr}.btn-row{display:grid}.btn{width:100%;min-height:52px}.media-card img,.gallery-grid img,.gallery-grid img:first-child{height:230px}.cta-band{border-radius:24px;padding:26px}}
@@ -597,7 +636,7 @@ body.template-bistro_atmospheric_landing{--radius:26px;background:#090806;color:
 `.trim()
 
   if (template === 'byggform_architectural_trust') return `
-  body.template-byggform_architectural_trust{--radius:2px;background:var(--background)}
+body.template-byggform_architectural_trust{--primary:#73553b;--secondary:#354034;--accent:#997453;--background:#faf9f5;--surface:#f1eee7;--text-primary:#252921;--text-secondary:#52574f;--border:rgba(37,41,33,.16);--shadow:rgba(26,30,24,.14);--radius:2px;background:var(--background)}
 .template-byggform_architectural_trust .site-header{background:color-mix(in srgb,var(--background) 92%,transparent);border-bottom-color:var(--border)}
 .template-byggform_architectural_trust .brand{font-family:Inter,ui-sans-serif,system-ui,sans-serif;letter-spacing:-.02em}
 .template-byggform_architectural_trust .nav-desktop a,.template-byggform_architectural_trust .nav-drawer a{border-radius:2px;text-transform:uppercase;letter-spacing:.06em;font-size:12px}
@@ -608,7 +647,7 @@ body.template-bistro_atmospheric_landing{--radius:26px;background:#090806;color:
 .template-byggform_architectural_trust h1,.template-byggform_architectural_trust h2{font-family:Georgia,Times New Roman,serif;font-weight:400;letter-spacing:-.035em}
 .template-byggform_architectural_trust h1{max-width:13ch;font-size:clamp(48px,7vw,102px)}
 .template-byggform_architectural_trust h2{max-width:16ch}
-.template-byggform_architectural_trust .section-alt{background:var(--surface)}
+.template-byggform_architectural_trust .section-alt{background:#f1eee7}
 .template-byggform_architectural_trust .grid{display:grid;grid-template-columns:repeat(6,1fr);gap:0;border-top:1px solid var(--border);border-left:1px solid var(--border)}
 .template-byggform_architectural_trust .grid .card{grid-column:span 2;min-height:285px;border:0;border-right:1px solid var(--border);border-bottom:1px solid var(--border);border-radius:0;background:rgba(255,255,255,.25);box-shadow:none}
 .template-byggform_architectural_trust .grid .card:nth-child(4),.template-byggform_architectural_trust .grid .card:nth-child(5){grid-column:span 3}
@@ -624,9 +663,9 @@ body.template-bistro_atmospheric_landing{--radius:26px;background:#090806;color:
 .template-byggform_architectural_trust .faq-list details{border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;box-shadow:none;padding:22px 0}
 .template-byggform_architectural_trust .faq-list summary{font-size:17px}
 .template-byggform_architectural_trust .contact-grid{align-items:start}
-.template-byggform_architectural_trust .cta-band{border-radius:0;background:var(--primary);color:var(--on-primary);box-shadow:none}
-.template-byggform_architectural_trust .cta-band h2,.template-byggform_architectural_trust .cta-band p{color:var(--on-primary)}
-.template-byggform_architectural_trust .site-footer{background:var(--surface)}
+.template-byggform_architectural_trust .cta-band{border-radius:0;background:#dcd7cd;color:#252921;box-shadow:none}
+.template-byggform_architectural_trust .cta-band h2,.template-byggform_architectural_trust .cta-band p{color:#252921}
+.template-byggform_architectural_trust .site-footer{background:#1b1e19}
 @media(max-width:960px){.template-byggform_architectural_trust .grid{grid-template-columns:1fr 1fr}.template-byggform_architectural_trust .grid .card,.template-byggform_architectural_trust .grid .card:nth-child(4),.template-byggform_architectural_trust .grid .card:nth-child(5){grid-column:auto}.template-byggform_architectural_trust .faq-layout{grid-template-columns:1fr}.template-byggform_architectural_trust .faq-layout aside{position:static}}
 @media(max-width:640px){.template-byggform_architectural_trust .grid{grid-template-columns:1fr}.template-byggform_architectural_trust .process-step{grid-template-columns:40px 1fr;gap:14px}.template-byggform_architectural_trust h1{font-size:clamp(44px,14vw,68px)}}
 `.trim()
@@ -647,6 +686,87 @@ body.template-salon_editorial_luxury{--radius:34px}
 @media(max-width:640px){.template-salon_editorial_luxury .grid{grid-template-columns:1fr}.template-salon_editorial_luxury .media-card img,.template-salon_editorial_luxury .gallery-grid img:first-child{height:250px}}
 `.trim()
 
+  if (template === 'clinic_private_care') return `
+body.template-clinic_private_care{--primary:#c8e86b;--secondary:#1b211e;--accent:#dce4d8;--background:#f4f2eb;--surface:#fffefa;--text-primary:#111412;--text-secondary:#5d665f;--border:rgba(17,20,18,.14);--shadow:rgba(17,20,18,.10);--radius:18px;background:var(--background)}
+.template-clinic_private_care .site-header{background:rgba(17,20,18,.88);border-bottom-color:rgba(255,255,255,.08)}
+.template-clinic_private_care .brand{font-family:"Manrope",Inter,ui-sans-serif,system-ui,sans-serif;font-size:clamp(20px,2vw,28px);font-weight:750;letter-spacing:-.05em;color:#fff}
+.template-clinic_private_care .nav-desktop a,.template-clinic_private_care .nav-drawer a{font-size:12px;font-weight:800;letter-spacing:.05em;text-transform:uppercase}
+.template-clinic_private_care .hero{min-height:min(840px,92svh);align-items:end}
+.template-clinic_private_care .hero:before{background:linear-gradient(90deg,rgba(17,20,18,.90) 0%,rgba(17,20,18,.58) 48%,rgba(17,20,18,.18)),radial-gradient(circle at 78% 18%,rgba(200,232,107,.12),transparent 22rem)}
+.template-clinic_private_care .hero-card{max-width:860px;border-radius:0;background:transparent;border:0;box-shadow:none;padding:0}
+.template-clinic_private_care .hero-card h1,.template-clinic_private_care .hero-card p,.template-clinic_private_care .hero-card .eyebrow{color:#fff}
+.template-clinic_private_care h1,.template-clinic_private_care h2{font-family:"Space Grotesk",Georgia,serif;font-weight:600;letter-spacing:-.08em}
+.template-clinic_private_care h1{max-width:12ch;font-size:clamp(48px,8vw,104px)}
+.template-clinic_private_care .grid{grid-template-columns:1fr;gap:0;border-top:1px solid var(--border)}
+.template-clinic_private_care .card{display:grid;grid-template-columns:76px 1fr 1fr 40px;align-items:center;gap:24px;padding:26px 0;border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;box-shadow:none}
+.template-clinic_private_care .card:hover{padding-inline:18px;background:#dce4d8}
+.template-clinic_private_care .card h3{font-family:"Space Grotesk",Georgia,serif;font-size:clamp(26px,2.4vw,34px)}
+.template-clinic_private_care .media-card{border-radius:0;overflow:hidden}
+.template-clinic_private_care .media-card img{height:560px}
+.template-clinic_private_care .section-alt{background:#1b211e;color:#fff}
+.template-clinic_private_care .section-alt p,.template-clinic_private_care .section-alt h2,.template-clinic_private_care .section-alt h3,.template-clinic_private_care .section-alt .eyebrow,.template-clinic_private_care .section-alt .lead{color:inherit}
+.template-clinic_private_care .contact-list a,.template-clinic_private_care .contact-list span{padding:20px 0;border:0;border-top:1px solid var(--border);border-radius:0;background:transparent}
+.template-clinic_private_care .faq-list details{border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;box-shadow:none;padding:24px 0}
+.template-clinic_private_care .faq-list summary{font-family:"Space Grotesk",Georgia,serif;font-size:clamp(22px,2vw,30px)}
+.template-clinic_private_care .cta-band{border-radius:0;background:#111412;box-shadow:none}
+.template-clinic_private_care .cta-band h2,.template-clinic_private_care .cta-band p{color:#fff}
+.template-clinic_private_care .cta-band .btn{background:#c8e86b;color:#111412}
+.template-clinic_private_care .site-footer{background:#111412}
+@media(max-width:960px){.template-clinic_private_care .card{grid-template-columns:42px 1fr 25px;gap:12px}.template-clinic_private_care .card p{display:none}}
+@media(max-width:640px){.template-clinic_private_care h1{font-size:clamp(42px,14vw,68px)}.template-clinic_private_care .media-card img{height:320px}}
+`.trim()
+
+  if (template === 'mechanic_precision_workshop') return `
+body.template-mechanic_precision_workshop{--primary:#e46c3b;--secondary:#202222;--accent:#ff9a65;--background:#f1efe9;--surface:#fbfaf6;--text-primary:#151616;--text-secondary:#616764;--border:rgba(21,22,22,.15);--shadow:rgba(21,22,22,.10);--radius:18px;background:var(--background)}
+.template-mechanic_precision_workshop .site-header{background:rgba(21,22,22,.92);border-bottom-color:rgba(255,255,255,.10)}
+.template-mechanic_precision_workshop .brand{font-family:"Space Grotesk",Inter,ui-sans-serif,system-ui,sans-serif;font-size:clamp(20px,2vw,28px);font-weight:700;letter-spacing:-.04em;color:#fff}
+.template-mechanic_precision_workshop .nav-desktop a,.template-mechanic_precision_workshop .nav-drawer a{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.template-mechanic_precision_workshop .hero{min-height:min(860px,92svh);align-items:end}
+.template-mechanic_precision_workshop .hero:before{background:linear-gradient(90deg,rgba(15,16,16,.92),rgba(15,16,16,.46) 57%,rgba(15,16,16,.12)),radial-gradient(circle at 82% 20%,rgba(228,108,59,.18),transparent 24rem)}
+.template-mechanic_precision_workshop .hero-card{max-width:860px;border-radius:0;background:transparent;border:0;box-shadow:none;padding:0}
+.template-mechanic_precision_workshop .hero-card h1,.template-mechanic_precision_workshop .hero-card p,.template-mechanic_precision_workshop .hero-card .eyebrow{color:#fff}
+.template-mechanic_precision_workshop h1,.template-mechanic_precision_workshop h2{font-family:"Space Grotesk",Inter,ui-sans-serif,system-ui,sans-serif;font-weight:600;letter-spacing:-.09em}
+.template-mechanic_precision_workshop h1{max-width:11ch;font-size:clamp(48px,8vw,102px)}
+.template-mechanic_precision_workshop .grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+.template-mechanic_precision_workshop .card{display:grid;grid-template-rows:auto 1fr auto;gap:16px;padding:28px;border-radius:0;background:#202222;color:#fff;box-shadow:none}
+.template-mechanic_precision_workshop .card p{color:rgba(255,255,255,.72)}
+.template-mechanic_precision_workshop .card h3{font-family:"Space Grotesk",Inter,ui-sans-serif,system-ui,sans-serif;font-size:clamp(26px,2.2vw,34px)}
+.template-mechanic_precision_workshop .section-alt{background:#202222;color:#fff}
+.template-mechanic_precision_workshop .section-alt p,.template-mechanic_precision_workshop .section-alt h2,.template-mechanic_precision_workshop .section-alt h3,.template-mechanic_precision_workshop .section-alt .eyebrow,.template-mechanic_precision_workshop .section-alt .lead{color:inherit}
+.template-mechanic_precision_workshop .contact-list a,.template-mechanic_precision_workshop .contact-list span{padding:18px 0;border:0;border-top:1px solid var(--border);border-radius:0;background:transparent}
+.template-mechanic_precision_workshop .faq-list details{border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;box-shadow:none;padding:24px 0}
+.template-mechanic_precision_workshop .faq-list summary{font-family:"Space Grotesk",Inter,ui-sans-serif,system-ui,sans-serif;font-size:clamp(22px,2vw,30px)}
+.template-mechanic_precision_workshop .cta-band{border-radius:0;background:#151616;box-shadow:none}
+.template-mechanic_precision_workshop .cta-band h2,.template-mechanic_precision_workshop .cta-band p{color:#fff}
+.template-mechanic_precision_workshop .cta-band .btn{background:#e46c3b;color:#fff}
+.template-mechanic_precision_workshop .site-footer{background:#151616}
+@media(max-width:960px){.template-mechanic_precision_workshop .grid{grid-template-columns:1fr}.template-mechanic_precision_workshop h1{font-size:clamp(44px,12vw,72px)}}
+`.trim()
+
+  if (template === 'service_company_modern') return `
+body.template-service_company_modern{--primary:#d66a3d;--secondary:#2b4037;--accent:#f1c6a8;--background:#f7f7f3;--surface:#ffffff;--text-primary:#17221f;--text-secondary:#52615b;--border:rgba(23,34,31,.10);--shadow:rgba(23,34,31,.10);--radius:22px;background:linear-gradient(180deg,#f7f7f3,#f1f4ef)}
+.template-service_company_modern .site-header{background:rgba(247,247,243,.88);border-bottom-color:rgba(23,34,31,.08)}
+.template-service_company_modern .brand{font-family:Manrope,Inter,ui-sans-serif,system-ui,sans-serif;font-size:clamp(21px,2vw,31px);font-weight:850;letter-spacing:-.05em}
+.template-service_company_modern .nav-desktop a,.template-service_company_modern .nav-drawer a{font-size:14px;font-weight:700}
+.template-service_company_modern .hero{min-height:min(780px,88svh);align-items:center}
+.template-service_company_modern .hero:before{background:linear-gradient(90deg,rgba(12,22,19,.92),rgba(12,22,19,.72) 46%,rgba(12,22,19,.18)),radial-gradient(circle at 78% 22%,rgba(214,106,61,.24),transparent 24rem)}
+.template-service_company_modern .hero-card{max-width:760px;border-radius:32px;background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.16);box-shadow:0 30px 90px rgba(0,0,0,.22)}
+.template-service_company_modern .hero-card h1,.template-service_company_modern .hero-card p,.template-service_company_modern .hero-card .eyebrow{color:#fff}
+.template-service_company_modern .grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:18px}
+.template-service_company_modern .card{border-radius:22px;background:#fff;box-shadow:0 24px 60px rgba(23,34,31,.08)}
+.template-service_company_modern .card h3{font-family:Manrope,Inter,ui-sans-serif,system-ui,sans-serif;font-size:clamp(20px,1.9vw,28px)}
+.template-service_company_modern .section-alt{background:linear-gradient(180deg,rgba(220,229,220,.46),rgba(255,255,255,.2))}
+.template-service_company_modern .contact-list a,.template-service_company_modern .contact-list span{padding:18px 20px;border-radius:20px;background:linear-gradient(180deg,#fff,#f9fbf8);box-shadow:0 18px 40px rgba(23,34,31,.06)}
+.template-service_company_modern .faq-list details{border-radius:22px;background:#fff;box-shadow:0 18px 40px rgba(23,34,31,.06)}
+.template-service_company_modern .cta-band{border-radius:30px;background:linear-gradient(135deg,#17221f,#2b4037 58%,#d66a3d);box-shadow:0 28px 80px rgba(23,34,31,.18)}
+.template-service_company_modern .cta-band h2,.template-service_company_modern .cta-band p{color:#fff}
+.template-service_company_modern .cta-band .btn{background:#fff;color:#17221f}
+.template-service_company_modern .site-footer{background:#17221f}
+.template-service_company_modern .site-footer p,.template-service_company_modern .site-footer a,.template-service_company_modern .footer-title,.template-service_company_modern .foot-bottom{color:#f6f3ed}
+@media(max-width:960px){.template-service_company_modern .grid{grid-template-columns:1fr 1fr}}
+@media(max-width:640px){.template-service_company_modern .grid{grid-template-columns:1fr}.template-service_company_modern .hero-card{border-radius:24px;padding:24px}}
+`.trim()
+
   return `
 body.template-service_clarity_default .hero-card{max-width:820px}
 body.template-service_clarity_default .grid{grid-template-columns:repeat(3,minmax(0,1fr))}
@@ -657,7 +777,7 @@ body.template-service_clarity_default .card{border-radius:24px}
 }
 
 function shouldIncludeFaqPage(ctx: FreeformCtx, profile: BusinessProfile, template: BlockTemplateFamilyKey): boolean {
-  if (template !== 'byggform_architectural_trust') return false
+  if (template !== 'byggform_architectural_trust' && template !== 'service_company_modern' && template !== 'clinic_private_care' && template !== 'mechanic_precision_workshop') return false
   const source = sourceFor(ctx, { slug: 'index', title: '', purpose: '', sections: [] })
   const serviceCount = serviceIdeas(ctx).filter(isGoodServiceTitle).length
   const questionSignals = (source.match(/\?/g) || []).length
@@ -665,30 +785,46 @@ function shouldIncludeFaqPage(ctx: FreeformCtx, profile: BusinessProfile, templa
   const categoryScore = ctx.category ? 2 : 0
   const projectKindScore = /construction|electrical|plumbing|cleaning|general/.test(String(profile.kind || '')) ? 2 : 0
   const sourceScore = Math.min(4, Math.floor(source.length / 650))
-  return categoryScore + projectKindScore + sourceScore + Math.min(3, serviceCount) + Math.min(3, questionSignals + Math.floor(processSignals / 4)) >= 6
+  const total = categoryScore + projectKindScore + sourceScore + Math.min(3, serviceCount) + Math.min(3, questionSignals + Math.floor(processSignals / 4))
+  if (template === 'mechanic_precision_workshop') return total >= 4
+  if (template === 'clinic_private_care') return total >= 4
+  if (template === 'service_company_modern') return total >= 5
+  return total >= 6
 }
 
 function shouldRenderServices(plan: FreeformPlan, page: FreeformPageSpec): boolean {
+  if (plan.templateFamily === 'mechanic_precision_workshop') return page.pageKind === 'landing' || page.pageKind === 'services'
+  if (plan.templateFamily === 'clinic_private_care') return page.pageKind === 'landing' || page.pageKind === 'services'
   if (plan.templateFamily === 'byggform_architectural_trust') return page.pageKind === 'landing' || page.pageKind === 'services'
+  if (plan.templateFamily === 'service_company_modern') return page.pageKind === 'landing' || page.pageKind === 'services'
   if (plan.templateFamily === 'service_clarity_default') return page.pageKind === 'landing' || page.pageKind === 'services'
   if (plan.templateFamily === 'salon_editorial_luxury') return page.pageKind === 'landing' || page.pageKind === 'services'
   return page.pageKind !== 'faq'
 }
 
 function shouldRenderIntro(plan: FreeformPlan, page: FreeformPageSpec): boolean {
+  if (plan.templateFamily === 'mechanic_precision_workshop') return page.pageKind === 'landing' || page.pageKind === 'about' || page.pageKind === 'contact'
+  if (plan.templateFamily === 'clinic_private_care') return page.pageKind === 'landing' || page.pageKind === 'about' || page.pageKind === 'contact'
   if (plan.templateFamily === 'byggform_architectural_trust') return page.pageKind === 'landing' || page.pageKind === 'services' || page.pageKind === 'about'
+  if (plan.templateFamily === 'service_company_modern') return page.pageKind === 'landing' || page.pageKind === 'about' || page.pageKind === 'contact'
   if (plan.templateFamily === 'service_clarity_default') return page.pageKind !== 'faq'
   return page.pageKind !== 'faq'
 }
 
 function shouldRenderGallery(plan: FreeformPlan, page: FreeformPageSpec, home: boolean): boolean {
   if (!home || page.pageKind === 'faq') return false
+  if (plan.templateFamily === 'mechanic_precision_workshop') return false
+  if (plan.templateFamily === 'clinic_private_care') return false
   if (plan.templateFamily === 'byggform_architectural_trust') return false
+  if (plan.templateFamily === 'service_company_modern') return false
   return true
 }
 
 function shouldRenderContact(plan: FreeformPlan, page: FreeformPageSpec): boolean {
+  if (plan.templateFamily === 'mechanic_precision_workshop') return page.pageKind === 'landing' || page.pageKind === 'contact'
+  if (plan.templateFamily === 'clinic_private_care') return page.pageKind === 'landing' || page.pageKind === 'contact'
   if (plan.templateFamily === 'byggform_architectural_trust') return page.pageKind === 'landing' || page.pageKind === 'contact' || page.pageKind === 'faq'
+  if (plan.templateFamily === 'service_company_modern') return page.pageKind === 'landing' || page.pageKind === 'contact'
   return page.pageKind !== 'contact'
 }
 
@@ -889,18 +1025,14 @@ function palette(ctx: FreeformCtx) {
   const bg = color(input.background, salon ? '#f8f1eb' : '#0a0e1a')
   const primary = color(input.primary, salon ? '#8f5563' : '#f97316')
   const light = lum(bg) > .56
-  const surface = color(input.surface, salon ? '#fffaf6' : '#131a2b')
-  const preferredText = color(input.textPrimary, light ? '#291f20' : '#f1f5f9')
-  const preferredMuted = color(input.textSecondary, light ? '#665756' : '#cbd5e1')
   return {
     primary,
     secondary: color(input.secondary, salon ? '#bd9075' : '#0ea5e9'),
     accent: color(input.accent, salon ? '#d7b98d' : '#f59e0b'),
     background: bg,
-    surface,
-    text: readableOn([bg, surface], preferredText, light ? '#241b1d' : '#ffffff', 6.2),
-    muted: readableOn([bg, surface], preferredMuted, light ? '#5f5150' : '#d8d0ca', 4.5),
-    accentText: readableOn([bg, surface], primary, light ? '#5b302f' : '#f4c7a7', 4.5),
+    surface: color(input.surface, salon ? '#fffaf6' : '#131a2b'),
+    text: readable(bg, color(input.textPrimary, light ? '#291f20' : '#f1f5f9'), light ? '#241b1d' : '#ffffff'),
+    muted: readable(bg, color(input.textSecondary, light ? '#665756' : '#cbd5e1'), light ? '#5f5150' : '#d8d0ca'),
     onPrimary: contrast(primary, '#fff') >= contrast(primary, '#241b1d') ? '#fff' : '#241b1d',
     border: light ? 'rgba(54,42,38,.13)' : 'rgba(255,255,255,.13)',
     shadow: light ? 'rgba(70,50,43,.14)' : 'rgba(0,0,0,.34)',
@@ -909,13 +1041,6 @@ function palette(ctx: FreeformCtx) {
 }
 function color(v: string, f: string): string { const x = String(v || '').trim(); return /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(x) || /^rgb(a)?\([^)]+\)$/i.test(x) ? x : f }
 function readable(bg: string, pref: string, fallback: string): string { return contrast(bg, pref) >= 4.5 ? pref : contrast(bg, fallback) >= 4.5 ? fallback : contrast(bg, '#111') >= contrast(bg, '#fff') ? '#111' : '#fff' }
-function readableOn(backgrounds: string[], pref: string, fallback: string, minRatio: number): string {
-  if (backgrounds.every((bg) => contrast(bg, pref) >= minRatio)) return pref
-  if (backgrounds.every((bg) => contrast(bg, fallback) >= minRatio)) return fallback
-  const blackScore = Math.min(...backgrounds.map((bg) => contrast(bg, '#111')))
-  const whiteScore = Math.min(...backgrounds.map((bg) => contrast(bg, '#fff')))
-  return blackScore >= whiteScore ? '#111' : '#fff'
-}
 function contrast(a: string, b: string): number { const A = lum(a), B = lum(b), l = Math.max(A, B), d = Math.min(A, B); return (l + .05) / (d + .05) }
 function lum(c: string): number { const r = rgb(c); if (!r) return 0; const a = [r.r, r.g, r.b].map((v) => { const s = v / 255; return s <= .03928 ? s / 12.92 : ((s + .055) / 1.055) ** 2.4 }); return .2126 * a[0] + .7152 * a[1] + .0722 * a[2] }
 function rgb(c: string): { r: number; g: number; b: number } | null { const x = String(c || '').trim().toLowerCase(); if (/^#[0-9a-f]{3}$/i.test(x)) return { r: parseInt(x[1] + x[1], 16), g: parseInt(x[2] + x[2], 16), b: parseInt(x[3] + x[3], 16) }; if (/^#[0-9a-f]{6}$/i.test(x)) return { r: parseInt(x.slice(1, 3), 16), g: parseInt(x.slice(3, 5), 16), b: parseInt(x.slice(5, 7), 16) }; const m = x.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/); return m ? { r: +m[1], g: +m[2], b: +m[3] } : null }
@@ -939,12 +1064,17 @@ async function callModel(key: string, model: string, label: string, system: stri
   }
 }
 
-async function callBuildModelCascade(key: string, label: string, system: string, user: string, maxTokens: number): Promise<{ model: string; text: string }> {
-  const attempts: { model: string; timeoutMs: number }[] = [
-    { model: BUILD_MODEL, timeoutMs: 38_000 },
-    { model: BUILD_FALLBACK_MODEL, timeoutMs: 42_000 },
-    { model: BUILD_LAST_RESORT_MODEL, timeoutMs: 42_000 },
-  ]
+async function callBuildModelCascade(ctx: FreeformCtx, key: string, label: string, system: string, user: string, maxTokens: number): Promise<{ model: string; text: string }> {
+  const attempts: { model: string; timeoutMs: number }[] = isEnglish(ctx)
+    ? [
+        { model: BUILD_FALLBACK_MODEL, timeoutMs: 40_000 },
+        { model: BUILD_LAST_RESORT_MODEL, timeoutMs: 42_000 },
+      ]
+    : [
+        { model: BUILD_MODEL, timeoutMs: 38_000 },
+        { model: BUILD_FALLBACK_MODEL, timeoutMs: 42_000 },
+        { model: BUILD_LAST_RESORT_MODEL, timeoutMs: 42_000 },
+      ]
   const errors: string[] = []
   for (const attempt of attempts) {
     try {
