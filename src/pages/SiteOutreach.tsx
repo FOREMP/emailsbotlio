@@ -57,14 +57,30 @@ export default function SiteOutreach() {
   const [allSentRows, setAllSentRows] = useState<SentEmailRow[]>([]);
 
   const load = useCallback(async () => {
+    setLoading(true);
+    setSeq(null);
+    setNodes([]);
+    setEnrollments([]);
+    setRecent([]);
+    setStatsRows([]);
+    setAllSentRows([]);
+    setDirty({});
     const sequenceName = language === "en" ? "Site Demo Outreach EN" : "Site Demo Outreach";
     // Internal tool — sequence is shared across all logged-in operators.
-    const { data: s } = await supabase
+    const { data: s, error: seqError } = await supabase
       .from("sequences")
       .select("id, contact_list_id")
       .eq("name", sequenceName)
       .maybeSingle();
-    if (!s?.id) { setLoading(false); return; }
+    if (seqError) {
+      toast({ title: "Kunde inte ladda outreach", description: seqError.message, variant: "destructive" });
+      setLoading(false);
+      return;
+    }
+    if (!s?.id) {
+      setLoading(false);
+      return;
+    }
     setSeq(s as Seq);
 
     const [{ data: ns }, { data: enrsRaw }] = await Promise.all([

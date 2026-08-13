@@ -128,6 +128,56 @@ export default function SiteLeads() {
   // Which builder engine new jobs use
   const [genMode, setGenMode] = useState<"template" | "freeform">("template");
 
+  const load = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("site_leads")
+        .select("id, company_name, email, website, phone, address, category, niche, rating, reviews_count, review_snippets, feedback, status, audit_score, demo_url, created_at, language")
+        .order("created_at", { ascending: false })
+        .limit(500);
+      if (error) throw error;
+      setLeads((data ?? []) as Lead[]);
+      setSelected(new Set());
+      const c: Record<string, number> = {};
+      for (const l of data ?? []) c[l.status] = (c[l.status] ?? 0) + 1;
+      setCounts(c);
+      return;
+    } catch (err) {
+      const message = (err as Error).message || "";
+      const maybeMissingLanguage = /language/i.test(message) || /column/i.test(message);
+      if (!maybeMissingLanguage) {
+        toast({ title: "Kunde inte ladda leads", description: message, variant: "destructive" });
+        setLeads([]);
+        setCounts({});
+        return;
+      }
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from("site_leads")
+        .select("id, company_name, email, website, phone, address, category, niche, rating, reviews_count, review_snippets, feedback, status, audit_score, demo_url, created_at")
+        .order("created_at", { ascending: false })
+        .limit(500);
+      if (error) throw error;
+      const rows = ((data ?? []) as any[]).map((row) => ({ ...row, language: "sv" })) as Lead[];
+      setLeads(rows);
+      setSelected(new Set());
+      const c: Record<string, number> = {};
+      for (const l of rows) c[l.status] = (c[l.status] ?? 0) + 1;
+      setCounts(c);
+      toast({
+        title: "Leads laddade i kompatibilitetsläge",
+        description: "Språkfältet saknas eller är inte migrerat fullt i databasen ännu. Svenska leads visas ändå.",
+        variant: "destructive",
+      });
+    } catch (fallbackErr) {
+      toast({ title: "Kunde inte ladda leads", description: (fallbackErr as Error).message, variant: "destructive" });
+      setLeads([]);
+      setCounts({});
+    }
+  };
+
   const loadAutoState = async () => {
     const { data } = await supabase
       .from("app_settings")
@@ -218,19 +268,6 @@ export default function SiteLeads() {
     } finally {
       setBulkBusy(false);
     }
-  };
-
-  const load = async () => {
-    const { data } = await supabase
-      .from("site_leads")
-      .select("id, company_name, email, website, phone, address, category, niche, rating, reviews_count, review_snippets, feedback, status, audit_score, demo_url, created_at, language")
-      .order("created_at", { ascending: false })
-      .limit(500);
-    setLeads((data ?? []) as Lead[]);
-    setSelected(new Set());
-    const c: Record<string, number> = {};
-    for (const l of data ?? []) c[l.status] = (c[l.status] ?? 0) + 1;
-    setCounts(c);
   };
 
   useEffect(() => { load(); loadAutoState(); loadGenMode(); }, []);
@@ -331,6 +368,7 @@ export default function SiteLeads() {
     setUploading(true);
     setProgress(0);
     const totals = { inserted: 0, duplicates: 0, invalid: 0, skipped_no_contact: 0, failed_batches: 0, total: 0 };
+    const batchErrors: string[] = [];
     try {
       for (let i = 0; i < parsed.rows.length; i += BATCH_SIZE) {
         const rows = parsed.rows.slice(i, i + BATCH_SIZE).map((row) => slimRow(row, mapping));
@@ -339,7 +377,12 @@ export default function SiteLeads() {
         });
         if (error) {
           totals.failed_batches += 1;
+          batchErrors.push(error.message);
         } else {
+          if ((data as any)?.error) {
+            totals.failed_batches += 1;
+            batchErrors.push(String((data as any).error));
+          }
           totals.inserted += data?.inserted ?? 0;
           totals.duplicates += data?.duplicates ?? 0;
           totals.invalid += data?.invalid ?? 0;
@@ -353,6 +396,13 @@ export default function SiteLeads() {
         title: "Import klar",
         description: `${totals.inserted} nya, ${totals.duplicates} dubbletter, ${totals.skipped_no_contact} utan både email + hemsida.${totals.failed_batches ? ` ${totals.failed_batches} batchar misslyckades.` : ""}`,
       });
+      if (batchErrors.length) {
+        toast({
+          title: "Importfel hittades",
+          description: batchErrors[0],
+          variant: "destructive",
+        });
+      }
       setParsed(null);
       setProgress(0);
       await load();

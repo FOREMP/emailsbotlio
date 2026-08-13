@@ -48,14 +48,49 @@ export default function SiteApprovals() {
   const [languageFilter, setLanguageFilter] = useState<string>("all");
 
   const load = async () => {
-    const { data } = await supabase
-      .from("site_leads")
-      .select("id, company_name, language, email, website, phone, category, status, audit_score, audit_reason, audit_details, demo_url, generated_site_id, feedback, updated_at")
-      .in("status", ["awaiting_approval", "generating", "failed", "approved", "site_good_enough"])
-      .order("updated_at", { ascending: false })
-      .limit(400);
-    setRows((data ?? []) as LeadRow[]);
-    setLoading(false);
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("site_leads")
+        .select("id, company_name, language, email, website, phone, category, status, audit_score, audit_reason, audit_details, demo_url, generated_site_id, feedback, updated_at")
+        .in("status", ["awaiting_approval", "generating", "failed", "approved", "site_good_enough"])
+        .order("updated_at", { ascending: false })
+        .limit(400);
+      if (error) throw error;
+      setRows((data ?? []) as LeadRow[]);
+      setLoading(false);
+      return;
+    } catch (err) {
+      const message = (err as Error).message || "";
+      const maybeMissingLanguage = /language/i.test(message) || /column/i.test(message);
+      if (!maybeMissingLanguage) {
+        toast({ title: "Kunde inte ladda approvals", description: message, variant: "destructive" });
+        setRows([]);
+        setLoading(false);
+        return;
+      }
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from("site_leads")
+        .select("id, company_name, email, website, phone, category, status, audit_score, audit_reason, audit_details, demo_url, generated_site_id, feedback, updated_at")
+        .in("status", ["awaiting_approval", "generating", "failed", "approved", "site_good_enough"])
+        .order("updated_at", { ascending: false })
+        .limit(400);
+      if (error) throw error;
+      setRows(((data ?? []) as any[]).map((row) => ({ ...row, language: "sv" })) as LeadRow[]);
+      toast({
+        title: "Approvals laddade i kompatibilitetsläge",
+        description: "Språkfältet saknas eller är inte migrerat fullt i databasen ännu. Svenska leads visas ändå.",
+        variant: "destructive",
+      });
+    } catch (fallbackErr) {
+      toast({ title: "Kunde inte ladda approvals", description: (fallbackErr as Error).message, variant: "destructive" });
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {

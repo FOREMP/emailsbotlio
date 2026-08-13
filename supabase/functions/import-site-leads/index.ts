@@ -103,6 +103,8 @@ Deno.serve(async (req) => {
 
     // Dedupe-insert
     let inserted = 0, skipped_no_contact = 0, duplicates = 0, invalid = 0
+    let failed = 0
+    let firstError: string | null = null
     for (const n of normalized) {
       const name = (n.company_name ?? '').trim()
       if (!name) { invalid++; continue }
@@ -135,13 +137,17 @@ Deno.serve(async (req) => {
       })
       if (error) {
         if (error.code === '23505') duplicates++
-        else console.error('insert err', error)
+        else {
+          failed++
+          firstError ||= error.message
+          console.error('insert err', error)
+        }
       } else {
         inserted++
       }
     }
 
-    return json({ ok: true, total: normalized.length, inserted, duplicates, invalid, skipped_no_contact })
+    return json({ ok: failed === 0, total: normalized.length, inserted, duplicates, invalid, skipped_no_contact, failed, error: firstError })
   } catch (err) {
     console.error('import-site-leads', err)
     return json({ error: (err as Error).message }, 500)
