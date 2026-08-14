@@ -29,6 +29,19 @@ const MAX_CONCURRENT_GEN = 5 // how many leads may be mid-pipeline at once
 const DAILY_GEN_CAP_FALLBACK = 16  // used only if we can't read sender limits
 const OUTREACH_DOMAINS = ['foremp.email', 'foremp.eu'] as const
 const GHOST_LIST_NAME = 'Site Leads (auto)'
+
+function isCanonicalDemoUrl(value?: string | null): boolean {
+  if (!value) return false
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'https:') return false
+    if (!url.hostname.endsWith('.vercel.app')) return false
+    if (url.hostname.endsWith('-foremp.vercel.app')) return false
+    return true
+  } catch {
+    return false
+  }
+}
 const STALE_PIPELINE_MINUTES = 30 // never let one dead scrape/generate/deploy block the whole queue
 const ORPHAN_GRACE_MINUTES = 10   // 'generating' with no generated_sites row = dead job
 
@@ -330,6 +343,14 @@ async function reconcile(
         .catch((e) => report.errors.push(`kick deploy ${gs.id}: ${e.message}`))
       moved++
     } else if (gs.status === 'live' && gs.demo_site_url) {
+      if (!isCanonicalDemoUrl(gs.demo_site_url)) {
+        await supabase.from('site_leads').update({
+          status: 'failed',
+          feedback: 'Site pipeline failed: demo URL was not published as a stable public URL. Re-run deploy.',
+        }).eq('id', lead.id)
+        moved++
+        continue
+      }
       await supabase.from('site_leads').update({
         status: 'awaiting_approval',
         demo_url: gs.demo_site_url,

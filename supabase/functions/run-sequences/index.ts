@@ -739,6 +739,18 @@ Deno.serve(async (req) => {
             console.log(`[enr ${enr.id}] send skipped: ${skipped} → deferred`)
             continue
           }
+
+          if (skipped === 'invalid_demo_url') {
+            await supabase.from('enrollments').update({
+              status: 'failed',
+              attempt_count: 0,
+              last_error: 'Blocked send: contact does not have a stable public demo URL yet. Rebuild or redeploy the demo before retrying.',
+              error_at: nowIso,
+            }).eq('id', enr.id)
+            console.warn(`[enr ${enr.id}] send skipped: invalid_demo_url → failed`)
+            failed++
+            continue
+          }
         }
         if (r.error || (r.data as any)?.error) {
           const msg = (r.data as any)?.error || r.error?.message || 'unknown send error'

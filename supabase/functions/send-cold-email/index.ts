@@ -61,6 +61,16 @@ function deriveCompany(domain: string, brandFromDb?: string | null): string {
 
 const CONTACT_PHONE = '076 190 5353'
 
+function isCanonicalDemoUrl(value?: string | null): boolean {
+  if (!value) return false
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' && url.hostname.endsWith('.vercel.app') && !url.hostname.endsWith('-foremp.vercel.app')
+  } catch {
+    return false
+  }
+}
+
 function stripExistingSignOff(text: string): string {
   if (!text) return text
   const pattern = /\n+\s*(Best regards|Kind regards|Sincerely|Cheers|Regards|Vänliga hälsningar|Med vänlig hälsning|Mvh|MVH|Hälsningar|Bästa hälsningar)[\s\S]*$/i
@@ -195,10 +205,30 @@ Deno.serve(async (req) => {
   const senderDomain = `${domainRow.sender_subdomain}.${domain}` // e.g. notify.foremp.eu
   const replyTo = domainRow.reply_to_email
 
+  const contactFields = (contact?.custom_fields ?? {}) as Record<string, any>
+  const canonicalDemoUrl =
+    (isCanonicalDemoUrl(contact?.demo_site_url) ? contact.demo_site_url : null)
+    ?? (isCanonicalDemoUrl(contactFields.demo_url) ? String(contactFields.demo_url) : null)
+    ?? (isCanonicalDemoUrl(contact?.demo_url) ? contact.demo_url : null)
+
+  const requiresDemoUrl = [
+    typeof prompt === 'string' ? prompt : '',
+    typeof subject_prompt === 'string' ? subject_prompt : '',
+    typeof subject_hint === 'string' ? subject_hint : '',
+    typeof subject === 'string' ? subject : '',
+    typeof bodyText === 'string' ? bodyText : '',
+  ].some((value) => value.includes('{{demo_url}}')) || !!contactFields.site_lead_id
+
+  if (requiresDemoUrl && !canonicalDemoUrl) {
+    return new Response(JSON.stringify({ skipped: 'invalid_demo_url' }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    })
+  }
+
   // Resolve subject + body
   let finalSubject = ''
   let finalBody = ''
-  const vars = { ...contact, ...(contact.custom_fields ?? {}) }
+  const vars = { ...contact, ...contactFields, ...(canonicalDemoUrl ? { demo_url: canonicalDemoUrl } : {}) }
 
   if (mode === 'ai') {
     if (!prompt) {

@@ -36,6 +36,16 @@ const STATUS_BADGE: Record<string, string> = {
   approved: "bg-emerald-500",
 };
 
+function isCanonicalDemoUrl(value?: string | null): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname.endsWith(".vercel.app") && !url.hostname.endsWith("-foremp.vercel.app");
+  } catch {
+    return false;
+  }
+}
+
 export default function SiteApprovals() {
   const [rows, setRows] = useState<LeadRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -146,6 +156,20 @@ export default function SiteApprovals() {
         .maybeSingle();
       if (!triggerNode?.id) throw new Error("Trigger-nod saknas i Site Demo Outreach.");
 
+      let canonicalDemoUrl = row.demo_url;
+      if (row.generated_site_id) {
+        const { data: generatedSite, error: siteErr } = await supabase
+          .from("generated_sites")
+          .select("demo_site_url, vercel_deployment_url, status")
+          .eq("id", row.generated_site_id)
+          .maybeSingle();
+        if (siteErr) throw siteErr;
+        canonicalDemoUrl = generatedSite?.demo_site_url ?? canonicalDemoUrl;
+      }
+      if (!isCanonicalDemoUrl(canonicalDemoUrl)) {
+        throw new Error("Demon har ingen stabil publik länk ännu. Kör om deployen innan du godkänner leaden.");
+      }
+
       // 2. Upsert the contact into that list with all site-lead vars in custom_fields
       const emailLower = row.email.toLowerCase().trim();
       const weakness = row.audit_details?.weaknesses?.[0] ?? row.audit_reason ?? "";
@@ -153,7 +177,7 @@ export default function SiteApprovals() {
       const custom_fields = {
         site_lead_id: row.id,
         company_name: row.company_name,
-        demo_url: row.demo_url,
+        demo_url: canonicalDemoUrl,
         website: row.website ?? "",
         audit_weakness: weakness,
         audit_score: row.audit_score ?? "",
@@ -172,7 +196,7 @@ export default function SiteApprovals() {
       let contactId: string;
       if (existing?.id) {
         const merged = { ...(existing.custom_fields as any ?? {}), ...custom_fields };
-        await supabase.from("contacts").update({ custom_fields: merged, first_name: firstName }).eq("id", existing.id);
+        await supabase.from("contacts").update({ custom_fields: merged, first_name: firstName, demo_site_url: canonicalDemoUrl }).eq("id", existing.id);
         contactId = existing.id;
       } else {
         const { data: inserted, error: insErr } = await supabase
@@ -183,6 +207,7 @@ export default function SiteApprovals() {
             email: emailLower,
             first_name: firstName,
             phone: row.phone,
+            demo_site_url: canonicalDemoUrl,
             custom_fields,
             tags: ["site-demo"],
           })
