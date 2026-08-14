@@ -150,7 +150,7 @@ export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<st
     return step(false, files, meta({ ...progress, stage: 'quality_check', rendered: plan.pages.map((p) => p.slug), built: plan.pages.map((p) => p.slug), lastStage: 'render' }), `v${VERSION} rendered ${plan.pages.length} pages`)
   }
   if (progress.stage === 'quality_check') {
-    const checked = qualityFixFiles(files)
+    const checked = qualityFixFiles(files, isEnglish(ctx))
     return step(true, checked, meta({ ...progress, stage: 'done', lastStage: 'quality_check' }), `v${VERSION} quality checked`)
   }
   return step(true, files, meta({ ...progress, stage: 'done', lastStage: 'done' }), 'v7 done')
@@ -167,9 +167,13 @@ function isEnglish(ctx: FreeformCtx): boolean {
   return ctx.language === 'en'
 }
 
+function businessName(ctx: FreeformCtx): string {
+  return decodeText(ctx.facts.business_name || ctx.nicheLabel || (isEnglish(ctx) ? 'The business' : 'Företaget'))
+}
+
 function buildPlan(ctx: FreeformCtx): FreeformPlan {
   const profile = buildProfile(ctx)
-  const business = ctx.facts.business_name || ctx.nicheLabel || 'Företaget'
+  const business = businessName(ctx)
   const family = selectBlockTemplateFamily({
     category: ctx.category,
     niche: ctx.facts.niche,
@@ -182,6 +186,7 @@ function buildPlan(ctx: FreeformCtx): FreeformPlan {
     serviceTitle: profile.servicePlural,
     aboutTitle: profile.aboutTitle,
     includeFaqPage: shouldIncludeFaqPage(ctx, profile, family.key),
+    language: isEnglish(ctx) ? 'en' : 'sv',
   }).slice(0, MAX_PAGES).map((page) => ({ ...page, templateFamily: family.key }))
   return {
     designDirective: templateDirective(family),
@@ -302,11 +307,28 @@ function buildFactPack(ctx: FreeformCtx): FactPack {
 async function pageContent(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec): Promise<{ source: 'ai' | 'fallback'; content: FreeformPageContent; error?: string; model?: string }> {
   const profile = buildProfile(ctx)
   const pack = buildFactPack(ctx)
-  const system = `${isEnglish(ctx)
-    ? 'You are writing the first draft for a premium English-language website. If any instruction below is in Swedish, interpret it and still produce final website copy in natural English. Respond only with JSON. No HTML. No CSS.'
-    : 'Du skriver första utkastet till innehåll för en svensk premium-webbplats. Svara endast med JSON. Ingen HTML. Ingen CSS.'}
+  const schemaLine = `Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","heroLead":"","introTitle":"","introText":"","primaryCta":"","secondaryCta":"","services":[{"title":"","text":"","detail":""}],"sections":[{"eyebrow":"","title":"","text":"","bullets":[""]}],"faqs":[{"question":"","answer":""}],"faqGroups":[{"title":"","items":[{"question":"","answer":""}]}],"closingTitle":"","closingText":""}`
+  const system = isEnglish(ctx)
+    ? `You are writing the first content draft for a premium English-language website. Respond only with JSON. No HTML. No CSS.
+HARD RULES:
+- EVERY field must be written in natural, native English. Never output Swedish words or Swedish sentences, even if the source material is Swedish - translate it.
+- The BUSINESS TYPE in the profile (derived from the uploaded category) is the truth. Never write about a different industry.
+- If the source text clearly contradicts the business type (electrical, plumbing, construction, automotive), follow the source text, never a beauty/salon angle.
+- Only use industry words that fit the business. Do not write "treatment", "salon" or "clinic" unless it is a beauty or care business.
+- Write as the business, never as the system. Never write "this page shows", "this website was built", "AI" or "demo".
+- Never invent prices, years, certifications, customer names, reviews, staff names or opening hours.
+- Only use services from the approved service list or clear source text.
+- FAQ must help a real customer book or understand the offering, never be about the website.
+- Follow the chosen template family and block order. Blocks drive structure and feel; you fill them with the company's facts.
+- Restaurant landing page family: only restaurant/bar/cafe relevant copy, everything on index.html.
+- Editorial service family: warmer and more premium, still factual and based on the category/source.
+- FAQ page: use faqGroups with 2-3 categories and only questions that fit the company. Fewer good questions beat many generic ones.
+- If the source material is thin: write elegantly and industry-relevant, but cautiously.
+- Max 45 words per text field.
+${schemaLine}`
+    : `Du skriver första utkastet till innehåll för en svensk premium-webbplats. Svara endast med JSON. Ingen HTML. Ingen CSS.
 HÅRDA REGLER:
-- ${isEnglish(ctx) ? 'All final text must be in English. Translate Swedish source material when needed.' : 'All text ska vara på svenska. Översätt källtext som är på engelska.'}
+- All text ska vara på svenska. Översätt källtext som är på engelska.
 - VERKSAMHETSTYPEN i profilen (härledd från uppladdad kategori) är sanning. Skriv ALDRIG om en annan bransch.
 - Om källtexten tydligt motsäger verksamhetstypen (t.ex. el, rör, bygg, bil) ska du följa källtexten, aldrig en skönhets- eller salongsvinkel.
 - Använd bara branschord som passar verksamheten. Skriv inte "behandling", "salong" eller "klinik" om det inte är ett skönhets-/vårdföretag.
@@ -321,7 +343,7 @@ HÅRDA REGLER:
 - Om sidan är FAQ: använd faqGroups med 2-3 kategorier och bara frågor som passar företagets kategori/källa. Hellre färre bra frågor än många generiska.
 - Om underlaget är tunt: skriv elegant och branschrelevant men försiktigt.
 - Varje textfält max 45 ord.
-Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","heroLead":"","introTitle":"","introText":"","primaryCta":"","secondaryCta":"","services":[{"title":"","text":"","detail":""}],"sections":[{"eyebrow":"","title":"","text":"","bullets":[""]}],"faqs":[{"question":"","answer":""}],"faqGroups":[{"title":"","items":[{"question":"","answer":""}]}],"closingTitle":"","closingText":""}`
+${schemaLine}`
   const user = [
     `Företag: ${ctx.facts.business_name || '[okänt]'}`,
     `UPPLADDAD LEAD-KATEGORI (primär signal): ${ctx.category || '[saknas]'}`,
@@ -343,6 +365,7 @@ Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","he
     JSON.stringify(pack),
     'Källtext:',
     sourceFor(ctx, page).slice(0, 2200) || '[Tunt underlag. Använd säker branschcopy utan påhittade fakta.]',
+    isEnglish(ctx) ? 'REMINDER: the labels above are Swedish, but every value you output must be written in English.' : '',
   ].filter(Boolean).join('\n')
   try {
     const got = await callBuildModelCascade(ctx, ctx.openrouterKey, `freeform-v7-content:${page.slug}`, system, user, 3000)
@@ -361,15 +384,30 @@ Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","he
 async function polishContent(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, draft: FreeformPageContent): Promise<{ source: 'polished' | 'fallback'; content: FreeformPageContent; error?: string; model?: string }> {
   const profile = buildProfile(ctx)
   const pack = buildFactPack(ctx)
-  const system = `${isEnglish(ctx)
-    ? 'You are a senior English editor and conversion copywriter. You receive JSON content for one page. Rewrite it into natural, polished English and improve thin content carefully using the approved fact pack.'
-    : 'Du är en senior svensk redaktör och conversion copywriter. Du får JSON-innehåll till EN sida. Uppgift: skriv om till naturlig, korrekt, premium svensk text och fyll ut tunt innehåll med försiktig, relevant copy från faktapaketet.'}
+  const system = isEnglish(ctx)
+    ? `You are a senior English editor and conversion copywriter. You receive JSON content for ONE page. Rewrite it into natural, polished English and carefully improve thin content using the approved fact pack.
+
+HARD RULES:
+- Respond with the same JSON schema only. No markdown.
+- Keep hard facts exactly: name, phone, email, address, city.
+- Never add prices, years, certifications, customer names, reviews, staff names or opening hours.
+- EVERY field must be native English. If the draft contains Swedish words or sentences, translate them. No Swedish may remain.
+- Remove anything that sounds internal: "the page", "the website", "demo", "AI", "adapted for the business".
+- Fix mojibake, e.g. VÃ¥rvÃ¤dersvÃ¤gen -> Vårvädersvägen (keep proper names correct).
+- FAQ must be useful for customers and specific to the business.
+- Service titles must be short, real services or treatments - not sentences or instructions.
+- Follow the profile's business type. Use words like clinic/treatment/salon ONLY for beauty and care businesses. For electrical, plumbing, construction, automotive and cleaning use service, job, installation, maintenance.
+- Keep the chosen template family's feel: restaurant = atmosphere/food/visit; editorial service = warm premium service; practical service = clarity, trust and process.
+- Never sound like internal template copy. Remove generic lines like "The visitor gets..." and write in the company's voice.
+- FAQ pages: group questions in faqGroups. Only use groups that genuinely fit the business, e.g. First contact, Planning, Scope, Visit, Delivery or Practical questions.
+- If the draft describes the wrong industry: rewrite it to match the profile's business type and the source text.`
+    : `Du är en senior svensk redaktör och conversion copywriter. Du får JSON-innehåll till EN sida. Uppgift: skriv om till naturlig, korrekt, premium svensk text och fyll ut tunt innehåll med försiktig, relevant copy från faktapaketet.
 
 HÅRDA REGLER:
 - Svara endast med samma JSON-schema. Ingen markdown.
 - Behåll hårda fakta exakt: namn, telefon, e-post, adress, stad.
 - Lägg aldrig till priser, årtal, certifikat, kundnamn, recensioner, personalnamn eller öppettider.
-- ${isEnglish(ctx) ? 'All final text must be English.' : 'All text ska vara svenska. Ingen engelska.'}
+- All text ska vara svenska. Ingen engelska.
 - Ta bort allt som låter internt: "sidan", "webbplats", "demo", "AI", "anpassad efter företaget".
 - Korrigera mojibake, t.ex. VÃ¥rvÃ¤dersvÃ¤gen -> Vårvädersvägen.
 - FAQ ska vara kundnyttig och verksamhetsspecifik.

@@ -119,7 +119,7 @@ export default function SiteOutreach() {
       if (data) allSent.push(...(data as SentEmailRow[]));
     }
     const stats = allSent.filter((r) => new Date(r.sent_at).toISOString() >= since30);
-    const sent = allSent.slice().sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime()).slice(0, 5) as SentRow[];
+    const sent = allSent.slice().sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime()).slice(0, 5) as unknown as SentRow[];
 
     setNodes((ns ?? []) as Node[]);
     setEnrollments(enrsWithContact as any);
