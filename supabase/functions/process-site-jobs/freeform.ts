@@ -365,6 +365,7 @@ ${schemaLine}`
     JSON.stringify(pack),
     'Källtext:',
     sourceFor(ctx, page).slice(0, 2200) || '[Tunt underlag. Använd säker branschcopy utan påhittade fakta.]',
+    isEnglish(ctx) ? 'REMINDER: the labels above are Swedish, but every value you output must be written in English.' : '',
   ].filter(Boolean).join('\n')
   try {
     const got = await callBuildModelCascade(ctx, ctx.openrouterKey, `freeform-v7-content:${page.slug}`, system, user, 3000)
