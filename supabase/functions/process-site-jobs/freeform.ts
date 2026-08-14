@@ -307,11 +307,28 @@ function buildFactPack(ctx: FreeformCtx): FactPack {
 async function pageContent(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec): Promise<{ source: 'ai' | 'fallback'; content: FreeformPageContent; error?: string; model?: string }> {
   const profile = buildProfile(ctx)
   const pack = buildFactPack(ctx)
-  const system = `${isEnglish(ctx)
-    ? 'You are writing the first draft for a premium English-language website. If any instruction below is in Swedish, interpret it and still produce final website copy in natural English. Respond only with JSON. No HTML. No CSS.'
-    : 'Du skriver första utkastet till innehåll för en svensk premium-webbplats. Svara endast med JSON. Ingen HTML. Ingen CSS.'}
+  const schemaLine = `Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","heroLead":"","introTitle":"","introText":"","primaryCta":"","secondaryCta":"","services":[{"title":"","text":"","detail":""}],"sections":[{"eyebrow":"","title":"","text":"","bullets":[""]}],"faqs":[{"question":"","answer":""}],"faqGroups":[{"title":"","items":[{"question":"","answer":""}]}],"closingTitle":"","closingText":""}`
+  const system = isEnglish(ctx)
+    ? `You are writing the first content draft for a premium English-language website. Respond only with JSON. No HTML. No CSS.
+HARD RULES:
+- EVERY field must be written in natural, native English. Never output Swedish words or Swedish sentences, even if the source material is Swedish - translate it.
+- The BUSINESS TYPE in the profile (derived from the uploaded category) is the truth. Never write about a different industry.
+- If the source text clearly contradicts the business type (electrical, plumbing, construction, automotive), follow the source text, never a beauty/salon angle.
+- Only use industry words that fit the business. Do not write "treatment", "salon" or "clinic" unless it is a beauty or care business.
+- Write as the business, never as the system. Never write "this page shows", "this website was built", "AI" or "demo".
+- Never invent prices, years, certifications, customer names, reviews, staff names or opening hours.
+- Only use services from the approved service list or clear source text.
+- FAQ must help a real customer book or understand the offering, never be about the website.
+- Follow the chosen template family and block order. Blocks drive structure and feel; you fill them with the company's facts.
+- Restaurant landing page family: only restaurant/bar/cafe relevant copy, everything on index.html.
+- Editorial service family: warmer and more premium, still factual and based on the category/source.
+- FAQ page: use faqGroups with 2-3 categories and only questions that fit the company. Fewer good questions beat many generic ones.
+- If the source material is thin: write elegantly and industry-relevant, but cautiously.
+- Max 45 words per text field.
+${schemaLine}`
+    : `Du skriver första utkastet till innehåll för en svensk premium-webbplats. Svara endast med JSON. Ingen HTML. Ingen CSS.
 HÅRDA REGLER:
-- ${isEnglish(ctx) ? 'All final text must be in English. Translate Swedish source material when needed.' : 'All text ska vara på svenska. Översätt källtext som är på engelska.'}
+- All text ska vara på svenska. Översätt källtext som är på engelska.
 - VERKSAMHETSTYPEN i profilen (härledd från uppladdad kategori) är sanning. Skriv ALDRIG om en annan bransch.
 - Om källtexten tydligt motsäger verksamhetstypen (t.ex. el, rör, bygg, bil) ska du följa källtexten, aldrig en skönhets- eller salongsvinkel.
 - Använd bara branschord som passar verksamheten. Skriv inte "behandling", "salong" eller "klinik" om det inte är ett skönhets-/vårdföretag.
@@ -326,7 +343,7 @@ HÅRDA REGLER:
 - Om sidan är FAQ: använd faqGroups med 2-3 kategorier och bara frågor som passar företagets kategori/källa. Hellre färre bra frågor än många generiska.
 - Om underlaget är tunt: skriv elegant och branschrelevant men försiktigt.
 - Varje textfält max 45 ord.
-Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","heroLead":"","introTitle":"","introText":"","primaryCta":"","secondaryCta":"","services":[{"title":"","text":"","detail":""}],"sections":[{"eyebrow":"","title":"","text":"","bullets":[""]}],"faqs":[{"question":"","answer":""}],"faqGroups":[{"title":"","items":[{"question":"","answer":""}]}],"closingTitle":"","closingText":""}`
+${schemaLine}`
   const user = [
     `Företag: ${ctx.facts.business_name || '[okänt]'}`,
     `UPPLADDAD LEAD-KATEGORI (primär signal): ${ctx.category || '[saknas]'}`,
