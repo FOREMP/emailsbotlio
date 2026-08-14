@@ -167,6 +167,10 @@ function isEnglish(ctx: FreeformCtx): boolean {
   return ctx.language === 'en'
 }
 
+function businessName(ctx: FreeformCtx): string {
+  return decodeText(ctx.facts.business_name || ctx.nicheLabel || (isEnglish(ctx) ? 'The business' : 'Företaget'))
+}
+
 function buildPlan(ctx: FreeformCtx): FreeformPlan {
   const profile = buildProfile(ctx)
   const business = businessName(ctx)
