@@ -1,7 +1,10 @@
 export type BlockTemplateFamilyKey =
+  | 'clinic_private_care'
+  | 'mechanic_precision_workshop'
   | 'salon_editorial_luxury'
   | 'bistro_atmospheric_landing'
   | 'byggform_architectural_trust'
+  | 'service_company_modern'
   | 'service_clarity_default'
 
 export interface BlockTemplatePage {
@@ -25,6 +28,81 @@ export interface BlockTemplateFamily {
 }
 
 export const BLOCK_TEMPLATE_FAMILIES: Record<BlockTemplateFamilyKey, BlockTemplateFamily> = {
+  clinic_private_care: {
+    key: 'clinic_private_care',
+    label: 'Private clinic and therapeutic care site',
+    mode: 'full_site',
+    sourcePrototype: 'clinic_private_v1/*.html',
+    bestFor: [
+      'privata kliniker, tandläkare, terapi, psykolog, fysioterapi, naprapat, kiropraktor, hälsoklinik och liknande vård-/samtalsnära verksamheter',
+      'företag där sidan ska kännas lugn, professionell, diskret och mänsklig snarare än glamorös eller säljig',
+      'verksamheter där förtroende, tydlig första kontakt och ett privat första steg väger tyngre än stora bildytor eller hård kampanjkänsla',
+    ],
+    avoidFor: [
+      'frisör/skönhet/naglar/fransar där salon_editorial_luxury passar bättre',
+      'restaurang/bar/bistro där bistro_atmospheric_landing passar bättre',
+      'bygg/projektbolag eller breda serviceföretag där andra familjer säljer tydligare',
+    ],
+    notesFromEric: [
+      'Headern ska vara ren med bara företagsnamnet till vänster, inget märke eller box.',
+      'Den här mallen ska kunna användas för många kliniktyper, inte bara exakt den visade exempelkliniken.',
+      'Känslan ska vara trygg, modern och genomtänkt — inte kall, plastig eller som en skönhetssalong.',
+    ],
+    aiDecisionNotes: [
+      'Använd lugn och förtroendeskapande copy. Skriv som en privat klinik eller terapeutisk mottagning, inte som en reklamsida.',
+      'Hitta aldrig på legitimationer, behandlingsresultat, priser, betyg, grundarår, personalnamn, tillgänglighet eller specialiteter om de inte finns i källan.',
+      'Om kategorin är tandläkare, terapi, fysioterapi eller liknande ska språket följa just den vårdformen. Undvik skönhetsspråk om kategorin inte stödjer det.',
+      'FAQ ska fokusera på första kontakt, besök, integritet, bokning och hur processen går till. Använd bara frågor som passar kategori och källa.',
+    ],
+    blocks: [
+      'header_private_care_nav',
+      'hero_private_clinic_statement',
+      'care_paths_editorial_rows',
+      'people_and_approach_split',
+      'trust_band_confidential',
+      'visit_panel_calm',
+      'faq_private_visit_optional',
+      'cta_soft_conversion',
+      'footer_private_care',
+    ],
+  },
+  mechanic_precision_workshop: {
+    key: 'mechanic_precision_workshop',
+    label: 'Precision mechanic and workshop site',
+    mode: 'full_site',
+    sourcePrototype: 'mechanic_precision_v1/*.html',
+    bestFor: [
+      'bilverkstad, mekaniker, auto service, däck, bromsar, felsökning, rekond-nära verkstadstjänster och andra tydligt fordonsnära verkstäder',
+      'företag där sidan ska kännas teknisk, trygg, metodisk och premium utan att se ut som en generisk verkstadsmall',
+      'verkstäder där process, förklaring, diagnos och tydlig inlämning är centralt för konvertering',
+    ],
+    avoidFor: [
+      'serviceföretag utanför fordonsvärlden',
+      'bygg/service/klinik/salong/restaurang där andra mallfamiljer passar bättre',
+    ],
+    notesFromEric: [
+      'Den här mallen ska vara mechanic-only.',
+      'Headern ska vara ren med bara företagsnamnet till vänster, inget märke eller box.',
+      'Känslan ska vara tydlig, modern och seriös — inte billig, rörig eller för bred för andra nischer.',
+    ],
+    aiDecisionNotes: [
+      'Skriv för en riktig verkstad. Fokusera på service, felsökning, reparation, inlämning, godkännande och tydlig kommunikation.',
+      'Hitta aldrig på garantier, betyg, års erfarenhet, tillgänglighet samma dag, specialverktyg, märkesexpertis eller verkstadsstorlek om källan inte stödjer det.',
+      'Behåll tonen praktisk och kunnig. Undvik salongs-, klinik- eller byggspråk helt.',
+      'FAQ ska handla om bokning, diagnos, uppskattning, inlämning, reparationstid och hur verkstadsbesöket går till.',
+    ],
+    blocks: [
+      'header_precision_workshop_nav',
+      'hero_mechanic_confidence',
+      'service_cards_workshop',
+      'process_diagnostics_band',
+      'workshop_standard_story',
+      'visit_route_panel',
+      'faq_workshop_optional',
+      'cta_book_service_band',
+      'footer_workshop_structured',
+    ],
+  },
   salon_editorial_luxury: {
     key: 'salon_editorial_luxury',
     label: 'Editorial premium service site',
@@ -143,6 +221,45 @@ export const BLOCK_TEMPLATE_FAMILIES: Record<BlockTemplateFamilyKey, BlockTempla
       'footer_structured_links',
     ],
   },
+  service_company_modern: {
+    key: 'service_company_modern',
+    label: 'Confident premium service company site',
+    mode: 'full_site',
+    sourcePrototype: 'service_company_v1/*.html',
+    bestFor: [
+      'lokala serviceföretag med tydliga tjänster och kontaktvägar: el, VVS, städ, ventilation, lås, fastighetsservice, trädgård, montage, flytt, sanering och liknande',
+      'företag där sidan ska kännas modern, trygg och premium utan att vara tung som ett bygg/offert-upplägg',
+      'nischer där stark startsida, tydliga tjänstekort, bra kontaktsektion och valfri FAQ ger bättre konvertering än generisk AI-layout',
+    ],
+    avoidFor: [
+      'restaurang/bar/bistro där bistro_atmospheric_landing passar bättre',
+      'hår/skönhet/klinik/wellness där salon_editorial_luxury eller framtida klinikmall är bättre',
+      'ren bygg/renovering/projektbolag där Byggform-familjen säljer bättre genom process, offert och FAQ-struktur',
+    ],
+    notesFromEric: [
+      'Den här mallen ska fungera brett för servicebolag, inte bara en enda nisch.',
+      'Headern ska vara ren: bara företagsnamnet i vänstra hörnet, ingen ikon/box.',
+      'Before/after ska inte användas eftersom systemet sällan har rätt underlag för det.',
+      'FAQ-sidan ska bara läggas till när det finns nog riktiga frågor och den ska kunna fyllas i sektioner.',
+    ],
+    aiDecisionNotes: [
+      'Använd en tydlig men premium känsla: stark hero, förtroendeskapande kort, tydliga tjänster och rak kontakt utan billig mallkänsla.',
+      'Håll copy företagsnära och kategoristyrd. Använd uppladdad kategori som sanning och skriv aldrig in HVAC, el, VVS eller andra specifika fackord om kategorin inte stödjer det.',
+      'Sidan får gärna kännas modern och självsäker, men inte påhittad. Hitta aldrig på certifikat, jour, garantier, serviceområden, omdömen eller årtal.',
+      'FAQ ska vara praktisk och relevant för köpbeslut, kontakt, besök eller utförande — aldrig om själva webbsidan.',
+    ],
+    blocks: [
+      'header_clean_conversion_nav',
+      'hero_confident_service_statement',
+      'trust_badges_premium',
+      'service_groups_clear_cards',
+      'about_trust_story_split',
+      'contact_options_modern',
+      'faq_layered_optional',
+      'cta_direct_action_band',
+      'footer_structured_service',
+    ],
+  },
   service_clarity_default: {
     key: 'service_clarity_default',
     label: 'Clear premium local service site',
@@ -177,9 +294,11 @@ export const BLOCK_TEMPLATE_FAMILIES: Record<BlockTemplateFamilyKey, BlockTempla
 }
 
 const RESTAURANT_RE = /(restaurang|restaurant|bistro|bar\b|pub\b|café|cafe|pizzeria|bageri|catering|mat|lunch|krog|diner|brasserie|trattoria)/i
+const CLINIC_PRIVATE_RE = /(klinik|clinic|tandläkare|dentist|dental|terapi|therapy|psykolog|counselling|counseling|fysioterap|physio|naprapat|kiropraktor|hälsa|halsa|wellbeing|wellness clinic|medical|medicinsk|vård|vard|rehab|rehabilitering)/i
 const EDITORIAL_SERVICE_RE = /(frisör|frisor|hair|barber|salong|skönhet|beauty|nagel|nail|frans|bryn|lash|brow|spa\b|massage|klinik|clinic|hudvård|skin|wellness|terapi|terapeut|kosmetisk|makeup|stylist|studio)/i
 const AUTOMOTIVE_RE = /(bilverkstad|mekaniker|auto|däck|bilservice|bilrekond|billack|bilglas|car repair|auto shop|tyre|motorverkstad)/i
 const ARCHITECTURAL_TRUST_RE = /(bygg|renover|snick|tak|fasad|måleri|markarbete|anlägg|platt|kakel|badrum|golv|elektriker|elinstall|elfirma|vvs|rör|städ|lokalvård|flyttstäd|teknisk service|montage|installation|projekt|serviceföretag|entreprenad|underhåll|offert|förfrågan|planering|konsultation|företagstjänst|fastighet|lokal|hemservice)/i
+const SERVICE_COMPANY_RE = /(service|installation|reparation|underhåll|jour|fastighetsservice|trädgård|flytt|sanering|lås|ventilation|solskydd|glas|målning|transport|bemanning|verkstadstjänst|städ|lokalvård|el|vvs|rör|montage|teknik|företagstjänst|hemtjänst|konsultation)/i
 
 export function selectBlockTemplateFamily(input: {
   category?: string | null
@@ -197,33 +316,156 @@ export function selectBlockTemplateFamily(input: {
   // The uploaded category is the strongest signal. It is what Eric maps from the scraper.
   const primary = [category, niche, nicheLabel, businessName].filter(Boolean).join(' ')
   if (RESTAURANT_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.bistro_atmospheric_landing
+  if (CLINIC_PRIVATE_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.clinic_private_care
   if (EDITORIAL_SERVICE_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.salon_editorial_luxury
-  if (AUTOMOTIVE_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.service_clarity_default
+  if (AUTOMOTIVE_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.mechanic_precision_workshop
   if (ARCHITECTURAL_TRUST_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.byggform_architectural_trust
+  if (SERVICE_COMPANY_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.service_company_modern
 
-  // If the lead already has a category and it is not restaurant/beauty/auto,
-  // prefer the stronger Byggform-style family rather than the old generic one.
-  if (category) return BLOCK_TEMPLATE_FAMILIES.byggform_architectural_trust
+  // If the lead already has a category and it is not a known restaurant/beauty/auto/build case,
+  // prefer the broad premium service-company family instead of the old generic fallback.
+  if (category) return BLOCK_TEMPLATE_FAMILIES.service_company_modern
 
   // Source text is intentionally weaker so a random scraped word does not hijack the niche.
   if (!category && RESTAURANT_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.bistro_atmospheric_landing
+  if (!category && CLINIC_PRIVATE_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.clinic_private_care
   if (!category && EDITORIAL_SERVICE_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.salon_editorial_luxury
-  if (!category && AUTOMOTIVE_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.service_clarity_default
+  if (!category && AUTOMOTIVE_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.mechanic_precision_workshop
   if (!category && ARCHITECTURAL_TRUST_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.byggform_architectural_trust
+  if (!category && SERVICE_COMPANY_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.service_company_modern
 
-  return BLOCK_TEMPLATE_FAMILIES.service_clarity_default
+  return BLOCK_TEMPLATE_FAMILIES.service_company_modern
 }
 
 export function pagesForTemplate(
   family: BlockTemplateFamily,
-  input: { business: string; serviceTitle: string; aboutTitle: string; includeFaqPage?: boolean },
+  input: { business: string; serviceTitle: string; aboutTitle: string; includeFaqPage?: boolean; language?: 'sv' | 'en' },
 ): BlockTemplatePage[] {
+  const en = input.language === 'en'
+  const pageSlug = {
+    about: en ? 'about' : 'om-oss',
+    contact: en ? 'contact' : 'kontakt',
+    faq: en ? 'faq' : 'fragor',
+    process: en ? 'process' : 'process',
+  }
+  const pageTitle = {
+    contact: en ? 'Contact' : 'Kontakt',
+    faq: en ? 'FAQ' : 'Vanliga frågor',
+  }
+  if (family.key === 'clinic_private_care') {
+    const pages: BlockTemplatePage[] = [
+      {
+        slug: 'index',
+        title: input.business,
+        purpose: en
+          ? 'Create a calm, premium first impression where the visitor quickly feels trust and understands the first step.'
+          : 'Skapa ett lugnt och premium första intryck där besökaren snabbt känner förtroende och förstår första steget.',
+        pageKind: 'landing',
+        sections: ['hero_private_clinic_statement', 'care_paths_editorial_rows', 'people_and_approach_split', 'visit_panel_calm'],
+      },
+      {
+        slug: slugFor(input.serviceTitle),
+        title: input.serviceTitle,
+        purpose: en
+          ? 'Show care types or treatment areas clearly without invented promises, prices or specialist claims.'
+          : 'Visa vårdformer eller behandlingsområden tydligt utan påhittade löften, priser eller specialistpåståenden.',
+        pageKind: 'services',
+        sections: ['care_paths_editorial_rows', 'trust_band_confidential', 'cta_soft_conversion'],
+      },
+      {
+        slug: pageSlug.about,
+        title: input.aboutTitle,
+        purpose: en
+          ? 'Build trust around the way of working, patient care, privacy and how the clinic approaches good care.'
+          : 'Bygga förtroende kring arbetssätt, bemötande, integritet och hur kliniken tänker kring god vård.',
+        pageKind: 'about',
+        sections: ['people_and_approach_split', 'trust_band_confidential', 'visit_panel_calm'],
+      },
+      {
+        slug: pageSlug.contact,
+        title: pageTitle.contact,
+        purpose: en
+          ? 'Make the first contact feel simple and calm, with clear guidance on how booking or a first conversation can work.'
+          : 'Göra första kontakt enkel och lugn, med tydlig information om hur bokning eller första samtal kan gå till.',
+        pageKind: 'contact',
+        sections: ['visit_panel_calm', 'trust_band_confidential'],
+      },
+    ]
+    if (input.includeFaqPage) {
+      pages.splice(3, 0, {
+        slug: pageSlug.faq,
+        title: pageTitle.faq,
+        purpose: en
+          ? 'Collect relevant questions before first contact and the first visit when the source material supports it.'
+          : 'Samla relevanta frågor inför första kontakt och första besök när underlaget räcker.',
+        pageKind: 'faq',
+        sections: ['faq_private_visit_optional', 'cta_soft_conversion'],
+      })
+    }
+    return pages
+  }
+
+  if (family.key === 'mechanic_precision_workshop') {
+    const pages: BlockTemplatePage[] = [
+      {
+        slug: 'index',
+        title: input.business,
+        purpose: en
+          ? 'Create a strong first impression for the workshop with clear trust signals, workshop services and easy booking.'
+          : 'Skapa ett starkt första intryck för verkstaden med tydligt förtroende, verkstadstjänster och enkel bokning.',
+        pageKind: 'landing',
+        sections: ['hero_mechanic_confidence', 'service_cards_workshop', 'workshop_standard_story', 'visit_route_panel'],
+      },
+      {
+        slug: slugFor(input.serviceTitle),
+        title: input.serviceTitle,
+        purpose: en
+          ? 'Show the workshop’s main services clearly without invented promises, brand expertise or pricing.'
+          : 'Visa verkstadens huvudsakliga tjänster tydligt utan påhittade löften, märkesexpertis eller priser.',
+        pageKind: 'services',
+        sections: ['service_cards_workshop', 'process_diagnostics_band', 'cta_book_service_band'],
+      },
+      {
+        slug: pageSlug.about,
+        title: input.aboutTitle,
+        purpose: en
+          ? 'Build trust around process, standards, documentation and how the workshop works with customers and vehicles.'
+          : 'Bygga förtroende kring arbetssätt, standard, dokumentation och hur verkstaden arbetar med kunder och fordon.',
+        pageKind: 'about',
+        sections: ['workshop_standard_story', 'process_diagnostics_band', 'visit_route_panel'],
+      },
+      {
+        slug: pageSlug.contact,
+        title: pageTitle.contact,
+        purpose: en
+          ? 'Make it easy to call, email or find the workshop and understand how a drop-off can work.'
+          : 'Göra det enkelt att ringa, mejla eller hitta verkstaden och förstå hur inlämning kan gå till.',
+        pageKind: 'contact',
+        sections: ['visit_route_panel', 'process_diagnostics_band'],
+      },
+    ]
+    if (input.includeFaqPage) {
+      pages.splice(3, 0, {
+        slug: pageSlug.faq,
+        title: pageTitle.faq,
+        purpose: en
+          ? 'Collect workshop-relevant questions about booking, diagnostics, estimates and drop-off when enough source material exists.'
+          : 'Samla verkstadsrelevanta frågor om bokning, felsökning, uppskattning och inlämning när det finns nog underlag.',
+        pageKind: 'faq',
+        sections: ['faq_workshop_optional', 'cta_book_service_band'],
+      })
+    }
+    return pages
+  }
+
   if (family.key === 'bistro_atmospheric_landing') {
     return [
       {
         slug: 'index',
         title: input.business,
-        purpose: 'En stark restaurang/bar/café-landningssida som säljer stämning, mat/dryck, besök och kontakt utan extra undersidor.',
+        purpose: en
+          ? 'A strong restaurant, bar or café landing page that sells atmosphere, food or drink, visits and contact without extra subpages.'
+          : 'En stark restaurang/bar/café-landningssida som säljer stämning, mat/dryck, besök och kontakt utan extra undersidor.',
         pageKind: 'landing',
         sections: [
           'hero_restaurant_atmospheric',
@@ -243,28 +485,36 @@ export function pagesForTemplate(
       {
         slug: 'index',
         title: input.business,
-        purpose: 'Skapa ett premium första intryck med varm känsla, tydligt erbjudande och enkel kontakt.',
+        purpose: en
+          ? 'Create a premium first impression with warmth, a clear offer and easy contact.'
+          : 'Skapa ett premium första intryck med varm känsla, tydligt erbjudande och enkel kontakt.',
         pageKind: 'landing',
         sections: ['hero_editorial_split', 'offerings_visual_cards', 'experience_story_dual_visual', 'gallery_atmospheric_mosaic', 'contact_booking_panel'],
       },
       {
         slug: slugFor(input.serviceTitle),
         title: input.serviceTitle,
-        purpose: 'Visa erbjudandet/behandlingarna tydligt utan påhittade priser eller löften.',
+        purpose: en
+          ? 'Present the offer or treatments clearly without invented prices or promises.'
+          : 'Visa erbjudandet/behandlingarna tydligt utan påhittade priser eller löften.',
         pageKind: 'services',
         sections: ['offerings_visual_cards', 'experience_story_dual_visual', 'faq_practical_visit_details', 'contact_booking_panel'],
       },
       {
-        slug: 'om-oss',
+        slug: pageSlug.about,
         title: input.aboutTitle,
-        purpose: 'Bygga förtroende med berättelse, arbetssätt och känsla.',
+        purpose: en
+          ? 'Build trust through story, working style and overall feeling.'
+          : 'Bygga förtroende med berättelse, arbetssätt och känsla.',
         pageKind: 'about',
         sections: ['about_warm_brand_story', 'gallery_atmospheric_mosaic', 'contact_booking_panel'],
       },
       {
-        slug: 'kontakt',
-        title: 'Kontakt',
-        purpose: 'Göra det enkelt att ringa, mejla, hitta och förstå nästa steg.',
+        slug: pageSlug.contact,
+        title: pageTitle.contact,
+        purpose: en
+          ? 'Make it easy to call, email, find the business and understand the next step.'
+          : 'Göra det enkelt att ringa, mejla, hitta och förstå nästa steg.',
         pageKind: 'contact',
         sections: ['contact_booking_panel', 'faq_practical_visit_details'],
       },
@@ -276,47 +526,112 @@ export function pagesForTemplate(
       {
         slug: 'index',
         title: input.business,
-        purpose: 'Skapa ett stabilt första intryck med tydligt erbjudande, process och offertnära kontakt.',
+        purpose: en
+          ? 'Create a stable first impression with a clear offer, clear process and quote-ready contact.'
+          : 'Skapa ett stabilt första intryck med tydligt erbjudande, process och offertnära kontakt.',
         pageKind: 'landing',
         sections: ['hero_construction_architectural', 'construction_services_grid', 'project_process_timeline', 'trust_clarity_panel', 'cta_band_architectural'],
       },
       {
         slug: slugFor(input.serviceTitle),
         title: input.serviceTitle,
-        purpose: 'Visa tjänster/uppdrag i en detaljlista med tydlig omfattning, utan påhittade garantier eller priser.',
+        purpose: en
+          ? 'Show services or project types in a detailed list with clear scope, without invented guarantees or pricing.'
+          : 'Visa tjänster/uppdrag i en detaljlista med tydlig omfattning, utan påhittade garantier eller priser.',
         pageKind: 'services',
         sections: ['interior_page_hero', 'service_detail_list', 'feature_grid_practical_start', 'cta_band_architectural'],
       },
       {
         slug: 'process',
-        title: 'Process',
-        purpose: 'Förklara hur första kontakt, planering, omfattning och genomförande kan gå till.',
+        title: en ? 'Process' : 'Process',
+        purpose: en
+          ? 'Explain how first contact, planning, scope and delivery can work.'
+          : 'Förklara hur första kontakt, planering, omfattning och genomförande kan gå till.',
         pageKind: 'process',
         sections: ['interior_page_hero', 'project_process_timeline', 'trust_clarity_panel', 'content_split_sticky_aside'],
       },
       {
-        slug: 'om-oss',
+        slug: pageSlug.about,
         title: input.aboutTitle,
-        purpose: 'Bygga förtroende kring arbetssätt, värderingar och hur företaget tänker kring uppdrag.',
+        purpose: en
+          ? 'Build trust around working methods, values and how the company approaches projects.'
+          : 'Bygga förtroende kring arbetssätt, värderingar och hur företaget tänker kring uppdrag.',
         pageKind: 'about',
         sections: ['interior_page_hero', 'content_split_sticky_aside', 'about_values_grid', 'image_split_material_detail_optional'],
       },
       {
-        slug: 'kontakt',
-        title: 'Kontakt',
-        purpose: 'Göra offert/kontakt konkret: vad kunden ska skicka med och vad som händer sedan.',
+        slug: pageSlug.contact,
+        title: pageTitle.contact,
+        purpose: en
+          ? 'Make quotes and first contact concrete: what the customer should send and what happens next.'
+          : 'Göra offert/kontakt konkret: vad kunden ska skicka med och vad som händer sedan.',
         pageKind: 'contact',
         sections: ['interior_page_hero', 'quote_contact_panel', 'contact_requirements_cards', 'content_split_sticky_aside'],
       },
     ]
     if (input.includeFaqPage) {
-      pages.splice(4, 0, {
-        slug: 'fragor',
-        title: 'Vanliga frågor',
-        purpose: 'Samla riktiga, passande frågor i kategorier. Sidan ska bara användas när det finns nog underlag.',
-        pageKind: 'faq',
-        sections: ['interior_page_hero', 'faq_category_accordion_optional', 'cta_band_architectural'],
-      })
+        pages.splice(4, 0, {
+          slug: pageSlug.faq,
+          title: pageTitle.faq,
+          purpose: en
+            ? 'Collect real, relevant questions in categories. Only use this page when the source material is strong enough.'
+            : 'Samla riktiga, passande frågor i kategorier. Sidan ska bara användas när det finns nog underlag.',
+          pageKind: 'faq',
+          sections: ['interior_page_hero', 'faq_category_accordion_optional', 'cta_band_architectural'],
+        })
+    }
+    return pages
+  }
+
+  if (family.key === 'service_company_modern') {
+    const pages: BlockTemplatePage[] = [
+      {
+        slug: 'index',
+        title: input.business,
+        purpose: en
+          ? 'Create a strong, premium first impression with a clear offer, trust and easy contact.'
+          : 'Skapa ett starkt, premium första intryck med tydligt erbjudande, förtroende och enkel kontakt.',
+        pageKind: 'landing',
+        sections: ['hero_confident_service_statement', 'trust_badges_premium', 'service_groups_clear_cards', 'contact_options_modern'],
+      },
+      {
+        slug: slugFor(input.serviceTitle),
+        title: input.serviceTitle,
+        purpose: en
+          ? 'Present the services clearly and convincingly without invented pricing, emergency promises or certifications.'
+          : 'Visa tjänsterna tydligt och säljande utan påhittade priser, jourlöften eller certifieringar.',
+        pageKind: 'services',
+        sections: ['service_groups_clear_cards', 'about_trust_story_split', 'cta_direct_action_band'],
+      },
+      {
+        slug: pageSlug.about,
+        title: input.aboutTitle,
+        purpose: en
+          ? 'Build trust through working style, tone, local credibility and what customers can expect.'
+          : 'Bygga förtroende genom arbetssätt, ton, lokalkännedom och vad kunder kan förvänta sig.',
+        pageKind: 'about',
+        sections: ['about_trust_story_split', 'trust_badges_premium', 'contact_options_modern'],
+      },
+      {
+        slug: pageSlug.contact,
+        title: pageTitle.contact,
+        purpose: en
+          ? 'Make it easy to call, email and understand what is most useful to include in a first enquiry.'
+          : 'Göra det lätt att ringa, mejla och förstå vad som är bäst att skicka med i första kontakt.',
+        pageKind: 'contact',
+        sections: ['contact_options_modern', 'about_trust_story_split'],
+      },
+    ]
+    if (input.includeFaqPage) {
+        pages.splice(3, 0, {
+          slug: pageSlug.faq,
+          title: pageTitle.faq,
+          purpose: en
+            ? 'Collect relevant questions in clear groups, but only when there is enough real source material.'
+            : 'Samla passande frågor i tydliga grupper, men bara när det finns tillräckligt med verkligt underlag.',
+          pageKind: 'faq',
+          sections: ['faq_layered_optional', 'cta_direct_action_band'],
+        })
     }
     return pages
   }
@@ -336,20 +651,24 @@ export function pagesForTemplate(
       pageKind: 'services',
       sections: ['service_cards', 'trust_process', 'contact_direct_panel'],
     },
-    {
-      slug: 'om-oss',
-      title: input.aboutTitle,
-      purpose: 'Bygga förtroende med arbetssätt och konkret trygghet.',
-      pageKind: 'about',
-      sections: ['trust_process', 'service_cards', 'contact_direct_panel'],
-    },
-    {
-      slug: 'kontakt',
-      title: 'Kontakt',
-      purpose: 'Göra det lätt att ringa, mejla och hitta.',
-      pageKind: 'contact',
-      sections: ['contact_direct_panel', 'faq_practical_service'],
-    },
+      {
+        slug: pageSlug.about,
+        title: input.aboutTitle,
+        purpose: en
+          ? 'Build trust through working methods and practical reassurance.'
+          : 'Bygga förtroende med arbetssätt och konkret trygghet.',
+        pageKind: 'about',
+        sections: ['trust_process', 'service_cards', 'contact_direct_panel'],
+      },
+      {
+        slug: pageSlug.contact,
+        title: pageTitle.contact,
+        purpose: en
+          ? 'Make it easy to call, email and find the business.'
+          : 'Göra det lätt att ringa, mejla och hitta.',
+        pageKind: 'contact',
+        sections: ['contact_direct_panel', 'faq_practical_service'],
+      },
   ]
 }
 

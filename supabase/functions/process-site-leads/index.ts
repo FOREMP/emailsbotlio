@@ -486,7 +486,11 @@ async function startGeneration(
   // No template exists for this category yet -> the site can only be built by
   // the freeform (AI-from-scratch) engine.
   const resolvedMode = await resolveGenerationMode(supabase)
-  const generationMode = nicheTemplate ? resolvedMode : 'freeform'
+  const generationMode = lead.language === 'en'
+    ? 'freeform'
+    : nicheTemplate
+      ? resolvedMode
+      : 'freeform'
 
 
   // Ensure ghost list for this user

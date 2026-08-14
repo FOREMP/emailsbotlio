@@ -150,7 +150,7 @@ export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<st
     return step(false, files, meta({ ...progress, stage: 'quality_check', rendered: plan.pages.map((p) => p.slug), built: plan.pages.map((p) => p.slug), lastStage: 'render' }), `v${VERSION} rendered ${plan.pages.length} pages`)
   }
   if (progress.stage === 'quality_check') {
-    const checked = qualityFixFiles(files, isEnglish(ctx))
+    const checked = qualityFixFiles(files, ctx)
     return step(true, checked, meta({ ...progress, stage: 'done', lastStage: 'quality_check' }), `v${VERSION} quality checked`)
   }
   return step(true, files, meta({ ...progress, stage: 'done', lastStage: 'done' }), 'v7 done')
@@ -167,13 +167,9 @@ function isEnglish(ctx: FreeformCtx): boolean {
   return ctx.language === 'en'
 }
 
-function businessName(ctx: FreeformCtx): string {
-  return decodeText(ctx.facts.business_name || ctx.nicheLabel || (isEnglish(ctx) ? 'The business' : 'Företaget'))
-}
-
 function buildPlan(ctx: FreeformCtx): FreeformPlan {
   const profile = buildProfile(ctx)
-  const business = businessName(ctx)
+  const business = ctx.facts.business_name || ctx.nicheLabel || (isEnglish(ctx) ? 'Business' : 'Företaget')
   const family = selectBlockTemplateFamily({
     category: ctx.category,
     niche: ctx.facts.niche,
@@ -307,32 +303,28 @@ function buildFactPack(ctx: FreeformCtx): FactPack {
 async function pageContent(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec): Promise<{ source: 'ai' | 'fallback'; content: FreeformPageContent; error?: string; model?: string }> {
   const profile = buildProfile(ctx)
   const pack = buildFactPack(ctx)
-  const schemaLine = `Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","heroLead":"","introTitle":"","introText":"","primaryCta":"","secondaryCta":"","services":[{"title":"","text":"","detail":""}],"sections":[{"eyebrow":"","title":"","text":"","bullets":[""]}],"faqs":[{"question":"","answer":""}],"faqGroups":[{"title":"","items":[{"question":"","answer":""}]}],"closingTitle":"","closingText":""}`
-  const system = isEnglish(ctx)
-    ? `You are writing the first content draft for a premium English-language website. Respond only with JSON. No HTML. No CSS.
-HARD RULES:
-- EVERY field must be written in natural, native English. Never output Swedish words or Swedish sentences, even if the source material is Swedish - translate it.
-- The BUSINESS TYPE in the profile (derived from the uploaded category) is the truth. Never write about a different industry.
-- If the source text clearly contradicts the business type (electrical, plumbing, construction, automotive), follow the source text, never a beauty/salon angle.
-- Only use industry words that fit the business. Do not write "treatment", "salon" or "clinic" unless it is a beauty or care business.
-- Write as the business, never as the system. Never write "this page shows", "this website was built", "AI" or "demo".
-- Never invent prices, years, certifications, customer names, reviews, staff names or opening hours.
-- Only use services from the approved service list or clear source text.
-- FAQ must help a real customer book or understand the offering, never be about the website.
-- Follow the chosen template family and block order. Blocks drive structure and feel; you fill them with the company's facts.
-- Restaurant landing page family: only restaurant/bar/cafe relevant copy, everything on index.html.
-- Editorial service family: warmer and more premium, still factual and based on the category/source.
-- FAQ page: use faqGroups with 2-3 categories and only questions that fit the company. Fewer good questions beat many generic ones.
-- If the source material is thin: write elegantly and industry-relevant, but cautiously.
-- Max 45 words per text field.
-${schemaLine}`
-    : `Du skriver första utkastet till innehåll för en svensk premium-webbplats. Svara endast med JSON. Ingen HTML. Ingen CSS.
+  const system = `${isEnglish(ctx)
+    ? 'You are writing the first draft for a premium English-language website. If any instruction below is in Swedish, interpret it and still produce final website copy in natural English. Respond only with JSON. No HTML. No CSS.'
+    : 'Du skriver första utkastet till innehåll för en svensk premium-webbplats. Svara endast med JSON. Ingen HTML. Ingen CSS.'}
 HÅRDA REGLER:
-- All text ska vara på svenska. Översätt källtext som är på engelska.
+${isEnglish(ctx)
+  ? `- All final text must be in English. Translate Swedish source material when needed.
+- The business type in the profile, derived from the uploaded category, is the source of truth. Never write about a different industry.
+- If the source text clearly contradicts the business type, such as electrical, plumbing, construction or automotive, follow the source text and never force a beauty or salon angle.
+- Only use industry terms that fit the business. Do not write treatment, salon or clinic unless the business is actually beauty or care related.
+- Write as the business, never as the system. Do not say the website shows, the website was built, AI or demo.
+- Never invent pricing, founding years, certificates, customer names, reviews, staff names or opening hours.
+- Only use services or treatments that appear in the approved service list or clear source text.
+- FAQ content must help a real customer book or understand the offer, not talk about the website itself.
+- Follow the selected template family and block order. The blocks define structure and tone; you fill them with the company’s facts.
+- If the template family is a restaurant landing page, keep everything restaurant, bar or café relevant and keep the output for index.html only.
+- If the template family is editorial service, make the tone warmer and more premium while staying factual and source-based.
+- If the page is an FAQ page, use faqGroups with 2 to 3 categories and only questions that fit the business category and source material. Fewer good questions are better than many generic ones.
+- If the source material is thin, write elegant, industry-relevant copy but stay careful.`
+  : `- All text ska vara på svenska. Översätt källtext som är på engelska.
 - VERKSAMHETSTYPEN i profilen (härledd från uppladdad kategori) är sanning. Skriv ALDRIG om en annan bransch.
 - Om källtexten tydligt motsäger verksamhetstypen (t.ex. el, rör, bygg, bil) ska du följa källtexten, aldrig en skönhets- eller salongsvinkel.
 - Använd bara branschord som passar verksamheten. Skriv inte "behandling", "salong" eller "klinik" om det inte är ett skönhets-/vårdföretag.
-
 - Skriv som företaget, aldrig som systemet. Skriv inte "sidan visar", "webbplatsen är byggd", "AI" eller "demo".
 - Hitta aldrig på priser, årtal, certifikat, kundnamn, recensioner, personalnamn eller öppettider.
 - Använd bara tjänster/behandlingar från godkänd tjänstelista eller tydlig källtext.
@@ -341,9 +333,9 @@ HÅRDA REGLER:
 - Om templatefamiljen är restaurant landingpage: skriv bara restaurang/bar/café-relevant text och håll allt för index.html.
 - Om templatefamiljen är editorial service: gör texten varmare och mer premium, men fortfarande saklig och baserad på kategori/källa.
 - Om sidan är FAQ: använd faqGroups med 2-3 kategorier och bara frågor som passar företagets kategori/källa. Hellre färre bra frågor än många generiska.
-- Om underlaget är tunt: skriv elegant och branschrelevant men försiktigt.
+- Om underlaget är tunt: skriv elegant och branschrelevant men försiktigt.`}
 - Varje textfält max 45 ord.
-${schemaLine}`
+Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","heroLead":"","introTitle":"","introText":"","primaryCta":"","secondaryCta":"","services":[{"title":"","text":"","detail":""}],"sections":[{"eyebrow":"","title":"","text":"","bullets":[""]}],"faqs":[{"question":"","answer":""}],"faqGroups":[{"title":"","items":[{"question":"","answer":""}]}],"closingTitle":"","closingText":""}`
   const user = [
     `Företag: ${ctx.facts.business_name || '[okänt]'}`,
     `UPPLADDAD LEAD-KATEGORI (primär signal): ${ctx.category || '[saknas]'}`,
@@ -365,7 +357,6 @@ ${schemaLine}`
     JSON.stringify(pack),
     'Källtext:',
     sourceFor(ctx, page).slice(0, 2200) || '[Tunt underlag. Använd säker branschcopy utan påhittade fakta.]',
-    isEnglish(ctx) ? 'REMINDER: the labels above are Swedish, but every value you output must be written in English.' : '',
   ].filter(Boolean).join('\n')
   try {
     const got = await callBuildModelCascade(ctx, ctx.openrouterKey, `freeform-v7-content:${page.slug}`, system, user, 3000)
@@ -384,39 +375,24 @@ ${schemaLine}`
 async function polishContent(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, draft: FreeformPageContent): Promise<{ source: 'polished' | 'fallback'; content: FreeformPageContent; error?: string; model?: string }> {
   const profile = buildProfile(ctx)
   const pack = buildFactPack(ctx)
-  const system = isEnglish(ctx)
-    ? `You are a senior English editor and conversion copywriter. You receive JSON content for ONE page. Rewrite it into natural, polished English and carefully improve thin content using the approved fact pack.
-
-HARD RULES:
-- Respond with the same JSON schema only. No markdown.
-- Keep hard facts exactly: name, phone, email, address, city.
-- Never add prices, years, certifications, customer names, reviews, staff names or opening hours.
-- EVERY field must be native English. If the draft contains Swedish words or sentences, translate them. No Swedish may remain.
-- Remove anything that sounds internal: "the page", "the website", "demo", "AI", "adapted for the business".
-- Fix mojibake, e.g. VÃ¥rvÃ¤dersvÃ¤gen -> Vårvädersvägen (keep proper names correct).
-- FAQ must be useful for customers and specific to the business.
-- Service titles must be short, real services or treatments - not sentences or instructions.
-- Follow the profile's business type. Use words like clinic/treatment/salon ONLY for beauty and care businesses. For electrical, plumbing, construction, automotive and cleaning use service, job, installation, maintenance.
-- Keep the chosen template family's feel: restaurant = atmosphere/food/visit; editorial service = warm premium service; practical service = clarity, trust and process.
-- Never sound like internal template copy. Remove generic lines like "The visitor gets..." and write in the company's voice.
-- FAQ pages: group questions in faqGroups. Only use groups that genuinely fit the business, e.g. First contact, Planning, Scope, Visit, Delivery or Practical questions.
-- If the draft describes the wrong industry: rewrite it to match the profile's business type and the source text.`
-    : `Du är en senior svensk redaktör och conversion copywriter. Du får JSON-innehåll till EN sida. Uppgift: skriv om till naturlig, korrekt, premium svensk text och fyll ut tunt innehåll med försiktig, relevant copy från faktapaketet.
+  const system = `${isEnglish(ctx)
+    ? 'You are a senior English editor and conversion copywriter. You receive JSON content for one page. Rewrite it into natural, polished English and improve thin content carefully using the approved fact pack.'
+    : 'Du är en senior svensk redaktör och conversion copywriter. Du får JSON-innehåll till EN sida. Uppgift: skriv om till naturlig, korrekt, premium svensk text och fyll ut tunt innehåll med försiktig, relevant copy från faktapaketet.'}
 
 HÅRDA REGLER:
 - Svara endast med samma JSON-schema. Ingen markdown.
 - Behåll hårda fakta exakt: namn, telefon, e-post, adress, stad.
 - Lägg aldrig till priser, årtal, certifikat, kundnamn, recensioner, personalnamn eller öppettider.
-- All text ska vara svenska. Ingen engelska.
-- Ta bort allt som låter internt: "sidan", "webbplats", "demo", "AI", "anpassad efter företaget".
+- ${isEnglish(ctx) ? 'All final text must be English.' : 'All text ska vara svenska. Ingen engelska.'}
+- ${isEnglish(ctx) ? 'Remove all internal-sounding wording such as website, page, demo, AI or tailored for the company.' : 'Ta bort allt som låter internt: "sidan", "webbplats", "demo", "AI", "anpassad efter företaget".'}
 - Korrigera mojibake, t.ex. VÃ¥rvÃ¤dersvÃ¤gen -> Vårvädersvägen.
-- FAQ ska vara kundnyttig och verksamhetsspecifik.
-- Service-titlar ska vara korta riktiga tjänster/behandlingar, inte meningar eller instruktioner.
-- Följ profilens verksamhetstyp. Använd ord som klinik/behandling/salong ENBART för skönhets- och vårdföretag. För el, rör, bygg, bil, städ m.fl. används tjänst, uppdrag, installation, service.
-- Behåll vald templatefamiljs känsla: restaurang = stämning/mat/besök; editorial service = varm premium service; practical service = tydlig trygghet/process.
-- Texten ska aldrig låta som intern malltext. Ta bort generiska rader som "Besökaren får..." och skriv i företagets röst.
-- För FAQ-sidor: gruppera frågorna i faqGroups. Använd bara grupper som faktiskt passar verksamheten, exempelvis Första kontakt, Planering, Omfattning, Besök, Genomförande eller Praktiska frågor.
-- Om utkastet beskriver fel bransch: skriv om det så att det matchar profilens verksamhetstyp och källtexten.`
+- ${isEnglish(ctx) ? 'FAQ content must be useful to customers and specific to the business.' : 'FAQ ska vara kundnyttig och verksamhetsspecifik.'}
+- ${isEnglish(ctx) ? 'Service titles must be short, real services or treatments, not sentences or instructions.' : 'Service-titlar ska vara korta riktiga tjänster/behandlingar, inte meningar eller instruktioner.'}
+- ${isEnglish(ctx) ? 'Follow the business type in the profile. Use clinic, treatment or salon only for beauty and care businesses. For electrical, plumbing, construction, automotive, cleaning and similar trades, prefer service, project, installation or repair language.' : 'Följ profilens verksamhetstyp. Använd ord som klinik/behandling/salong ENBART för skönhets- och vårdföretag. För el, rör, bygg, bil, städ m.fl. används tjänst, uppdrag, installation, service.'}
+- ${isEnglish(ctx) ? 'Keep the selected template family feeling: restaurant means atmosphere, food and visiting; editorial service means warm premium service; practical service means clarity, trust and process.' : 'Behåll vald templatefamiljs känsla: restaurang = stämning/mat/besök; editorial service = varm premium service; practical service = tydlig trygghet/process.'}
+- ${isEnglish(ctx) ? 'The text must never sound like internal template copy. Remove generic lines such as the visitor gets and rewrite them in the company’s own voice.' : 'Texten ska aldrig låta som intern malltext. Ta bort generiska rader som "Besökaren får..." och skriv i företagets röst.'}
+- ${isEnglish(ctx) ? 'For FAQ pages, group the questions in faqGroups and only use group titles that truly fit the business, such as First contact, Planning, Scope, Visit, Delivery or Practical questions.' : 'För FAQ-sidor: gruppera frågorna i faqGroups. Använd bara grupper som faktiskt passar verksamheten, exempelvis Första kontakt, Planering, Omfattning, Besök, Genomförande eller Praktiska frågor.'}
+- ${isEnglish(ctx) ? 'If the draft describes the wrong industry, rewrite it so it matches the profile business type and the source text.' : 'Om utkastet beskriver fel bransch: skriv om det så att det matchar profilens verksamhetstyp och källtexten.'}`
   const user = [
     `Sida: ${page.slug} - ${page.title}`,
     `Profil från uppladdad kategori: ${JSON.stringify(profile)}`,
@@ -449,54 +425,159 @@ HÅRDA REGLER:
 
 function fallbackContent(ctx: FreeformCtx, page: FreeformPageSpec): FreeformPageContent {
   const profile = buildProfile(ctx)
-  const business = ctx.facts.business_name || ctx.nicheLabel || 'Företaget'
-  const city = ctx.facts.city ? ` i ${ctx.facts.city}` : ''
+  const en = isEnglish(ctx)
+  const business = ctx.facts.business_name || ctx.nicheLabel || (isEnglish(ctx) ? 'Business' : 'Företaget')
+  const city = ctx.facts.city ? `${en ? ' in ' : ' i '}${ctx.facts.city}` : ''
   const salon = profile.isBeauty
-  const services = serviceIdeas(ctx).map((title) => ({ title, text: serviceText(title, salon), detail: salon ? 'Vi hjälper dig förstå vad som passar innan du tar nästa steg.' : 'Presenterat tydligt så kunden förstår nästa steg.' }))
+  const services = serviceIdeas(ctx).map((title) => ({
+    title,
+    text: serviceText(title, salon, en),
+    detail: en
+      ? salon
+        ? 'We help visitors understand what fits before they take the next step.'
+        : 'Presented clearly so the visitor understands the next step.'
+      : salon
+        ? 'Vi hjälper dig förstå vad som passar innan du tar nästa steg.'
+        : 'Presenterat tydligt så kunden förstår nästa steg.',
+  }))
   return {
     metaTitle: `${page.title} | ${business}`,
-    metaDescription: `${business}${city} - ${profile.businessType.toLowerCase()} med tydlig information om ${profile.servicePlural.toLowerCase()} och kontakt.`,
+    metaDescription: en
+      ? `${business}${city} - ${profile.businessType.toLowerCase()} with clear information about ${profile.servicePlural.toLowerCase()} and contact details.`
+      : `${business}${city} - ${profile.businessType.toLowerCase()} med tydlig information om ${profile.servicePlural.toLowerCase()} och kontakt.`,
     heroEyebrow: profile.heroEyebrow,
-    heroTitle: page.slug === 'index' ? (profile.isClinic ? 'Trygga behandlingar med personlig vägledning' : salon ? 'En upplevelse som känns rätt från start' : `En tydligare väg till ${business}`) : page.title,
-    heroLead: profile.isClinic ? `${business}${city} erbjuder ${profile.servicePlural.toLowerCase()} med fokus på trygghet, personlig service och enkel kontakt.` : salon ? `${business}${city} presenterar ${profile.servicePlural.toLowerCase()} med varm känsla, tydlig rådgivning och enkel bokning.` : `${business}${city} presenterar tjänster, förtroende och kontakt på ett tydligt sätt.`,
-    introTitle: page.slug === 'index' ? (profile.isClinic ? 'Trygg väg in till rätt behandling' : 'Ett första intryck som känns genomarbetat') : page.title,
-    introText: sourceFor(ctx, page).slice(0, 360) || `Här får besökaren snabbt förstå vad ${business} erbjuder och hur kontakten tas.`,
-    primaryCta: ctx.facts.phone ? 'Ring oss' : 'Kontakta oss',
-    secondaryCta: ctx.facts.email ? 'Mejla oss' : 'Kontakt',
+    heroTitle: page.slug === 'index'
+      ? en
+        ? profile.isClinic
+          ? 'Thoughtful care with personal guidance'
+          : salon
+            ? 'An experience that feels right from the first impression'
+            : `A clearer path to ${business}`
+        : profile.isClinic
+          ? 'Trygga behandlingar med personlig vägledning'
+          : salon
+            ? 'En upplevelse som känns rätt från start'
+            : `En tydligare väg till ${business}`
+      : page.title,
+    heroLead: en
+      ? profile.isClinic
+        ? `${business}${city} presents ${profile.servicePlural.toLowerCase()} with a focus on trust, personal care and easy contact.`
+        : salon
+          ? `${business}${city} presents ${profile.servicePlural.toLowerCase()} with warmth, clear guidance and an easy next step.`
+          : `${business}${city} presents services, trust and contact in a clear and useful way.`
+      : profile.isClinic
+        ? `${business}${city} erbjuder ${profile.servicePlural.toLowerCase()} med fokus på trygghet, personlig service och enkel kontakt.`
+        : salon
+          ? `${business}${city} presenterar ${profile.servicePlural.toLowerCase()} med varm känsla, tydlig rådgivning och enkel bokning.`
+          : `${business}${city} presenterar tjänster, förtroende och kontakt på ett tydligt sätt.`,
+    introTitle: page.slug === 'index'
+      ? en
+        ? profile.isClinic ? 'A calm way into the right care' : 'A first impression that feels considered'
+        : profile.isClinic ? 'Trygg väg in till rätt behandling' : 'Ett första intryck som känns genomarbetat'
+      : page.title,
+    introText: sourceFor(ctx, page).slice(0, 360) || (en
+      ? `Here the visitor quickly understands what ${business} offers and how to get in touch.`
+      : `Här får besökaren snabbt förstå vad ${business} erbjuder och hur kontakten tas.`),
+    primaryCta: ctx.facts.phone ? (en ? 'Call us' : 'Ring oss') : (en ? 'Contact us' : 'Kontakta oss'),
+    secondaryCta: ctx.facts.email ? (en ? 'Email us' : 'Mejla oss') : (en ? 'Contact' : 'Kontakt'),
     services,
     sections: [
-      { eyebrow: salon ? 'Trygghet' : 'Förtroende', title: profile.isClinic ? 'Rätt behandling börjar med tydlig information' : salon ? 'Varmt, noggrant och lätt att välja' : 'Tydligt, tryggt och lätt att förstå', text: profile.isClinic ? `${profile.venueNoun[0].toUpperCase() + profile.venueNoun.slice(1)} gör det enkelt att förstå utbudet och ta kontakt innan bokning.` : salon ? 'Varje besök börjar med förståelse för kundens behov och avslutas med en tydlig väg vidare.' : 'Det viktigaste lyfts fram först så att nästa steg blir enkelt.', bullets: salon ? ['Personlig rådgivning', profile.servicePlural, 'Mobilanpassad kontakt'] : ['Tydlig struktur', 'Snabb kontakt', 'Inga påhittade detaljer'] },
-      { eyebrow: 'Nästa steg', title: 'Gör kontakten enkel', text: 'Besökaren ska aldrig behöva leta efter telefon, e-post eller rätt väg vidare.', bullets: [ctx.facts.phone || 'Telefon kan läggas till', ctx.facts.email || 'E-post kan läggas till'] },
+      {
+        eyebrow: en ? (salon ? 'Confidence' : 'Trust') : (salon ? 'Trygghet' : 'Förtroende'),
+        title: en
+          ? profile.isClinic ? 'The right care starts with clear information' : salon ? 'Warm, thoughtful and easy to choose' : 'Clear, reassuring and easy to understand'
+          : profile.isClinic ? 'Rätt behandling börjar med tydlig information' : salon ? 'Varmt, noggrant och lätt att välja' : 'Tydligt, tryggt och lätt att förstå',
+        text: en
+          ? profile.isClinic
+            ? `${profile.venueNoun[0].toUpperCase() + profile.venueNoun.slice(1)} makes it easy to understand the offer and get in touch before booking.`
+            : salon
+              ? 'Every visit starts with an understanding of the client’s needs and ends with a clear next step.'
+              : 'The most important things are shown first so the next step feels simple.'
+          : profile.isClinic
+            ? `${profile.venueNoun[0].toUpperCase() + profile.venueNoun.slice(1)} gör det enkelt att förstå utbudet och ta kontakt innan bokning.`
+            : salon
+              ? 'Varje besök börjar med förståelse för kundens behov och avslutas med en tydlig väg vidare.'
+              : 'Det viktigaste lyfts fram först så att nästa steg blir enkelt.',
+        bullets: en
+          ? salon ? ['Personal guidance', profile.servicePlural, 'Mobile-friendly contact'] : ['Clear structure', 'Fast contact', 'No invented details']
+          : salon ? ['Personlig rådgivning', profile.servicePlural, 'Mobilanpassad kontakt'] : ['Tydlig struktur', 'Snabb kontakt', 'Inga påhittade detaljer'],
+      },
+      {
+        eyebrow: en ? 'Next step' : 'Nästa steg',
+        title: en ? 'Make contact easy' : 'Gör kontakten enkel',
+        text: en
+          ? 'The visitor should never have to search for the phone number, email address or the right way forward.'
+          : 'Besökaren ska aldrig behöva leta efter telefon, e-post eller rätt väg vidare.',
+        bullets: [
+          ctx.facts.phone || (en ? 'Phone can be added' : 'Telefon kan läggas till'),
+          ctx.facts.email || (en ? 'Email can be added' : 'E-post kan läggas till'),
+        ],
+      },
     ],
     faqs: [
-      { question: `Hur bokar jag hos ${business}?`, answer: ctx.facts.phone || ctx.facts.email ? 'Ring eller mejla så hjälper vi dig vidare till rätt tid och behandling.' : 'Kontakta verksamheten via uppgifterna på kontaktsidan.' },
-      { question: `Vilken ${salon ? 'behandling' : 'tjänst'} passar mig?`, answer: 'Berätta kort vad du vill ha hjälp med, så blir det lättare att rekommendera rätt nästa steg.' },
-      { question: `Finns ${profile.venueNoun} i ${decodeText(ctx.facts.city || 'området')}?`, answer: ctx.facts.address || ctx.facts.city ? `Ja, kontakt- och adressuppgifter finns längre ned på sidan.` : 'Kontakta verksamheten för aktuell platsinformation.' },
+      {
+        question: en ? `How do I book with ${business}?` : `Hur bokar jag hos ${business}?`,
+        answer: ctx.facts.phone || ctx.facts.email
+          ? (en ? 'Call or email and we will help you find the right time and next step.' : 'Ring eller mejla så hjälper vi dig vidare till rätt tid och behandling.')
+          : (en ? 'Contact the business through the details on the contact page.' : 'Kontakta verksamheten via uppgifterna på kontaktsidan.'),
+      },
+      {
+        question: en ? `Which ${salon ? 'treatment' : 'service'} is right for me?` : `Vilken ${salon ? 'behandling' : 'tjänst'} passar mig?`,
+        answer: en
+          ? 'Briefly describe what you want help with and it becomes easier to recommend the right next step.'
+          : 'Berätta kort vad du vill ha hjälp med, så blir det lättare att rekommendera rätt nästa steg.',
+      },
+      {
+        question: en ? `Is the ${profile.venueNoun} in ${decodeText(ctx.facts.city || 'the area')}?` : `Finns ${profile.venueNoun} i ${decodeText(ctx.facts.city || 'området')}?`,
+        answer: ctx.facts.address || ctx.facts.city
+          ? (en ? 'Yes, contact and address details are listed further down the page.' : 'Ja, kontakt- och adressuppgifter finns längre ned på sidan.')
+          : (en ? 'Contact the business for current location details.' : 'Kontakta verksamheten för aktuell platsinformation.'),
+      },
     ],
     faqGroups: profile.kind === 'construction' || profile.kind === 'electrical' || profile.kind === 'plumbing' || profile.kind === 'cleaning' ? [
       {
-        title: 'Första kontakt',
+        title: en ? 'First contact' : 'Första kontakt',
         items: [
-          { question: 'Vad behöver jag skicka med från början?', answer: 'Beskriv vad du vill ha hjälp med, var uppdraget finns och vilket underlag du redan har, till exempel bilder, mått eller ritningar.' },
-          { question: 'Behöver allt vara färdigplanerat?', answer: 'Nej. Det räcker ofta med en första beskrivning för att kunna avgöra vilka frågor som behöver lösas härnäst.' },
+          {
+            question: en ? 'What should I include from the start?' : 'Vad behöver jag skicka med från början?',
+            answer: en
+              ? 'Describe what you need help with, where the job is located and what material you already have, such as photos, measurements or drawings.'
+              : 'Beskriv vad du vill ha hjälp med, var uppdraget finns och vilket underlag du redan har, till exempel bilder, mått eller ritningar.',
+          },
+          {
+            question: en ? 'Does everything need to be fully planned?' : 'Behöver allt vara färdigplanerat?',
+            answer: en
+              ? 'No. A first description is often enough to understand which questions need to be solved next.'
+              : 'Nej. Det räcker ofta med en första beskrivning för att kunna avgöra vilka frågor som behöver lösas härnäst.',
+          },
         ],
       },
       {
-        title: 'Planering och omfattning',
+        title: en ? 'Planning and scope' : 'Planering och omfattning',
         items: [
-          { question: 'När blir det tydligt vad som ingår?', answer: 'Omfattningen behöver gås igenom innan arbetet planeras. I vissa uppdrag krävs kompletterande information först.' },
-          { question: 'Vad händer om förutsättningarna ändras?', answer: 'Nya önskemål eller upptäckta förutsättningar bör diskuteras innan arbetet fortsätter i den delen.' },
+          {
+            question: en ? 'When does it become clear what is included?' : 'När blir det tydligt vad som ingår?',
+            answer: en
+              ? 'The scope needs to be reviewed before the work is planned. Some jobs need more information first.'
+              : 'Omfattningen behöver gås igenom innan arbetet planeras. I vissa uppdrag krävs kompletterande information först.',
+          },
+          {
+            question: en ? 'What happens if the conditions change?' : 'Vad händer om förutsättningarna ändras?',
+            answer: en
+              ? 'New wishes or changed conditions should be discussed before that part of the work continues.'
+              : 'Nya önskemål eller upptäckta förutsättningar bör diskuteras innan arbetet fortsätter i den delen.',
+          },
         ],
       },
     ] : undefined,
-    closingTitle: 'Redo att ta nästa steg?',
-    closingText: `Kontakta ${business} direkt så får du svar på vad som passar bäst.`,
+    closingTitle: en ? 'Ready for the next step?' : 'Redo att ta nästa steg?',
+    closingText: en ? `Contact ${business} directly and get help with what fits best.` : `Kontakta ${business} direkt så får du svar på vad som passar bäst.`,
     source: 'fallback',
   }
 }
 
 function render(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, c: FreeformPageContent): string {
-  const business = decodeText(ctx.facts.business_name || ctx.nicheLabel || 'Företaget')
+  const business = decodeText(ctx.facts.business_name || ctx.nicheLabel || (isEnglish(ctx) ? 'Business' : 'Företaget'))
   const imgs = images(ctx)
   const home = page.slug === 'index'
   const faqPage = page.pageKind === 'faq'
@@ -511,9 +592,9 @@ function render(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, c:
     home ? hero(c, imgs[0], ctx) : pageHero(c, imgs[0], ctx),
     showIntro ? intro(c, imgs[1], ctx) : '',
     showServices ? services(c, ctx) : '',
-    sections(c, processPage),
+    sections(c, processPage, ctx),
     showGallery ? gallery(ctx, imgs) : '',
-    faq(c, faqPage),
+    faq(c, faqPage, ctx),
     showContact ? contact(ctx, c) : '',
     contactPage ? '' : cta(c, ctx),
     footer(plan, business, ctx),
@@ -539,52 +620,52 @@ function nav(plan: FreeformPlan, business: string, active: string, ctx: Freeform
   return `<header class='site-header'><div class='wrap nav-shell'><a class='brand' href='index.html'>${esc(business)}</a><nav class='nav-desktop' aria-label='${en ? 'Main menu' : 'Huvudmeny'}'>${links}</nav><details class='nav-mobile'><summary>${en ? 'Menu' : 'Meny'}</summary><nav class='nav-drawer' aria-label='${en ? 'Mobile menu' : 'Mobilmeny'}'>${links}</nav></details></div></header>`
 }
 function hero(c: FreeformPageContent, img: string, ctx: FreeformCtx): string {
-  return `<section class='hero'>${img ? `<img src='${attr(img)}' alt=''>` : ''}<div class='wrap'><div class='hero-card'><p class='eyebrow'>${esc(c.heroEyebrow || 'Utvald upplevelse')}</p><h1>${esc(c.heroTitle || 'En modern webbplats med tydligt första intryck')}</h1><p class='lead lg'>${esc(c.heroLead || '')}</p>${buttons(ctx, c)}</div></div></section>`
+  return `<section class='hero'>${img ? `<img src='${attr(img)}' alt=''>` : ''}<div class='wrap'><div class='hero-card'><p class='eyebrow'>${esc(c.heroEyebrow || (isEnglish(ctx) ? 'Selected experience' : 'Utvald upplevelse'))}</p><h1>${esc(c.heroTitle || (isEnglish(ctx) ? 'A modern website with a clear first impression' : 'En modern webbplats med tydligt första intryck'))}</h1><p class='lead lg'>${esc(c.heroLead || '')}</p>${buttons(ctx, c)}</div></div></section>`
 }
 function pageHero(c: FreeformPageContent, img: string, ctx: FreeformCtx): string {
-  return `<section class='page-hero'>${img ? `<img src='${attr(img)}' alt=''>` : ''}<div class='wrap'><p class='eyebrow'>${esc(c.heroEyebrow || 'Information')}</p><h1>${esc(c.heroTitle || 'Tydlig information')}</h1><p class='lead'>${esc(c.heroLead || ctx.nicheLabel)}</p></div></section>`
+  return `<section class='page-hero'>${img ? `<img src='${attr(img)}' alt=''>` : ''}<div class='wrap'><p class='eyebrow'>${esc(c.heroEyebrow || 'Information')}</p><h1>${esc(c.heroTitle || (isEnglish(ctx) ? 'Clear information' : 'Tydlig information'))}</h1><p class='lead'>${esc(c.heroLead || ctx.nicheLabel)}</p></div></section>`
 }
 function intro(c: FreeformPageContent, img: string, ctx: FreeformCtx): string {
   const profile = buildProfile(ctx)
   const tags = profile.kind === 'restaurant'
-    ? ['Mat och dryck', 'Stämning', 'Boka eller besök']
+    ? (isEnglish(ctx) ? ['Food and drink', 'Atmosphere', 'Book or visit'] : ['Mat och dryck', 'Stämning', 'Boka eller besök'])
     : profile.isBeauty
-      ? ['Personlig rådgivning', profile.servicePlural, 'Lätt att kontakta']
-      : ['Tydligt upplägg', profile.servicePlural, 'Snabb kontakt']
-  const mediaTitle = profile.kind === 'restaurant' ? 'En känsla av platsen' : profile.isBeauty ? 'Känslan inför besöket' : 'Tydligt från första intryck'
+      ? (isEnglish(ctx) ? ['Personal guidance', profile.servicePlural, 'Easy to contact'] : ['Personlig rådgivning', profile.servicePlural, 'Lätt att kontakta'])
+      : (isEnglish(ctx) ? ['Clear structure', profile.servicePlural, 'Fast contact'] : ['Tydligt upplägg', profile.servicePlural, 'Snabb kontakt'])
+  const mediaTitle = profile.kind === 'restaurant' ? (isEnglish(ctx) ? 'A sense of the place' : 'En känsla av platsen') : profile.isBeauty ? (isEnglish(ctx) ? 'The feeling before the visit' : 'Känslan inför besöket') : (isEnglish(ctx) ? 'Clear from the first impression' : 'Tydligt från första intryck')
   const mediaText = profile.kind === 'restaurant'
-    ? 'Bild, rytm och kort text hjälper gästen förstå atmosfären innan besöket.'
+    ? (isEnglish(ctx) ? 'Imagery, rhythm and short copy help the guest understand the atmosphere before the visit.' : 'Bild, rytm och kort text hjälper gästen förstå atmosfären innan besöket.')
     : profile.isBeauty
-      ? 'En varm och tydlig presentation som gör det enklare att förstå utbudet innan bokning.'
-      : 'En konkret presentation som gör det enkelt att förstå erbjudandet och ta kontakt.'
-  return `<section class='section'><div class='wrap split'><div class='stack'><p class='eyebrow'>${profile.kind === 'restaurant' ? 'Upplevelse' : 'Första intrycket'}</p><h2>${esc(c.introTitle || c.heroTitle || 'Byggt för förtroende')}</h2><p class='lead'>${esc(c.introText || '')}</p><div class='tag-row'>${tags.map((t) => `<span>${esc(t)}</span>`).join('')}</div></div>${img ? `<article class='media-card'><img src='${attr(img)}' alt=''><div class='media-body'><h3>${esc(mediaTitle)}</h3><p>${esc(mediaText)}</p></div></article>` : ''}</div></section>`
+      ? (isEnglish(ctx) ? 'A warm and clear presentation that makes the offer easier to understand before booking.' : 'En varm och tydlig presentation som gör det enklare att förstå utbudet innan bokning.')
+      : (isEnglish(ctx) ? 'A concrete presentation that makes the offer easy to understand and act on.' : 'En konkret presentation som gör det enkelt att förstå erbjudandet och ta kontakt.')
+  return `<section class='section'><div class='wrap split'><div class='stack'><p class='eyebrow'>${profile.kind === 'restaurant' ? (isEnglish(ctx) ? 'Experience' : 'Upplevelse') : (isEnglish(ctx) ? 'First impression' : 'Första intrycket')}</p><h2>${esc(c.introTitle || c.heroTitle || (isEnglish(ctx) ? 'Built for trust' : 'Byggt för förtroende'))}</h2><p class='lead'>${esc(c.introText || '')}</p><div class='tag-row'>${tags.map((t) => `<span>${esc(t)}</span>`).join('')}</div></div>${img ? `<article class='media-card'><img src='${attr(img)}' alt=''><div class='media-body'><h3>${esc(mediaTitle)}</h3><p>${esc(mediaText)}</p></div></article>` : ''}</div></section>`
 }
 function services(c: FreeformPageContent, ctx: FreeformCtx): string {
   const profile = buildProfile(ctx)
   const list = (c.services?.length ? c.services : fallbackContent(ctx, { slug: 'x', title: 'x', purpose: '', sections: [] }).services || []).slice(0, 6)
   return `<section class='section section-alt'><div class='wrap'><p class='eyebrow'>${esc(profile.servicePlural)}</p><h2>${esc(profile.servicesHeading)}</h2><p class='lead'>${esc(profile.servicesLead)}</p><div class='grid'>${list.map((s) => `<article class='card'><h3>${esc(s.title)}</h3><p>${esc(s.text)}</p>${s.detail ? `<p>${esc(s.detail)}</p>` : ''}</article>`).join('')}</div></div></section>`
 }
-function sections(c: FreeformPageContent, processStyle = false): string {
+function sections(c: FreeformPageContent, processStyle = false, ctx: FreeformCtx): string {
   const list = (c.sections || []).slice(0, 4)
   if (!list.length) return ''
   if (processStyle) {
-    return `<section class='section'><div class='wrap process-list'>${list.map((s, i) => `<article class='process-step'><span class='process-number'>${String(i + 1).padStart(2, '0')}</span><div><p class='eyebrow'>${esc(s.eyebrow || 'Steg')}</p><h3>${esc(s.title)}</h3><p>${esc(s.text)}</p>${s.bullets?.length ? `<div class='tag-row'>${s.bullets.slice(0, 5).map((b) => `<span>${esc(b)}</span>`).join('')}</div>` : ''}</div></article>`).join('')}</div></section>`
+    return `<section class='section'><div class='wrap process-list'>${list.map((s, i) => `<article class='process-step'><span class='process-number'>${String(i + 1).padStart(2, '0')}</span><div><p class='eyebrow'>${esc(s.eyebrow || (isEnglish(ctx) ? 'Step' : 'Steg'))}</p><h3>${esc(s.title)}</h3><p>${esc(s.text)}</p>${s.bullets?.length ? `<div class='tag-row'>${s.bullets.slice(0, 5).map((b) => `<span>${esc(b)}</span>`).join('')}</div>` : ''}</div></article>`).join('')}</div></section>`
   }
-  return `<section class='section'><div class='wrap stack'>${list.map((s) => `<article class='card'><p class='eyebrow'>${esc(s.eyebrow || 'Detalj')}</p><h2>${esc(s.title)}</h2><p class='lead'>${esc(s.text)}</p>${s.bullets?.length ? `<div class='tag-row'>${s.bullets.slice(0, 5).map((b) => `<span>${esc(b)}</span>`).join('')}</div>` : ''}</article>`).join('')}</div></section>`
+  return `<section class='section'><div class='wrap stack'>${list.map((s) => `<article class='card'><p class='eyebrow'>${esc(s.eyebrow || (isEnglish(ctx) ? 'Detail' : 'Detalj'))}</p><h2>${esc(s.title)}</h2><p class='lead'>${esc(s.text)}</p>${s.bullets?.length ? `<div class='tag-row'>${s.bullets.slice(0, 5).map((b) => `<span>${esc(b)}</span>`).join('')}</div>` : ''}</article>`).join('')}</div></section>`
 }
 function gallery(ctx: FreeformCtx, imgs: string[]): string {
   const profile = buildProfile(ctx)
   if (imgs.length < 2) return ''
-  return `<section class='section'><div class='wrap split'><div><p class='eyebrow'>${profile.isBeauty ? 'Känsla' : 'Intryck'}</p><h2>${profile.isClinic ? 'En trygg känsla redan innan bokning.' : profile.isBeauty ? 'En visuell känsla som lyfter upplevelsen.' : 'En design som känns arbetad.'}</h2><p class='lead'>Stora bildytor, tydlig rytm och bra kontrast ger ett mer exklusivt första intryck och gör innehållet lättare att ta in.</p></div><div class='gallery-grid'>${imgs.slice(0, 3).map((src) => `<img src='${attr(src)}' alt=''>`).join('')}</div></div></section>`
+  return `<section class='section'><div class='wrap split'><div><p class='eyebrow'>${profile.isBeauty ? (isEnglish(ctx) ? 'Atmosphere' : 'Känsla') : (isEnglish(ctx) ? 'Impression' : 'Intryck')}</p><h2>${profile.isClinic ? (isEnglish(ctx) ? 'A reassuring feeling before booking.' : 'En trygg känsla redan innan bokning.') : profile.isBeauty ? (isEnglish(ctx) ? 'A visual feeling that lifts the experience.' : 'En visuell känsla som lyfter upplevelsen.') : (isEnglish(ctx) ? 'A design that feels considered.' : 'En design som känns arbetad.')}</h2><p class='lead'>${isEnglish(ctx) ? 'Large image areas, clear rhythm and strong contrast create a more premium first impression and make the content easier to take in.' : 'Stora bildytor, tydlig rytm och bra kontrast ger ett mer exklusivt första intryck och gör innehållet lättare att ta in.'}</p></div><div class='gallery-grid'>${imgs.slice(0, 3).map((src) => `<img src='${attr(src)}' alt=''>`).join('')}</div></div></section>`
 }
-function faq(c: FreeformPageContent, fullPage = false): string {
+function faq(c: FreeformPageContent, fullPage = false, ctx: FreeformCtx): string {
   const groups = (c.faqGroups || []).filter((g) => g.title && g.items?.length).slice(0, 3)
   const flat = (c.faqs || []).slice(0, fullPage ? 8 : 4)
   if (fullPage && groups.length) {
-    return `<section class='section section-alt'><div class='wrap faq-layout'><aside><p class='eyebrow'>Vanliga frågor</p><h2>${esc(c.introTitle || 'Inför nästa steg.')}</h2><p class='lead'>${esc(c.introText || 'Här samlas frågor som är relevanta inför kontakt och planering.')}</p></aside><div class='faq-groups'>${groups.map((g) => `<section class='faq-category'><h2>${esc(g.title)}</h2><div class='faq-list'>${g.items.slice(0, 5).map((f) => `<details><summary>${esc(f.question)}</summary><p>${esc(f.answer)}</p></details>`).join('')}</div></section>`).join('')}</div></div></section>`
+    return `<section class='section section-alt'><div class='wrap faq-layout'><aside><p class='eyebrow'>${isEnglish(ctx) ? 'FAQ' : 'Vanliga frågor'}</p><h2>${esc(c.introTitle || (isEnglish(ctx) ? 'Before the next step.' : 'Inför nästa steg.'))}</h2><p class='lead'>${esc(c.introText || (isEnglish(ctx) ? 'Relevant questions about contact, booking and planning are collected here.' : 'Här samlas frågor som är relevanta inför kontakt och planering.'))}</p></aside><div class='faq-groups'>${groups.map((g) => `<section class='faq-category'><h2>${esc(g.title)}</h2><div class='faq-list'>${g.items.slice(0, 5).map((f) => `<details><summary>${esc(f.question)}</summary><p>${esc(f.answer)}</p></details>`).join('')}</div></section>`).join('')}</div></div></section>`
   }
   if (!flat.length) return ''
-  return `<section class='section section-alt'><div class='wrap'><p class='eyebrow'>Frågor</p><h2>${fullPage ? 'Frågor inför kontakt.' : 'Snabba svar innan kontakt.'}</h2><div class='faq-list'>${flat.map((f) => `<details><summary>${esc(f.question)}</summary><p>${esc(f.answer)}</p></details>`).join('')}</div></div></section>`
+  return `<section class='section section-alt'><div class='wrap'><p class='eyebrow'>${isEnglish(ctx) ? 'Questions' : 'Frågor'}</p><h2>${fullPage ? (isEnglish(ctx) ? 'Questions before you get in touch.' : 'Frågor inför kontakt.') : (isEnglish(ctx) ? 'Quick answers before you get in touch.' : 'Snabba svar innan kontakt.')}</h2><div class='faq-list'>${flat.map((f) => `<details><summary>${esc(f.question)}</summary><p>${esc(f.answer)}</p></details>`).join('')}</div></div></section>`
 }
 function contact(ctx: FreeformCtx, c: FreeformPageContent): string {
   const en = isEnglish(ctx)
@@ -618,7 +699,7 @@ function contact(ctx: FreeformCtx, c: FreeformPageContent): string {
     ctx.facts.address || ctx.facts.city ? `<span>${en ? 'Address' : 'Adress'}<br>${esc(decodeText([ctx.facts.address, ctx.facts.city].filter(Boolean).join(', ')))}</span>` : '',
     ctx.facts.google_maps_url ? `<a href='${attr(ctx.facts.google_maps_url)}'>Google Maps<br>${en ? 'Get directions' : 'Visa vägbeskrivning'}</a>` : '',
   ].filter(Boolean).join('')
-  return rows ? `<section id='kontakt' class='section'><div class='wrap contact-grid'><div><p class='eyebrow'>Kontakt</p><h2>${esc(title)}</h2><p class='lead'>${esc(lead)}</p></div><div class='contact-list'>${rows}</div></div></section>` : ''
+  return rows ? `<section id='${en ? 'contact' : 'kontakt'}' class='section'><div class='wrap contact-grid'><div><p class='eyebrow'>${en ? 'Contact' : 'Kontakt'}</p><h2>${esc(title)}</h2><p class='lead'>${esc(lead)}</p></div><div class='contact-list'>${rows}</div></div></section>` : ''
 }
 function cta(c: FreeformPageContent, ctx: FreeformCtx): string {
   return `<section class='section'><div class='wrap'><div class='cta-band'><div><h2>${esc(c.closingTitle || (isEnglish(ctx) ? 'Ready for the next step?' : 'Redo att ta nästa steg?'))}</h2><p>${esc(c.closingText || (isEnglish(ctx) ? 'Call or email to make the next step clear.' : 'Ring eller mejla så blir vägen framåt tydlig.'))}</p></div>${buttons(ctx, c)}</div></div></section>`
@@ -868,7 +949,7 @@ function shouldRenderContact(plan: FreeformPlan, page: FreeformPageSpec): boolea
 
 function sourceFor(ctx: FreeformCtx, page: FreeformPageSpec): string {
   const p = ctx.scraped?.pages ?? {}
-  const parts = [page.slug === 'om-oss' ? `${p.about?.summary ?? ''} ${p.about?.markdown ?? ''}` : '', /tjanster|behandlingar|service/i.test(page.slug) ? `${p.services?.summary ?? ''} ${p.services?.markdown ?? ''}` : '', `${p.home?.summary ?? ctx.scraped?.summary ?? ''} ${p.home?.markdown ?? ctx.scraped?.markdown ?? ''}`]
+  const parts = [/(om-oss|about)/i.test(page.slug) ? `${p.about?.summary ?? ''} ${p.about?.markdown ?? ''}` : '', /(tjanster|behandlingar|service|services)/i.test(page.slug) ? `${p.services?.summary ?? ''} ${p.services?.markdown ?? ''}` : '', `${p.home?.summary ?? ctx.scraped?.summary ?? ''} ${p.home?.markdown ?? ctx.scraped?.markdown ?? ''}`]
   return clean(decodeText(parts.filter(Boolean).join(' ')))
 }
 const SERVICE_HINTS: Record<string, RegExp> = {
@@ -886,7 +967,7 @@ const SERVICE_HINTS: Record<string, RegExp> = {
   general: /service|installation|reparation|underhåll|rådgiv|projekt|montage|konsultation/i,
 }
 
-const SERVICE_DEFAULTS: Record<string, string[]> = {
+const SERVICE_DEFAULTS_SV: Record<string, string[]> = {
   hair: ['Personlig konsultation', 'Klippning och form', 'Färg och nyans', 'Styling inför tillfälle'],
   nails: ['Personlig konsultation', 'Manikyr', 'Pedikyr', 'Förstärkning och påfyllning'],
   beauty: ['Personlig konsultation', 'Fransar och bryn', 'Ansiktsbehandling', 'Rådgivning inför behandling'],
@@ -901,6 +982,21 @@ const SERVICE_DEFAULTS: Record<string, string[]> = {
   general: ['Tydlig rådgivning', 'Genomtänkt utförande', 'Smidig kontakt', 'Nästa steg utan krångel'],
 }
 
+const SERVICE_DEFAULTS_EN: Record<string, string[]> = {
+  hair: ['Personal consultation', 'Cut and shape', 'Colour and tone', 'Styling for occasions'],
+  nails: ['Personal consultation', 'Manicure', 'Pedicure', 'Extensions and refill'],
+  beauty: ['Personal consultation', 'Lashes and brows', 'Facial treatment', 'Pre-treatment advice'],
+  clinic: ['Personal consultation', 'Treatment guidance', 'Follow-up', 'Booking support'],
+  massage: ['Massage treatments', 'Personal consultation', 'Treatment guidance', 'Booking support'],
+  electrical: ['Electrical installation', 'Fault finding and service', 'Lighting and outlets', 'EV charger and panel work'],
+  plumbing: ['Pipe installation', 'Fault finding and service', 'Bathrooms and wet rooms', 'Urgent leak support'],
+  construction: ['Renovation', 'Carpentry work', 'Roof and facade', 'Project planning and quotes'],
+  auto: ['Service and maintenance', 'Diagnostics', 'Brakes and tyres', 'Repair guidance'],
+  cleaning: ['Regular cleaning', 'Move-out cleaning', 'Commercial cleaning', 'Window cleaning'],
+  restaurant: ['Menu and dishes', 'Lunch service', 'Catering', 'Table booking'],
+  general: ['Clear guidance', 'Thoughtful delivery', 'Easy contact', 'A simple next step'],
+}
+
 function serviceIdeas(ctx: FreeformCtx): string[] {
   const profile = buildProfile(ctx)
   const kind = profile.kind || 'general'
@@ -908,13 +1004,19 @@ function serviceIdeas(ctx: FreeformCtx): string[] {
   const raw = decodeText(`${ctx.scraped?.pages?.services?.markdown ?? ''} ${ctx.scraped?.pages?.home?.markdown ?? ctx.scraped?.markdown ?? ''}`)
   const found = raw.split(/[\n•|,;]+/)
     .map((s) => clean(s).replace(/^[-–—*\d.\s#]+/, '').replace(/\s{2,}/g, ' '))
-    .filter(isGoodServiceTitle)
+    .filter((s) => isGoodServiceTitle(ctx, s))
     .filter((s) => hint.test(s))
   const unique = Array.from(new Map(found.map((s) => [s.toLowerCase(), titleCaseSv(s)])).values()).slice(0, 6)
   if (unique.length >= 3) return unique
-  return SERVICE_DEFAULTS[kind] ?? SERVICE_DEFAULTS.general
+  const defaults = isEnglish(ctx) ? SERVICE_DEFAULTS_EN : SERVICE_DEFAULTS_SV
+  return defaults[kind] ?? defaults.general
 }
-function serviceText(title: string, salon: boolean): string {
+function serviceText(title: string, salon: boolean, en: boolean): string {
+  if (en) {
+    if (/consult|guidance|advice/i.test(title)) return 'A calm first step where needs, expectations and the right next move become clear.'
+    if (/cut|colour|tone|styling|skin|massage|treatment|lash|brow|nail|facial/i.test(title)) return 'Presented with a focus on comfort, quality and a result that fits naturally into everyday life.'
+    return salon ? 'A clear treatment description built around comfort, trust and personal guidance.' : 'A clear presentation of the offer, written without invented pricing or promises.'
+  }
   if (/konsult|rådgiv/i.test(title)) return 'Ett lugnt första steg där behov, förväntningar och rätt väg framåt blir tydliga.'
   if (/klipp|färg|sling|balayage|styling|hud|massage|behandling|frans|bryn|nagel/i.test(title)) return 'Presenterat med fokus på känsla, kvalitet och ett resultat som passar kunden i vardagen.'
   return salon ? 'En tydlig behandlingstext med fokus på känsla, trygghet och personlig rådgivning.' : 'En tydlig presentation av erbjudandet, skriven utan påhittade priser eller löften.'
@@ -974,14 +1076,20 @@ function cleanContent(v: any, ctx: FreeformCtx | null, page: FreeformPageSpec): 
 function repairContent(ctx: FreeformCtx, input: FreeformPageContent): FreeformPageContent {
   const profile = buildProfile(ctx)
   const fallback = fallbackContent(ctx, { slug: 'index', title: ctx.facts.business_name || 'Start', purpose: '', sections: [] })
-  const badText = (s?: string) => !s || hasBadLanguage(s) || /sidan|webbplats|demo|AI|anpassad efter företaget/i.test(s)
+  const badText = (s?: string) => !s || hasBadLanguage(ctx, s) || (isEnglish(ctx)
+    ? /\b(website|page|demo|ai|generated|customized for the company|tailored for the company)\b/i.test(s)
+    : /sidan|webbplats|demo|AI|anpassad efter företaget/i.test(s))
   const services = (input.services || [])
-    .filter((s) => isGoodServiceTitle(s.title))
+    .filter((s) => isGoodServiceTitle(ctx, s.title))
     .filter((s, i, arr) => arr.findIndex((x) => x.title.toLowerCase() === s.title.toLowerCase()) === i)
     .slice(0, 6)
-  const faqs = (input.faqs || []).filter((f) => f.question && f.answer && !/anpassad efter företaget|sidan|webbplats/i.test(`${f.question} ${f.answer}`)).slice(0, 4)
+  const faqs = (input.faqs || []).filter((f) => f.question && f.answer && !(isEnglish(ctx)
+    ? /\b(customized for the company|tailored for the company|website|page|demo|ai-generated)\b/i
+    : /anpassad efter företaget|sidan|webbplats/i).test(`${f.question} ${f.answer}`)).slice(0, 4)
   const faqGroups = (input.faqGroups || [])
-    .map((g) => ({ ...g, items: (g.items || []).filter((f) => f.question && f.answer && !/anpassad efter företaget|sidan|webbplats|random|mall/i.test(`${f.question} ${f.answer}`)).slice(0, 5) }))
+    .map((g) => ({ ...g, items: (g.items || []).filter((f) => f.question && f.answer && !(isEnglish(ctx)
+      ? /\b(customized for the company|tailored for the company|website|page|demo|random|template)\b/i
+      : /anpassad efter företaget|sidan|webbplats|random|mall/i).test(`${f.question} ${f.answer}`)).slice(0, 5) }))
     .filter((g) => g.title && g.items.length >= 2)
     .slice(0, 3)
   return {
@@ -1029,29 +1137,49 @@ function decodeText(s: string): string {
     .replace(/Ã…/g, 'Å').replace(/Ã„/g, 'Ä').replace(/Ã–/g, 'Ö')
     .replace(/Ã©/g, 'é').replace(/â€“/g, '–').replace(/â€”/g, '—').replace(/â€™/g, '’').replace(/Â/g, '')
 }
-function hasBadLanguage(s: string): boolean {
+function hasBadLanguage(ctx: FreeformCtx, s: string): boolean {
   const x = decodeText(s)
+  if (/Ã|Â|â€/.test(s)) return true
+  if (isEnglish(ctx)) {
+    const swedishHits = (x.match(/\b(och|för|med|behandling|behandlingar|salong|klinik|bokning|frågor|kontakt|nästa|besök|erbjuder|trygghet|rådgivning)\b/gi) || []).length
+    return swedishHits >= 2
+  }
   const englishHits = (x.match(/\b(the|and|with|for|patients|clinic|offers|including|quality|personalized|booking|available)\b/gi) || []).length
-  return /Ã|Â|â€/.test(s) || englishHits >= 2
+  return englishHits >= 2
 }
-function isGoodServiceTitle(s: string): boolean {
+function isGoodServiceTitle(ctx: FreeformCtx, s: string): boolean {
   const x = clean(decodeText(s))
   if (x.length < 4 || x.length > 48) return false
   if (x.split(/\s+/).length > 6) return false
-  if (/^(behandlingar|tjänster|kontakt|hem|om oss|pris|priser)$/i.test(x)) return false
+  if (isEnglish(ctx)) {
+    if (/^(services|service|contact|home|about|about us|price|prices|faq|questions)$/i.test(x)) return false
+    if (/\b(should|must|before|during|after|hours|cookies|policy|menu|copyright|read more|click|online)\b/i.test(x)) return false
+  } else {
+    if (/^(behandlingar|tjänster|kontakt|hem|om oss|pris|priser)$/i.test(x)) return false
+    if (/\b(bör|ska|måste|innan|under|efter|timmarna|cookies|policy|meny|copyright|läs mer|klicka|online)\b/i.test(x)) return false
+  }
   if (/[.!?]$/.test(x)) return false
-  if (/\b(bör|ska|måste|innan|under|efter|timmarna|cookies|policy|meny|copyright|läs mer|klicka|online)\b/i.test(x)) return false
   return true
 }
-function qualityFixFiles(files: Record<string, string>): Record<string, string> {
+function qualityFixFiles(files: Record<string, string>, ctx: FreeformCtx): Record<string, string> {
   const out: Record<string, string> = {}
+  const en = isEnglish(ctx)
   for (const [name, value] of Object.entries(files)) {
     let v = decodeText(value)
-      .replace(/\bPersonligt anpassad\b/g, 'Personlig rådgivning')
-      .replace(/\bModern presentation med tydlig information, stark mobilupplevelse och enkel kontakt\./g, 'Tydlig information, varm känsla och enkel kontakt inför nästa steg.')
-      .replace(/\bSidan visar\b/gi, 'Här finns')
-      .replace(/\bwebbplatsen\b/gi, 'informationen')
-      .replace(/\bdemo\b/gi, 'presentation')
+    if (en) {
+      v = v
+        .replace(/\bthe website\b/gi, 'the information')
+        .replace(/\bthis demo\b/gi, 'this presentation')
+        .replace(/\bdemo\b/gi, 'presentation')
+        .replace(/\bAI-generated\b/gi, '')
+    } else {
+      v = v
+        .replace(/\bPersonligt anpassad\b/g, 'Personlig rådgivning')
+        .replace(/\bModern presentation med tydlig information, stark mobilupplevelse och enkel kontakt\./g, 'Tydlig information, varm känsla och enkel kontakt inför nästa steg.')
+        .replace(/\bSidan visar\b/gi, 'Här finns')
+        .replace(/\bwebbplatsen\b/gi, 'informationen')
+        .replace(/\bdemo\b/gi, 'presentation')
+    }
     out[name] = v
   }
   return out
