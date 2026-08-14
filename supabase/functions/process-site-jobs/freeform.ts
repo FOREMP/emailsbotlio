@@ -169,7 +169,7 @@ function isEnglish(ctx: FreeformCtx): boolean {
 
 function buildPlan(ctx: FreeformCtx): FreeformPlan {
   const profile = buildProfile(ctx)
-  const business = ctx.facts.business_name || ctx.nicheLabel || 'Företaget'
+  const business = businessName(ctx)
   const family = selectBlockTemplateFamily({
     category: ctx.category,
     niche: ctx.facts.niche,
@@ -182,6 +182,7 @@ function buildPlan(ctx: FreeformCtx): FreeformPlan {
     serviceTitle: profile.servicePlural,
     aboutTitle: profile.aboutTitle,
     includeFaqPage: shouldIncludeFaqPage(ctx, profile, family.key),
+    language: isEnglish(ctx) ? 'en' : 'sv',
   }).slice(0, MAX_PAGES).map((page) => ({ ...page, templateFamily: family.key }))
   return {
     designDirective: templateDirective(family),
