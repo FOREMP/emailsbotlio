@@ -384,15 +384,30 @@ ${schemaLine}`
 async function polishContent(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, draft: FreeformPageContent): Promise<{ source: 'polished' | 'fallback'; content: FreeformPageContent; error?: string; model?: string }> {
   const profile = buildProfile(ctx)
   const pack = buildFactPack(ctx)
-  const system = `${isEnglish(ctx)
-    ? 'You are a senior English editor and conversion copywriter. You receive JSON content for one page. Rewrite it into natural, polished English and improve thin content carefully using the approved fact pack.'
-    : 'Du är en senior svensk redaktör och conversion copywriter. Du får JSON-innehåll till EN sida. Uppgift: skriv om till naturlig, korrekt, premium svensk text och fyll ut tunt innehåll med försiktig, relevant copy från faktapaketet.'}
+  const system = isEnglish(ctx)
+    ? `You are a senior English editor and conversion copywriter. You receive JSON content for ONE page. Rewrite it into natural, polished English and carefully improve thin content using the approved fact pack.
+
+HARD RULES:
+- Respond with the same JSON schema only. No markdown.
+- Keep hard facts exactly: name, phone, email, address, city.
+- Never add prices, years, certifications, customer names, reviews, staff names or opening hours.
+- EVERY field must be native English. If the draft contains Swedish words or sentences, translate them. No Swedish may remain.
+- Remove anything that sounds internal: "the page", "the website", "demo", "AI", "adapted for the business".
+- Fix mojibake, e.g. VÃ¥rvÃ¤dersvÃ¤gen -> Vårvädersvägen (keep proper names correct).
+- FAQ must be useful for customers and specific to the business.
+- Service titles must be short, real services or treatments - not sentences or instructions.
+- Follow the profile's business type. Use words like clinic/treatment/salon ONLY for beauty and care businesses. For electrical, plumbing, construction, automotive and cleaning use service, job, installation, maintenance.
+- Keep the chosen template family's feel: restaurant = atmosphere/food/visit; editorial service = warm premium service; practical service = clarity, trust and process.
+- Never sound like internal template copy. Remove generic lines like "The visitor gets..." and write in the company's voice.
+- FAQ pages: group questions in faqGroups. Only use groups that genuinely fit the business, e.g. First contact, Planning, Scope, Visit, Delivery or Practical questions.
+- If the draft describes the wrong industry: rewrite it to match the profile's business type and the source text.`
+    : `Du är en senior svensk redaktör och conversion copywriter. Du får JSON-innehåll till EN sida. Uppgift: skriv om till naturlig, korrekt, premium svensk text och fyll ut tunt innehåll med försiktig, relevant copy från faktapaketet.
 
 HÅRDA REGLER:
 - Svara endast med samma JSON-schema. Ingen markdown.
 - Behåll hårda fakta exakt: namn, telefon, e-post, adress, stad.
 - Lägg aldrig till priser, årtal, certifikat, kundnamn, recensioner, personalnamn eller öppettider.
-- ${isEnglish(ctx) ? 'All final text must be English.' : 'All text ska vara svenska. Ingen engelska.'}
+- All text ska vara svenska. Ingen engelska.
 - Ta bort allt som låter internt: "sidan", "webbplats", "demo", "AI", "anpassad efter företaget".
 - Korrigera mojibake, t.ex. VÃ¥rvÃ¤dersvÃ¤gen -> Vårvädersvägen.
 - FAQ ska vara kundnyttig och verksamhetsspecifik.
