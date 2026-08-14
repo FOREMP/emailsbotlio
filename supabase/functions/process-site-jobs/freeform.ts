@@ -150,7 +150,7 @@ export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<st
     return step(false, files, meta({ ...progress, stage: 'quality_check', rendered: plan.pages.map((p) => p.slug), built: plan.pages.map((p) => p.slug), lastStage: 'render' }), `v${VERSION} rendered ${plan.pages.length} pages`)
   }
   if (progress.stage === 'quality_check') {
-    const checked = qualityFixFiles(files)
+    const checked = qualityFixFiles(files, isEnglish(ctx))
     return step(true, checked, meta({ ...progress, stage: 'done', lastStage: 'quality_check' }), `v${VERSION} quality checked`)
   }
   return step(true, files, meta({ ...progress, stage: 'done', lastStage: 'done' }), 'v7 done')
