@@ -1013,8 +1013,8 @@ export type Database = {
           feedback: string | null
           generated_site_id: string | null
           id: string
-          last_email_sent_at: string | null
           language: string
+          last_email_sent_at: string | null
           niche: string
           phone: string | null
           rating: number | null
@@ -1044,8 +1044,8 @@ export type Database = {
           feedback?: string | null
           generated_site_id?: string | null
           id?: string
-          last_email_sent_at?: string | null
           language?: string
+          last_email_sent_at?: string | null
           niche?: string
           phone?: string | null
           rating?: number | null
@@ -1075,8 +1075,8 @@ export type Database = {
           feedback?: string | null
           generated_site_id?: string | null
           id?: string
-          last_email_sent_at?: string | null
           language?: string
+          last_email_sent_at?: string | null
           niche?: string
           phone?: string | null
           rating?: number | null
