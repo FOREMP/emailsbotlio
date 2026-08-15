@@ -30,6 +30,14 @@ function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+// Om token är personlig men projekten ska ägas av ett team måste teamId följa med.
+// Är token skapad direkt i teamet behövs ingen VERCEL_TEAM_ID — då är detta en no-op.
+function withTeam(url: string) {
+  const teamId = Deno.env.get('VERCEL_TEAM_ID')
+  if (!teamId) return url
+  return url + (url.includes('?') ? '&' : '?') + `teamId=${encodeURIComponent(teamId)}`
+}
+
 async function verifyPublicDemoUrl(url: string) {
   const attempts = [0, 1200, 2500, 4500]
   let lastStatus: number | null = null
