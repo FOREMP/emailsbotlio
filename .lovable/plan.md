@@ -21,11 +21,13 @@ Notera: en site som redan är deployad i gamla kontot kan inte redeployas till s
 
 ## Så byter du API-nyckel
 
-1. Logga in på det nya Vercel-kontot (det med Pro).
-2. Gå till **Account Settings → Tokens** (eller **Team Settings → Tokens** om Pro ligger på ett team). Skapa token med scope satt till **teamet/kontot** som ska äga sajterna, giltighetstid "No expiration".
+Kontot behöver inte vara Pro idag — uppgradering senare (vid ~200 sajter) inom samma team kräver ingen kodändring alls, bara högre gräns.
+
+1. Logga in på det nya Vercel-kontot/teamet.
+2. **Account Settings → Tokens** (eller **Team Settings → Tokens**). Skapa token med scope satt till det team som ska äga sajterna, giltighet "No expiration".
 3. Kopiera värdet — det visas bara en gång.
-4. Säg till mig när du har det, så öppnar jag det säkra formuläret där du klistrar in det som `VERCEL_API_TOKEN` (ersätter det gamla). Nyckeln lagras krypterat, aldrig i koden.
-5. Jag deployar om `deploy-site` och kör en testdeploy på en site för att bekräfta att den blir `live` och svarar 200.
+4. Jag öppnar det säkra formuläret direkt efter implementationen där du klistrar in `VERCEL_API_TOKEN` (ersätter det gamla) och valfritt `VERCEL_TEAM_ID`. Nyckeln lagras krypterat, aldrig i koden.
+5. Jag kör en testdeploy på en ny site och bekräftar att den blir `live` och svarar 200.
 
 ## Teknisk sammanfattning
 
