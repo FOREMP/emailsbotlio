@@ -685,6 +685,7 @@ export type Database = {
           from_name: string
           id: string
           is_active: boolean
+          language: string
           reply_to: string | null
           updated_at: string
           user_id: string
@@ -700,6 +701,7 @@ export type Database = {
           from_name: string
           id?: string
           is_active?: boolean
+          language?: string
           reply_to?: string | null
           updated_at?: string
           user_id: string
@@ -715,6 +717,7 @@ export type Database = {
           from_name?: string
           id?: string
           is_active?: boolean
+          language?: string
           reply_to?: string | null
           updated_at?: string
           user_id?: string

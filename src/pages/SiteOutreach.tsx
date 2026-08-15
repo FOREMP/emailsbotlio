@@ -254,7 +254,7 @@ export default function SiteOutreach() {
           .select("id")
           .eq("user_id", uid)
           .eq("is_active", true)
-          .ilike("from_email", language === "en" ? "%@foremp.eu" : "%@foremp.email");
+          .eq("language", language);
         const perSender = Math.max(1, Math.ceil(nextLimit / Math.max((forempSenders ?? []).length, 1)));
         for (const s of forempSenders ?? []) {
           const { error } = await supabase.from("senders").update({ daily_limit: perSender }).eq("id", s.id);
@@ -317,8 +317,8 @@ export default function SiteOutreach() {
           <p className="text-xs text-muted-foreground">
             Räknar endast <strong>nya första mail</strong> per dag. Follow-ups skickas alltid ovanpå detta.
             {language === "en"
-              ? " Totalen delas mellan aktiva @foremp.eu-senders."
-              : " Totalen delas jämnt mellan aktiva @foremp.email-sender (t.ex. 10 = 5 per sender)."}
+              ? " Totalen delas mellan aktiva English-senders."
+              : " Totalen delas jämnt mellan aktiva Swedish-senders."}
           </p>
         </div>
         <div className="flex items-end gap-2">
