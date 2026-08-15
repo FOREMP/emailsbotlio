@@ -30,16 +30,13 @@ const DAILY_GEN_CAP_FALLBACK = 16  // used only if we can't read sender limits
 const OUTREACH_DOMAINS = ['foremp.email', 'foremp.eu'] as const
 const GHOST_LIST_NAME = 'Site Leads (auto)'
 
-// Account-agnostic: canonical demo URL = https://demo-<slug>-<id8>.vercel.app
-const CANONICAL_DEMO_HOST = /^demo-[a-z0-9-]+\.vercel\.app$/
-
 function isCanonicalDemoUrl(value?: string | null): boolean {
   if (!value) return false
   try {
     const url = new URL(value)
     if (url.protocol !== 'https:') return false
-    if (!CANONICAL_DEMO_HOST.test(url.hostname)) return false
-    if (/-(foremp|[a-z0-9]+s-projects)\.vercel\.app$/.test(url.hostname)) return false
+    if (!url.hostname.endsWith('.vercel.app')) return false
+    if (url.hostname.endsWith('-foremp.vercel.app')) return false
     return true
   } catch {
     return false
@@ -281,6 +278,14 @@ async function recoverStuckGenerations(
       continue
     }
 
+    if (gs.status === 'deploying') {
+      await supabase.from('generated_sites').update({ updated_at: new Date().toISOString() }).eq('id', gs.id)
+      await invokeFn(supabaseUrl, serviceKey, 'deploy-site', { generated_site_id: gs.id })
+        .catch((e) => report.errors.push(`recover verify deploy ${gs.id}: ${e.message}`))
+      recovered++
+      continue
+    }
+
     if (gs.status === 'failed') {
       await supabase.from('site_leads').update({
         status: 'failed',
@@ -344,6 +349,10 @@ async function reconcile(
     } else if (gs.status === 'generated') {
       await invokeFn(supabaseUrl, serviceKey, 'deploy-site', { generated_site_id: gs.id })
         .catch((e) => report.errors.push(`kick deploy ${gs.id}: ${e.message}`))
+      moved++
+    } else if (gs.status === 'deploying') {
+      await invokeFn(supabaseUrl, serviceKey, 'deploy-site', { generated_site_id: gs.id })
+        .catch((e) => report.errors.push(`kick verify deploy ${gs.id}: ${e.message}`))
       moved++
     } else if (gs.status === 'live' && gs.demo_site_url) {
       if (!isCanonicalDemoUrl(gs.demo_site_url)) {
@@ -634,6 +643,19 @@ async function startGeneration(
       feedback: `Scrape failed: ${body.slice(0, 400)}`,
     }).eq('id', lead.id)
     throw new Error(`scrape failed (${scrapeResp.status}): ${body.slice(0, 200)}`)
+  }
+
+  // Start generation immediately after a successful scrape instead of waiting
+  // for the next reconcile/cron sweep. This removes the long "building" gap
+  // where the UI says generating but OpenRouter has not been called yet.
+  const generateResp = await invokeFn(supabaseUrl, serviceKey, 'generate-site', { generated_site_id: gs.id })
+  if (!generateResp.ok) {
+    const body = await generateResp.text().catch(() => '')
+    await supabase.from('site_leads').update({
+      status: 'failed',
+      feedback: `Generate queue failed: ${body.slice(0, 400)}`,
+    }).eq('id', lead.id)
+    throw new Error(`generate queue failed (${generateResp.status}): ${body.slice(0, 200)}`)
   }
 }
 
