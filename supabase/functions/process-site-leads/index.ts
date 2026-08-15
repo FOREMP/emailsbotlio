@@ -14,6 +14,7 @@
 // pg_net can hit the function endpoint (verify_jwt is off).
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { classifyNiche, templateForNiche, type NicheKey } from '../_shared/niche.ts'
+import { selectBlockTemplateFamily } from '../process-site-jobs/block-templates.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -565,12 +566,26 @@ async function startGeneration(
   // the generated_sites row (previously declared after first use -> TDZ crash).
   const niche = inferLeadNiche(lead)
   const nicheTemplate = templateForNiche(niche)
+  const blockFamily = selectBlockTemplateFamily({
+    category: lead?.category ?? null,
+    niche: lead?.niche ?? niche ?? null,
+    businessName: lead?.company_name ?? null,
+  })
 
   // No template exists for this category yet -> the site can only be built by
   // the freeform (AI-from-scratch) engine.
   const resolvedMode = await resolveGenerationMode(supabase)
+  const shouldUseBlockTemplateRenderer = lead.language !== 'en' && [
+    'salon_editorial_luxury',
+    'clinic_private_care',
+    'mechanic_precision_workshop',
+    'byggform_architectural_trust',
+    'bistro_atmospheric_landing',
+  ].includes(blockFamily.key)
   const generationMode = lead.language === 'en'
     ? 'freeform'
+    : shouldUseBlockTemplateRenderer
+      ? 'freeform'
     : nicheTemplate
       ? resolvedMode
       : 'freeform'
@@ -647,7 +662,7 @@ async function startGeneration(
       language: lead.language === 'en' ? 'en' : 'sv',
       // NOT NULL column: freeform builds have no template, use a marker so the
       // insert can't fail (this used to abort every non-template category).
-      template: nicheTemplate ?? 'freeform',
+      template: generationMode === 'freeform' ? blockFamily.key : (nicheTemplate ?? 'freeform'),
       generation_mode: generationMode,
     })
     .select('id')
