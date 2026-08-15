@@ -30,6 +30,14 @@ function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+// Om token är personlig men projekten ska ägas av ett team måste teamId följa med.
+// Är token skapad direkt i teamet behövs ingen VERCEL_TEAM_ID — då är detta en no-op.
+function withTeam(url: string) {
+  const teamId = Deno.env.get('VERCEL_TEAM_ID')
+  if (!teamId) return url
+  return url + (url.includes('?') ? '&' : '?') + `teamId=${encodeURIComponent(teamId)}`
+}
+
 async function verifyPublicDemoUrl(url: string) {
   const attempts = [0, 1200, 2500, 4500]
   let lastStatus: number | null = null
@@ -102,7 +110,7 @@ Deno.serve(async (req) => {
 
     await supabase.from('generated_sites').update({ status: 'deploying', error_message: null }).eq('id', generated_site_id)
 
-    const deployResp = await fetch('https://api.vercel.com/v13/deployments', {
+    const deployResp = await fetch(withTeam('https://api.vercel.com/v13/deployments'), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${vercelToken}`,
@@ -140,7 +148,7 @@ Deno.serve(async (req) => {
     // Safe to call every deploy — idempotent.
     if (deployData.projectId) {
       try {
-        const patchResp = await fetch(`https://api.vercel.com/v9/projects/${deployData.projectId}`, {
+        const patchResp = await fetch(withTeam(`https://api.vercel.com/v9/projects/${deployData.projectId}`), {
           method: 'PATCH',
           headers: {
             Authorization: `Bearer ${vercelToken}`,

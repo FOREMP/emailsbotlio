@@ -30,13 +30,16 @@ const DAILY_GEN_CAP_FALLBACK = 16  // used only if we can't read sender limits
 const OUTREACH_DOMAINS = ['foremp.email', 'foremp.eu'] as const
 const GHOST_LIST_NAME = 'Site Leads (auto)'
 
+// Account-agnostic: canonical demo URL = https://demo-<slug>-<id8>.vercel.app
+const CANONICAL_DEMO_HOST = /^demo-[a-z0-9-]+\.vercel\.app$/
+
 function isCanonicalDemoUrl(value?: string | null): boolean {
   if (!value) return false
   try {
     const url = new URL(value)
     if (url.protocol !== 'https:') return false
-    if (!url.hostname.endsWith('.vercel.app')) return false
-    if (url.hostname.endsWith('-foremp.vercel.app')) return false
+    if (!CANONICAL_DEMO_HOST.test(url.hostname)) return false
+    if (/-(foremp|[a-z0-9]+s-projects)\.vercel\.app$/.test(url.hostname)) return false
     return true
   } catch {
     return false
