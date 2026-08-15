@@ -190,6 +190,11 @@ Deno.serve(async (req) => {
       }
     }
 
+    if (deployData.id) {
+      const ready = await waitForReady(deployData.id, vercelToken)
+      if (!ready.ready) console.warn('deployment not READY before verify:', ready.state)
+    }
+
     const verify = await verifyPublicDemoUrl(publicUrl)
     if (!verify.ok) {
       const detail = `Stable demo URL did not become public (${verify.status ?? 'no-status'}): ${String(verify.detail ?? '').slice(0, 240)}`
