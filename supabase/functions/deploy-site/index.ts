@@ -39,7 +39,8 @@ function withTeam(url: string) {
 }
 
 async function verifyPublicDemoUrl(url: string) {
-  const attempts = [0, 1200, 2500, 4500]
+  // Vercel behöver upp till ~1 min innan produktionsaliaset svarar på ett nytt projekt.
+  const attempts = [0, 2000, 3000, 5000, 7000, 10000, 10000, 12000, 15000]
   let lastStatus: number | null = null
   let lastBody = ''
   for (const waitMs of attempts) {
@@ -56,6 +57,28 @@ async function verifyPublicDemoUrl(url: string) {
     }
   }
   return { ok: false as const, status: lastStatus, detail: lastBody }
+}
+
+// Vänta tills deployen är byggd (READY) innan vi verifierar den publika URL:en.
+async function waitForReady(deploymentId: string, token: string) {
+  const attempts = [0, 3000, 5000, 7000, 10000, 10000, 12000]
+  let state = 'UNKNOWN'
+  for (const waitMs of attempts) {
+    if (waitMs > 0) await delay(waitMs)
+    try {
+      const resp = await fetch(withTeam(`https://api.vercel.com/v13/deployments/${deploymentId}`), {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!resp.ok) continue
+      const data = await resp.json()
+      state = data.readyState ?? data.status ?? state
+      if (state === 'READY') return { ready: true as const, state }
+      if (state === 'ERROR' || state === 'CANCELED') return { ready: false as const, state }
+    } catch (_e) {
+      // ignorera, försök igen
+    }
+  }
+  return { ready: false as const, state }
 }
 
 Deno.serve(async (req) => {
