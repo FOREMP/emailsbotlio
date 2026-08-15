@@ -295,6 +295,7 @@ export type Database = {
           cost_credits: number | null
           created_at: string
           demo_site_url: string | null
+          deploy_check_count: number
           error_message: string | null
           gen_progress: Json | null
           generated_files: Json | null
@@ -302,6 +303,7 @@ export type Database = {
           github_repo_url: string | null
           id: string
           language: string
+          last_deploy_check_at: string | null
           last_clicked_at: string | null
           queued_at: string | null
           scraped_content: Json | null
@@ -312,8 +314,11 @@ export type Database = {
           template: string
           updated_at: string
           user_id: string
+          vercel_alias_candidates: Json
+          vercel_deployment_id: string | null
           vercel_deployment_url: string | null
           vercel_project_id: string | null
+          vercel_ready_state: string | null
         }
         Insert: {
           attempts?: number
@@ -324,6 +329,7 @@ export type Database = {
           cost_credits?: number | null
           created_at?: string
           demo_site_url?: string | null
+          deploy_check_count?: number
           error_message?: string | null
           gen_progress?: Json | null
           generated_files?: Json | null
@@ -331,6 +337,7 @@ export type Database = {
           github_repo_url?: string | null
           id?: string
           language?: string
+          last_deploy_check_at?: string | null
           last_clicked_at?: string | null
           queued_at?: string | null
           scraped_content?: Json | null
@@ -341,8 +348,11 @@ export type Database = {
           template?: string
           updated_at?: string
           user_id: string
+          vercel_alias_candidates?: Json
+          vercel_deployment_id?: string | null
           vercel_deployment_url?: string | null
           vercel_project_id?: string | null
+          vercel_ready_state?: string | null
         }
         Update: {
           attempts?: number
@@ -353,6 +363,7 @@ export type Database = {
           cost_credits?: number | null
           created_at?: string
           demo_site_url?: string | null
+          deploy_check_count?: number
           error_message?: string | null
           gen_progress?: Json | null
           generated_files?: Json | null
@@ -360,6 +371,7 @@ export type Database = {
           github_repo_url?: string | null
           id?: string
           language?: string
+          last_deploy_check_at?: string | null
           last_clicked_at?: string | null
           queued_at?: string | null
           scraped_content?: Json | null
@@ -370,8 +382,11 @@ export type Database = {
           template?: string
           updated_at?: string
           user_id?: string
+          vercel_alias_candidates?: Json
+          vercel_deployment_id?: string | null
           vercel_deployment_url?: string | null
           vercel_project_id?: string | null
+          vercel_ready_state?: string | null
         }
         Relationships: [
           {
@@ -1013,8 +1028,8 @@ export type Database = {
           feedback: string | null
           generated_site_id: string | null
           id: string
-          language: string
           last_email_sent_at: string | null
+          language: string
           niche: string
           phone: string | null
           rating: number | null
@@ -1044,8 +1059,8 @@ export type Database = {
           feedback?: string | null
           generated_site_id?: string | null
           id?: string
-          language?: string
           last_email_sent_at?: string | null
+          language?: string
           niche?: string
           phone?: string | null
           rating?: number | null
@@ -1075,8 +1090,8 @@ export type Database = {
           feedback?: string | null
           generated_site_id?: string | null
           id?: string
-          language?: string
           last_email_sent_at?: string | null
+          language?: string
           niche?: string
           phone?: string | null
           rating?: number | null

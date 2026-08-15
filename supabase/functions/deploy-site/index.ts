@@ -13,7 +13,11 @@ type VerifyResult = {
   status: number | null
   detail: string
   publicUrl?: string | null
+  readyState?: string | null
+  aliases?: string[]
 }
+const MAX_PUBLIC_URL_CHECKS = 8
+const READY_STATES_FAILED = new Set(['ERROR', 'CANCELED'])
 
 function slug(input: string) {
   return input
@@ -60,13 +64,28 @@ function deploymentApiUrl(path: string, teamId?: string | null) {
   return withTeamScope(`https://api.vercel.com${path}`, teamId)
 }
 
+function normaliseAliasCandidate(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const withProtocol = trimmed.startsWith('http') ? trimmed : `https://${trimmed}`
+  try {
+    const url = new URL(withProtocol)
+    if (url.protocol !== 'https:') return null
+    return `${url.protocol}//${url.hostname}${url.pathname === '/' ? '' : url.pathname}`.replace(/\/$/, '')
+  } catch {
+    return null
+  }
+}
+
 function extractAliasStrings(payload: any): string[] {
-  const out = new Set<string>()
+  const out: string[] = []
+  const seen = new Set<string>()
   const push = (value: unknown) => {
-    if (typeof value !== 'string') return
-    const trimmed = value.trim()
-    if (!trimmed) return
-    out.add(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`)
+    const normalised = normaliseAliasCandidate(value)
+    if (!normalised || seen.has(normalised)) return
+    seen.add(normalised)
+    out.push(normalised)
   }
 
   const lists = [
@@ -93,7 +112,21 @@ function extractAliasStrings(payload: any): string[] {
     }
   }
 
-  return Array.from(out)
+  return out
+}
+
+function mergeAliasCandidates(...lists: Array<string[] | null | undefined>): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const list of lists) {
+    for (const item of list ?? []) {
+      const normalised = normaliseAliasCandidate(item)
+      if (!normalised || seen.has(normalised)) continue
+      seen.add(normalised)
+      out.push(normalised)
+    }
+  }
+  return out
 }
 
 async function resolvePublicDemoUrl(args: {
@@ -102,18 +135,19 @@ async function resolvePublicDemoUrl(args: {
   projectName: string
   deploymentId?: string | null
   deploymentUrl?: string | null
+  aliasCandidates?: string[]
 }): Promise<VerifyResult> {
-  const { vercelToken, teamId, projectName, deploymentId, deploymentUrl } = args
+  const { vercelToken, teamId, projectName, deploymentId, deploymentUrl, aliasCandidates } = args
   const attempts = [0, 2000, 5000, 10000, 15000, 25000]
   let lastStatus: number | null = null
   let lastDetail = ''
   let readyState = ''
+  let collectedAliases = mergeAliasCandidates(aliasCandidates)
 
   for (const waitMs of attempts) {
     if (waitMs > 0) await delay(waitMs)
 
-    const candidates = new Set<string>([`https://${projectName}.vercel.app`])
-    if (deploymentUrl) candidates.add(deploymentUrl)
+    const liveAliasCandidates = [...collectedAliases]
 
     if (deploymentId) {
       try {
@@ -127,7 +161,7 @@ async function resolvePublicDemoUrl(args: {
           ?? deploymentData?.state
           ?? '',
         )
-        extractAliasStrings(deploymentData).forEach((alias) => candidates.add(alias))
+        collectedAliases = mergeAliasCandidates(collectedAliases, extractAliasStrings(deploymentData))
       } catch (err) {
         lastDetail = err instanceof Error ? err.message : String(err)
       }
@@ -137,15 +171,22 @@ async function resolvePublicDemoUrl(args: {
           headers: { Authorization: `Bearer ${vercelToken}` },
         })
         const aliasData = await aliasResp.json().catch(() => ({}))
-        extractAliasStrings(aliasData).forEach((alias) => candidates.add(alias))
+        collectedAliases = mergeAliasCandidates(collectedAliases, extractAliasStrings(aliasData))
       } catch (err) {
         lastDetail = err instanceof Error ? err.message : String(err)
       }
     }
 
+    const candidates = mergeAliasCandidates(
+      liveAliasCandidates,
+      collectedAliases,
+      [`https://${projectName}.vercel.app`],
+      deploymentUrl ? [deploymentUrl] : [],
+    )
+
     for (const candidate of candidates) {
       const verify = await verifyPublicDemoUrl(candidate)
-      if (verify.ok) return verify
+      if (verify.ok) return { ...verify, readyState, aliases: collectedAliases }
       lastStatus = verify.status
       lastDetail = verify.detail || lastDetail
     }
@@ -157,6 +198,8 @@ async function resolvePublicDemoUrl(args: {
     detail: readyState
       ? `readyState=${readyState}; ${lastDetail}`.slice(0, 400)
       : lastDetail.slice(0, 400),
+    readyState: readyState || null,
+    aliases: collectedAliases,
   }
 }
 
@@ -177,7 +220,7 @@ Deno.serve(async (req) => {
 
     const { data: site, error: siteErr } = await supabase
       .from('generated_sites')
-      .select('id, contact_id, site_lead_id, generated_files, vercel_project_id, vercel_deployment_url, status')
+      .select('id, contact_id, site_lead_id, generated_files, vercel_project_id, vercel_deployment_id, vercel_deployment_url, vercel_ready_state, vercel_alias_candidates, deploy_check_count, status')
       .eq('id', generated_site_id)
       .single()
     if (siteErr || !site) return json({ error: 'site not found' }, 404)
@@ -210,14 +253,27 @@ Deno.serve(async (req) => {
     }
 
     const projectName = stableProjectName(companyName, site.id)
+    const previousDeploymentId = typeof site.vercel_deployment_id === 'string' ? site.vercel_deployment_id : null
     const previousDeploymentUrl = typeof site.vercel_deployment_url === 'string' ? site.vercel_deployment_url : null
+    const previousAliasCandidates = Array.isArray(site.vercel_alias_candidates)
+      ? (site.vercel_alias_candidates as string[]).filter((value) => typeof value === 'string')
+      : []
+    const previousCheckCount = Number(site.deploy_check_count ?? 0)
 
     let deployData: any = null
-    let deploymentId: string | null = null
+    let deploymentId: string | null = previousDeploymentId
     let deploymentUrl: string | null = previousDeploymentUrl
     let projectId: string | null = site.vercel_project_id ?? null
+    let aliasCandidates: string[] = mergeAliasCandidates(previousAliasCandidates)
+    let readyState: string | null = typeof site.vercel_ready_state === 'string' ? site.vercel_ready_state : null
+    const nextDeployCheckCount = previousCheckCount + 1
 
-    if (site.status !== 'deploying' || !previousDeploymentUrl) {
+    const shouldCreateFreshDeployment =
+      site.status !== 'deploying'
+      || !previousDeploymentUrl
+      || !previousDeploymentId
+
+    if (shouldCreateFreshDeployment) {
       await supabase.from('generated_sites').update({ status: 'deploying', error_message: null }).eq('id', generated_site_id)
 
       const deployResp = await fetch(deploymentApiUrl('/v13/deployments', vercelTeamId), {
@@ -253,15 +309,34 @@ Deno.serve(async (req) => {
       deploymentId = typeof deployData?.id === 'string' ? deployData.id : null
       deploymentUrl = deployData?.url ? `https://${deployData.url}` : null
       projectId = deployData?.projectId ?? projectId
+      readyState = typeof deployData?.readyState === 'string'
+        ? deployData.readyState
+        : typeof deployData?.ready?.state === 'string'
+          ? deployData.ready.state
+          : null
+      aliasCandidates = mergeAliasCandidates(aliasCandidates, extractAliasStrings(deployData))
 
       await supabase.from('generated_sites').update({
         status: 'deploying',
         vercel_project_id: projectId,
+        vercel_deployment_id: deploymentId,
         vercel_deployment_url: deploymentUrl,
+        vercel_ready_state: readyState,
+        vercel_alias_candidates: aliasCandidates as any,
+        last_deploy_check_at: new Date().toISOString(),
+        deploy_check_count: nextDeployCheckCount,
         error_message: null,
       }).eq('id', generated_site_id)
-    } else {
-      deploymentId = null
+
+      console.log('vercel deployment created', JSON.stringify({
+        site_id: generated_site_id,
+        project_name: projectName,
+        project_id: projectId,
+        deployment_id: deploymentId,
+        deployment_url: deploymentUrl,
+        ready_state: readyState,
+        alias_candidates: aliasCandidates,
+      }))
     }
 
 
@@ -294,26 +369,64 @@ Deno.serve(async (req) => {
       projectName,
       deploymentId,
       deploymentUrl,
+      aliasCandidates,
     })
+    readyState = verify.readyState ?? readyState
+    aliasCandidates = mergeAliasCandidates(aliasCandidates, verify.aliases)
     if (!verify.ok) {
       const detail = `Public demo URL not ready yet (${verify.status ?? 'no-status'}): ${String(verify.detail ?? '').slice(0, 240)}`
+      const shouldFailHard = nextDeployCheckCount >= MAX_PUBLIC_URL_CHECKS || READY_STATES_FAILED.has((readyState ?? '').toUpperCase())
+      console.log('vercel public url pending', JSON.stringify({
+        site_id: generated_site_id,
+        deployment_id: deploymentId,
+        deployment_url: deploymentUrl,
+        ready_state: readyState,
+        deploy_check_count: nextDeployCheckCount,
+        alias_candidates: aliasCandidates,
+        detail,
+        fail_hard: shouldFailHard,
+      }))
       await supabase.from('generated_sites').update({
-        status: 'deploying',
+        status: shouldFailHard ? 'failed' : 'deploying',
         vercel_project_id: projectId ?? site.vercel_project_id ?? null,
+        vercel_deployment_id: deploymentId,
         vercel_deployment_url: deploymentUrl,
+        vercel_ready_state: readyState,
+        vercel_alias_candidates: aliasCandidates as any,
+        last_deploy_check_at: new Date().toISOString(),
+        deploy_check_count: nextDeployCheckCount,
         demo_site_url: null,
-        error_message: detail,
+        error_message: shouldFailHard
+          ? `${detail} (after ${nextDeployCheckCount} checks)`
+          : detail,
       }).eq('id', generated_site_id)
-      return json({ ok: false, pending: true, error: detail, deployment: deploymentUrl }, 202)
+      if (shouldFailHard) {
+        return json({ ok: false, error: detail, deployment: deploymentUrl, ready_state: readyState }, 502)
+      }
+      return json({ ok: false, pending: true, error: detail, deployment: deploymentUrl, ready_state: readyState }, 202)
     }
 
     await supabase.from('generated_sites').update({
       status: 'live',
       vercel_project_id: projectId ?? null,
+      vercel_deployment_id: deploymentId,
       vercel_deployment_url: deploymentUrl,
+      vercel_ready_state: readyState,
+      vercel_alias_candidates: aliasCandidates as any,
+      last_deploy_check_at: new Date().toISOString(),
+      deploy_check_count: nextDeployCheckCount,
       demo_site_url: verify.publicUrl ?? deploymentUrl,
       error_message: null,
     }).eq('id', generated_site_id)
+
+    console.log('vercel public url ready', JSON.stringify({
+      site_id: generated_site_id,
+      deployment_id: deploymentId,
+      public_url: verify.publicUrl ?? deploymentUrl,
+      deployment_url: deploymentUrl,
+      ready_state: readyState,
+      deploy_check_count: nextDeployCheckCount,
+    }))
 
     return json({ ok: true, url: verify.publicUrl ?? deploymentUrl, deployment: deploymentUrl })
   } catch (err) {
