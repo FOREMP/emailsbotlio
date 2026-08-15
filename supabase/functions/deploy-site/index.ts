@@ -110,7 +110,7 @@ Deno.serve(async (req) => {
 
     await supabase.from('generated_sites').update({ status: 'deploying', error_message: null }).eq('id', generated_site_id)
 
-    const deployResp = await fetch('https://api.vercel.com/v13/deployments', {
+    const deployResp = await fetch(withTeam('https://api.vercel.com/v13/deployments'), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${vercelToken}`,
