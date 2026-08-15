@@ -148,7 +148,7 @@ Deno.serve(async (req) => {
     // Safe to call every deploy — idempotent.
     if (deployData.projectId) {
       try {
-        const patchResp = await fetch(`https://api.vercel.com/v9/projects/${deployData.projectId}`, {
+        const patchResp = await fetch(withTeam(`https://api.vercel.com/v9/projects/${deployData.projectId}`), {
           method: 'PATCH',
           headers: {
             Authorization: `Bearer ${vercelToken}`,
