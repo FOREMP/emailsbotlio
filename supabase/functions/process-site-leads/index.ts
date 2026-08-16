@@ -233,7 +233,7 @@ async function recoverStuckGenerations(
 
   const { data: leads, error: leadErr } = await supabase
     .from('site_leads')
-    .select('id, generated_site_id')
+    .select('id, generated_site_id, feedback')
     .eq('status', 'generating')
     .not('generated_site_id', 'is', null)
     .limit(50)
@@ -260,8 +260,20 @@ async function recoverStuckGenerations(
 
   for (const lead of leads as any[]) {
     const gs = byId.get(lead.generated_site_id)
+    const isRegen = typeof lead.feedback === 'string' && lead.feedback.trim().length > 0
     if (!gs) {
-      await supabase.from('site_leads').update({ status: 'needs_site', generated_site_id: null }).eq('id', lead.id)
+      await supabase.from('site_leads').update(
+        isRegen
+          ? {
+              status: 'failed',
+              generated_site_id: null,
+              feedback: 'Site pipeline failed: regenerated site disappeared before completion. The lead was moved to Failed so you can retry directly.',
+            }
+          : {
+              status: 'needs_site',
+              generated_site_id: null,
+            },
+      ).eq('id', lead.id)
       recovered++
       continue
     }
@@ -308,10 +320,18 @@ async function recoverStuckGenerations(
       error_message: `Stale ${gs.status} job was reset after ${STALE_PIPELINE_MINUTES} minutes so the queue can continue.`,
     }).eq('id', gs.id)
 
-    await supabase.from('site_leads').update({
-      status: 'needs_site',
-      generated_site_id: null,
-    }).eq('id', lead.id)
+    await supabase.from('site_leads').update(
+      isRegen
+        ? {
+            status: 'failed',
+            generated_site_id: null,
+            feedback: `Site pipeline failed: regeneration stalled in ${gs.status} and was moved to Failed so you can retry directly.`,
+          }
+        : {
+            status: 'needs_site',
+            generated_site_id: null,
+          },
+    ).eq('id', lead.id)
     recovered++
   }
 

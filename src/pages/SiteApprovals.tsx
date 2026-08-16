@@ -34,6 +34,7 @@ const STATUS_BADGE: Record<string, string> = {
   generating: "bg-purple-500",
   failed: "bg-red-500",
   approved: "bg-emerald-500",
+  needs_site: "bg-amber-500",
 };
 
 const CANONICAL_DEMO_HOST = /^demo-[a-z0-9-]+\.vercel\.app$/;
@@ -68,7 +69,7 @@ export default function SiteApprovals() {
       const { data, error } = await supabase
         .from("site_leads")
         .select("id, company_name, language, email, website, phone, category, status, audit_score, audit_reason, audit_details, demo_url, generated_site_id, feedback, updated_at")
-        .in("status", ["awaiting_approval", "generating", "failed", "approved", "site_good_enough"])
+        .in("status", ["awaiting_approval", "generating", "failed", "approved", "site_good_enough", "needs_site"])
         .order("updated_at", { ascending: false })
         .limit(400);
       if (error) throw error;
@@ -90,7 +91,7 @@ export default function SiteApprovals() {
       const { data, error } = await supabase
         .from("site_leads")
         .select("id, company_name, email, website, phone, category, status, audit_score, audit_reason, audit_details, demo_url, generated_site_id, feedback, updated_at")
-        .in("status", ["awaiting_approval", "generating", "failed", "approved", "site_good_enough"])
+        .in("status", ["awaiting_approval", "generating", "failed", "approved", "site_good_enough", "needs_site"])
         .order("updated_at", { ascending: false })
         .limit(400);
       if (error) throw error;
@@ -332,9 +333,19 @@ export default function SiteApprovals() {
             queued_at: new Date().toISOString(),
             error_message: null,
             attempts: 0,
+            gen_progress: null,
+            generated_files: null,
             ...modeFields,
           })
           .eq("id", regen.generated_site_id);
+
+        await supabase.functions.invoke("process-site-jobs", {
+          body: { generated_site_id: regen.generated_site_id },
+        });
+      } else {
+        await supabase.functions.invoke("process-site-leads", {
+          body: { force: true, lead_ids: [regen.id] },
+        });
       }
 
       toast({ title: "Regenererar", description: "Ny version byggs, kolla igen om några minuter." });
@@ -376,6 +387,7 @@ export default function SiteApprovals() {
           { key: "site_good_enough", label: "Nekade / behövs ej" },
           { key: "generating", label: "Genererar / regenereras" },
           { key: "failed", label: "Misslyckade" },
+          { key: "needs_site", label: "Behöver byggas om" },
           { key: "all", label: "Alla" },
         ].map((f) => (
           <Button
@@ -447,6 +459,11 @@ export default function SiteApprovals() {
                 {row.status === "failed" && (
                   <Button size="sm" variant="outline" onClick={() => { setRegen(row); setFeedback(row.feedback ?? ""); }} className="gap-2">
                     <RefreshCw className="h-4 w-4" /> Försök igen
+                  </Button>
+                )}
+                {row.status === "needs_site" && (
+                  <Button size="sm" variant="outline" onClick={() => { setRegen(row); setFeedback(row.feedback ?? ""); }} className="gap-2">
+                    <RefreshCw className="h-4 w-4" /> Bygg om
                   </Button>
                 )}
               </div>

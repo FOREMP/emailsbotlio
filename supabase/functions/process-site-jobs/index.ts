@@ -8,6 +8,12 @@
 // stock images/fallbacks are used. Adding a niche = extend NICHE_CONFIG.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { runFreeformStep, BUILD_MODEL, type FreeformCtx } from './freeform.ts'
+import {
+  blockTemplateFamilyCatalog,
+  BLOCK_TEMPLATE_FAMILIES,
+  selectBlockTemplateFamily,
+  type BlockTemplateFamilyKey,
+} from './block-templates.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -15,6 +21,7 @@ const corsHeaders = {
 }
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
+const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
 // Fast model for the content plan. DeepSeek V3.1 was frequently queued on
 // OpenRouter for 60s+, which is what killed most generations.
 const MODEL = 'openai/gpt-4o-mini'
@@ -24,6 +31,7 @@ const POLISH_MODEL = 'openai/gpt-4o-mini'
 const SKIP_POLISH = MODEL === POLISH_MODEL
 const MAX_ATTEMPTS = 3
 const STUCK_MINUTES = 10
+const TEMPLATE_PICKER_MODEL = 'deepseek/deepseek-chat-v3.1'
 
 const CURRENT_YEAR = new Date().getFullYear()
 
@@ -65,6 +73,98 @@ interface SitePlan {
   faqs?: FaqItem[]
   ctaTitle?: string
   ctaText?: string
+}
+
+function feedbackRequestsTemplateChange(value: string | null | undefined): boolean {
+  if (!value) return false
+  return /(change\s+template|change\s+theme|byt\s+mall|byt\s+template|ny\s+mall|annan\s+mall|more\s+fitting\s+template|use\s+.*template|use\s+a\s+more\s+fitting|mer\s+passande\s+mall|hair\s*salon|hairsalon|frisör|salong|clinic|mekaniker|verkstad|restaurang|bistro)/i.test(value)
+}
+
+async function chooseTemplateFamilyForRegeneration(input: {
+  category?: string | null
+  niche?: string | null
+  company_name?: string | null
+  language?: string | null
+  feedback?: string | null
+}) {
+  const fallback = selectBlockTemplateFamily({
+    category: input?.category ?? null,
+    niche: input?.niche ?? null,
+    businessName: input?.company_name ?? null,
+  })
+  const lovableKey = Deno.env.get('LOVABLE_API_KEY')
+  if (!lovableKey) return { family: fallback, source: 'rules' as const, reason: 'LOVABLE_API_KEY missing' }
+
+  const familyCatalog = blockTemplateFamilyCatalog()
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 12_000)
+  try {
+    const resp = await fetch(`${AI_GATEWAY}/chat/completions`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'Lovable-API-Key': lovableKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: TEMPLATE_PICKER_MODEL,
+        temperature: 0,
+        top_p: 1,
+        seed: 42,
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'You choose the best website template family for a local-business lead.',
+              'You must choose ONLY from the provided template families.',
+              'Use the lead category as the strongest signal, then niche, then company name.',
+              'Operator feedback is high priority, especially when it asks for a more fitting template or points out the current template is wrong.',
+              'Read the notes carefully: some templates fit visual/beauty businesses with many images, some fit practical service companies, some fit clinics, restaurants, mechanics or construction.',
+              'Do not choose based on one random keyword if the broader business type points elsewhere.',
+              'If the lead is unclear, choose the safest broad fit instead of forcing a niche-specific template.',
+              'Return strict JSON only.',
+              '{"templateFamily":"one of the provided keys","reason":"short explanation","confidence":0}',
+            ].join('\n'),
+          },
+          {
+            role: 'user',
+            content: JSON.stringify({
+              lead: {
+                category: input?.category ?? null,
+                niche: input?.niche ?? null,
+                company_name: input?.company_name ?? null,
+                language: input?.language ?? 'sv',
+                feedback: input?.feedback ?? null,
+              },
+              templateFamilies: familyCatalog,
+            }),
+          },
+        ],
+        response_format: { type: 'json_object' },
+      }),
+    })
+    clearTimeout(timeoutId)
+    const data = await resp.json().catch(() => ({}))
+    if (!resp.ok) {
+      return { family: fallback, source: 'rules' as const, reason: `AI picker failed (${resp.status})` }
+    }
+    const raw = String(data?.choices?.[0]?.message?.content ?? '{}')
+    const parsed = JSON.parse(raw) as { templateFamily?: string; reason?: string }
+    const key = parsed?.templateFamily
+    if (!key || !(key in BLOCK_TEMPLATE_FAMILIES)) {
+      return { family: fallback, source: 'rules' as const, reason: 'AI picker returned unknown family' }
+    }
+    return {
+      family: BLOCK_TEMPLATE_FAMILIES[key as BlockTemplateFamilyKey],
+      source: 'ai' as const,
+      reason: typeof parsed.reason === 'string' ? parsed.reason.slice(0, 240) : undefined,
+    }
+  } catch (err) {
+    return {
+      family: fallback,
+      source: 'rules' as const,
+      reason: (err as Error).name === 'AbortError' ? 'AI picker timed out' : `AI picker error: ${(err as Error).message}`,
+    }
+  } finally {
+    clearTimeout(timeoutId)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -783,8 +883,52 @@ Deno.serve(async (req) => {
         .maybeSingle()
       : { data: null }
 
+    // Regen feedback: injected when the user clicks "Regenerera" on /site-approvals
+    const regenFeedback = typeof cf.regen_feedback === 'string' && cf.regen_feedback.trim()
+      ? String(cf.regen_feedback).trim()
+      : null
+
+    let effectiveTemplate = typeof site.template === 'string' ? site.template : 'freeform'
+    let effectiveGenerationMode: 'template' | 'freeform' = site.generation_mode === 'template' ? 'template' : 'freeform'
+
+    if (regenFeedback && feedbackRequestsTemplateChange(regenFeedback)) {
+      const picked = await chooseTemplateFamilyForRegeneration({
+        category: siteLead?.category ?? (typeof cf.category === 'string' ? cf.category : null),
+        niche: siteLead?.niche ?? (typeof cf.niche === 'string' ? cf.niche : null),
+        company_name: siteLead?.company_name ?? (typeof cf.company === 'string' ? cf.company : null),
+        language: siteLead?.language === 'en' ? 'en' : 'sv',
+        feedback: regenFeedback,
+      })
+
+      if (picked.family.key !== 'service_clarity_default') {
+        effectiveTemplate = picked.family.key
+        effectiveGenerationMode = 'freeform'
+        await supabase
+          .from('generated_sites')
+          .update({
+            template: effectiveTemplate,
+            generation_mode: effectiveGenerationMode,
+            gen_progress: null,
+            generated_files: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', generated_site_id)
+        await supabase
+          .from('contacts')
+          .update({
+            custom_fields: {
+              ...cf,
+              template_family: picked.family.key,
+              template_family_source: picked.source,
+              template_family_reason: picked.reason ?? null,
+            },
+          })
+          .eq('id', site.contact_id)
+      }
+    }
+
     // Category (from the uploaded lead file) is the primary signal.
-    const nc = nicheFromTemplate(site.template, [
+    const nc = nicheFromTemplate(effectiveTemplate, [
       siteLead?.category,
       cf.category,
       siteLead?.niche,
@@ -793,11 +937,12 @@ Deno.serve(async (req) => {
       cf.company,
     ])
 
-    if (site.generation_mode !== 'freeform' && site.template !== `${nc.key === 'hair_salon' ? 'hair_salon' : 'auto_workshop'}_v1`) {
+    if (effectiveGenerationMode !== 'freeform' && effectiveTemplate !== `${nc.key === 'hair_salon' ? 'hair_salon' : 'auto_workshop'}_v1`) {
       await supabase
         .from('generated_sites')
         .update({ template: `${nc.key === 'hair_salon' ? 'hair_salon' : 'auto_workshop'}_v1` })
         .eq('id', generated_site_id)
+      effectiveTemplate = `${nc.key === 'hair_salon' ? 'hair_salon' : 'auto_workshop'}_v1`
     }
 
     const branding = scraped.branding ?? {}
@@ -893,18 +1038,13 @@ Deno.serve(async (req) => {
     // typically low quality and just confuse the plan).
     const screenshotUrl: string | null = nc.useLeadImages ? (scraped.screenshot_url ?? null) : null
 
-    // Regen feedback: injected when the user clicks "Regenerera" on /site-approvals
-    const regenFeedback = typeof cf.regen_feedback === 'string' && cf.regen_feedback.trim()
-      ? String(cf.regen_feedback).trim()
-      : null
-
     // -----------------------------------------------------------------------
     // FREEFORM ENGINE (generation_mode = 'freeform')
     // AI designs and writes the whole site from the raw Firecrawl material.
     // One step per invocation; the row is re-queued until the site is complete.
     // Everything below this block is the untouched template engine.
     // -----------------------------------------------------------------------
-    if (site.generation_mode === 'freeform') {
+    if (effectiveGenerationMode === 'freeform') {
       const ffCtx: FreeformCtx = {
         supabase,
         siteId: generated_site_id,
