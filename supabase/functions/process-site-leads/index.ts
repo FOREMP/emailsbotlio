@@ -509,27 +509,6 @@ async function auditOne(
   }).eq('id', row.id)
 }
 
-// ---------------------------------------------------------------------------
-// Which site engine new jobs use. Controlled from /site-leads via
-// app_settings.site_generation_mode ('template' = current template engine,
-// 'freeform' = AI builds the whole site). Env var is a hard override.
-let cachedGenerationMode: 'template' | 'freeform' | null = null
-async function resolveGenerationMode(
-  supabase: ReturnType<typeof createClient>,
-): Promise<'template' | 'freeform'> {
-  const envMode = Deno.env.get('SITE_GENERATION_MODE')
-  if (envMode === 'freeform' || envMode === 'template') return envMode
-  if (cachedGenerationMode) return cachedGenerationMode
-  const { data } = await supabase
-    .from('app_settings')
-    .select('value')
-    .eq('key', 'site_generation_mode')
-    .maybeSingle()
-  const mode = (data?.value as any)?.mode
-  cachedGenerationMode = mode === 'freeform' ? 'freeform' : 'template'
-  return cachedGenerationMode
-}
-
 async function chooseTemplateFamilyForLead(lead: any): Promise<{
   family: BlockTemplateFamily
   source: 'ai' | 'rules'
@@ -633,9 +612,8 @@ async function startGeneration(
   })
   const blockFamily = chosenFamily.family
 
-  // Always use the newer freeform + block-family engine for generation.
-  // The older 3-template renderer is kept in the codebase for legacy rows,
-  // but new builds should not fall back to that simpler path.
+  // Always use the modern block-family builder for generation.
+  // New builds should not fall back to the older simpler renderer.
   const generationMode = 'freeform'
 
 

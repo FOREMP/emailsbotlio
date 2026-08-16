@@ -57,7 +57,6 @@ export default function SiteApprovals() {
   const [loading, setLoading] = useState(true);
   const [regen, setRegen] = useState<LeadRow | null>(null);
   const [feedback, setFeedback] = useState("");
-  const [regenMode, setRegenMode] = useState<"keep" | "template" | "freeform">("keep");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [ticking, setTicking] = useState(false);
   const [filter, setFilter] = useState<string>("awaiting_approval");
@@ -319,12 +318,7 @@ export default function SiteApprovals() {
         }
 
         // 3. Re-queue the site so the worker picks it up on the next tick.
-        //    The modern block-family renderer always runs through freeform, so
-        //    progress must start clean for both "template family" and "freeform".
-        const modeFields =
-          regenMode === "keep"
-            ? {}
-            : { generation_mode: "freeform", gen_progress: null, generated_files: null };
+        //    Regeneration now always uses the modern block-family builder.
         await supabase
           .from("generated_sites")
           .update({
@@ -332,9 +326,9 @@ export default function SiteApprovals() {
             queued_at: new Date().toISOString(),
             error_message: null,
             attempts: 0,
+            generation_mode: "freeform",
             gen_progress: null,
             generated_files: null,
-            ...modeFields,
           })
           .eq("id", regen.generated_site_id);
 
@@ -350,7 +344,6 @@ export default function SiteApprovals() {
       toast({ title: "Regenererar", description: "Ny version byggs, kolla igen om några minuter." });
       setRegen(null);
       setFeedback("");
-      setRegenMode("keep");
       load();
     } catch (e) {
       toast({ title: "Fel", description: (e as Error).message, variant: "destructive" });
@@ -493,24 +486,10 @@ export default function SiteApprovals() {
           <DialogHeader>
             <DialogTitle>Regenerera hemsida</DialogTitle>
             <DialogDescription>
-              Skriv vad AI:n ska ändra i nästa version. T.ex. "ta bort priser", "ändra hero-rubriken till XYZ", "byt färger till mörkgrönt", "tona ner brommbudskapet".
+              Skriv vad AI:n ska ändra i nästa version. Regenerering använder nu alltid den moderna byggaren som väljer rätt mallfamilj och bygger om sidan från det underlaget.
             </DialogDescription>
           </DialogHeader>
           <Textarea rows={6} value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="Feedback till AI:n…" />
-          <div className="space-y-2">
-            <div className="text-sm font-medium">Byggmotor för denna regenerering</div>
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant={regenMode === "keep" ? "default" : "outline"} onClick={() => setRegenMode("keep")}>
-                Samma som förut
-              </Button>
-              <Button size="sm" variant={regenMode === "template" ? "default" : "outline"} onClick={() => setRegenMode("template")}>
-                Modern mallfamilj
-              </Button>
-              <Button size="sm" variant={regenMode === "freeform" ? "default" : "outline"} onClick={() => setRegenMode("freeform")}>
-                Friare AI-variant
-              </Button>
-            </div>
-          </div>
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setRegen(null)} disabled={busyId === regen?.id}>Avbryt</Button>

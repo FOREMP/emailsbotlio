@@ -8,12 +8,12 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-interface Req { generated_site_id: string; generation_mode?: 'template' | 'freeform' }
+interface Req { generated_site_id: string }
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   try {
-    const { generated_site_id, generation_mode }: Req = await req.json()
+    const { generated_site_id }: Req = await req.json()
     if (!generated_site_id) return json({ error: 'generated_site_id required' }, 400)
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
@@ -41,10 +41,10 @@ Deno.serve(async (req) => {
         queued_at: new Date().toISOString(),
         error_message: null,
         attempts: 0, // manual re-queue resets the retry counter
-        // Freeform builds page-by-page, so a fresh run must start from scratch.
-        // Template mode keeps the last generated files until the new ones land.
-        ...(generation_mode === 'freeform' ? { gen_progress: null, generated_files: null } : {}),
-        ...(generation_mode ? { generation_mode } : {}),
+        // The modern builder always rebuilds from clean progress on manual re-queue.
+        generation_mode: 'freeform',
+        gen_progress: null,
+        generated_files: null,
       })
       .eq('id', generated_site_id)
     if (updErr) return json({ error: `queue failed: ${updErr.message}` }, 500)

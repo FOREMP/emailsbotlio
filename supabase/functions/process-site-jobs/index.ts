@@ -888,8 +888,11 @@ Deno.serve(async (req) => {
       ? String(cf.regen_feedback).trim()
       : null
 
-    let effectiveTemplate = typeof site.template === 'string' ? site.template : 'freeform'
-    let effectiveGenerationMode: 'template' | 'freeform' = site.generation_mode === 'template' ? 'template' : 'freeform'
+    let effectiveTemplate = typeof site.template === 'string' && site.template
+      ? site.template
+      : typeof cf.template_family === 'string' && cf.template_family
+        ? cf.template_family
+        : 'service_company_modern'
 
     if (regenFeedback && feedbackRequestsTemplateChange(regenFeedback)) {
       const picked = await chooseTemplateFamilyForRegeneration({
@@ -902,12 +905,11 @@ Deno.serve(async (req) => {
 
       if (picked.family.key !== 'service_clarity_default') {
         effectiveTemplate = picked.family.key
-        effectiveGenerationMode = 'freeform'
         await supabase
           .from('generated_sites')
           .update({
             template: effectiveTemplate,
-            generation_mode: effectiveGenerationMode,
+            generation_mode: 'freeform',
             gen_progress: null,
             generated_files: null,
             updated_at: new Date().toISOString(),
@@ -936,14 +938,6 @@ Deno.serve(async (req) => {
       siteLead?.company_name,
       cf.company,
     ])
-
-    if (effectiveGenerationMode !== 'freeform' && effectiveTemplate !== `${nc.key === 'hair_salon' ? 'hair_salon' : 'auto_workshop'}_v1`) {
-      await supabase
-        .from('generated_sites')
-        .update({ template: `${nc.key === 'hair_salon' ? 'hair_salon' : 'auto_workshop'}_v1` })
-        .eq('id', generated_site_id)
-      effectiveTemplate = `${nc.key === 'hair_salon' ? 'hair_salon' : 'auto_workshop'}_v1`
-    }
 
     const branding = scraped.branding ?? {}
 
@@ -1039,12 +1033,12 @@ Deno.serve(async (req) => {
     const screenshotUrl: string | null = nc.useLeadImages ? (scraped.screenshot_url ?? null) : null
 
     // -----------------------------------------------------------------------
-    // FREEFORM ENGINE (generation_mode = 'freeform')
-    // AI designs and writes the whole site from the raw Firecrawl material.
+    // MODERN SITE BUILDER
+    // AI designs and writes the whole site from the raw Firecrawl material
+    // while following the selected block-template family.
     // One step per invocation; the row is re-queued until the site is complete.
-    // Everything below this block is the untouched template engine.
     // -----------------------------------------------------------------------
-    if (effectiveGenerationMode === 'freeform') {
+    {
       const ffCtx: FreeformCtx = {
         supabase,
         siteId: generated_site_id,
@@ -1139,6 +1133,8 @@ Deno.serve(async (req) => {
     }
 
 
+    // Legacy template-engine code path intentionally left below as dead code
+    // for reference only. New builds and regenerations return above.
     const userTextParts = [
       `Skapa en kompakt innehållsplan för en 3-sidig premium-sajt. Utgångspunkt: ${nc.label.toLowerCase()}, men LÄS källdatan först och skriv för det verksamheten FAKTISKT gör. Skriv ENDAST JSON enligt schemat.`,
       siteLead?.category ? `Kategori enligt lead-datan: ${siteLead.category}` : '',
