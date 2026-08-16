@@ -303,8 +303,8 @@ export type Database = {
           github_repo_url: string | null
           id: string
           language: string
-          last_deploy_check_at: string | null
           last_clicked_at: string | null
+          last_deploy_check_at: string | null
           queued_at: string | null
           scraped_content: Json | null
           sequence_id: string | null
@@ -337,8 +337,8 @@ export type Database = {
           github_repo_url?: string | null
           id?: string
           language?: string
-          last_deploy_check_at?: string | null
           last_clicked_at?: string | null
+          last_deploy_check_at?: string | null
           queued_at?: string | null
           scraped_content?: Json | null
           sequence_id?: string | null
@@ -371,8 +371,8 @@ export type Database = {
           github_repo_url?: string | null
           id?: string
           language?: string
-          last_deploy_check_at?: string | null
           last_clicked_at?: string | null
+          last_deploy_check_at?: string | null
           queued_at?: string | null
           scraped_content?: Json | null
           sequence_id?: string | null
@@ -1031,8 +1031,8 @@ export type Database = {
           feedback: string | null
           generated_site_id: string | null
           id: string
-          last_email_sent_at: string | null
           language: string
+          last_email_sent_at: string | null
           niche: string
           phone: string | null
           rating: number | null
@@ -1062,8 +1062,8 @@ export type Database = {
           feedback?: string | null
           generated_site_id?: string | null
           id?: string
-          last_email_sent_at?: string | null
           language?: string
+          last_email_sent_at?: string | null
           niche?: string
           phone?: string | null
           rating?: number | null
@@ -1093,8 +1093,8 @@ export type Database = {
           feedback?: string | null
           generated_site_id?: string | null
           id?: string
-          last_email_sent_at?: string | null
           language?: string
+          last_email_sent_at?: string | null
           niche?: string
           phone?: string | null
           rating?: number | null
