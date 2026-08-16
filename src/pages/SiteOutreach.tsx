@@ -267,7 +267,7 @@ export default function SiteOutreach() {
         for (const n of throttleNodes) delete c[n.id];
         return c;
       });
-      toast({ title: "Daglig gräns sparad", description: `${nextLimit} mail/dag totalt, inklusive follow-ups.` });
+      toast({ title: "Daglig gräns sparad", description: `${nextLimit} nya första mail/dag. Follow-ups skickas utanför den gränsen.` });
       load();
     } catch (e) {
       toast({ title: "Kunde inte spara gräns", description: (e as Error).message, variant: "destructive" });
