@@ -52,6 +52,7 @@ type ParsedData = {
 };
 
 const BATCH_SIZE = 20;
+const LEADS_PAGE_SIZE = 100;
 
 const ROLE_LABELS: Record<ImportRole, string> = {
   skip: "Skippa",
@@ -105,6 +106,7 @@ export default function SiteLeads() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [uploading, setUploading] = useState(false);
   const [counts, setCounts] = useState<Record<string, number>>({});
+  const [totalCount, setTotalCount] = useState(0);
   const [parsed, setParsed] = useState<ParsedData | null>(null);
   const [mapping, setMapping] = useState<Record<string, ImportRole>>({});
   const [niche, setNiche] = useState<string>("");
@@ -121,24 +123,60 @@ export default function SiteLeads() {
   const [sortBy, setSortBy] = useState<string>("created_desc");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [page, setPage] = useState(1);
 
   // Automation switch + manual override (moved here from the old Sites page)
   const [autoState, setAutoState] = useState<"running" | "paused" | "stopped">("running");
   const [autoBusy, setAutoBusy] = useState(false);
+  // Which builder engine new jobs use
+  const [genMode, setGenMode] = useState<"template" | "freeform">("template");
+
+  const loadCounts = async () => {
+    const totalQuery = supabase.from("site_leads").select("id", { count: "exact", head: true });
+    const statusQueries = STATUS_OPTIONS.map((status) =>
+      supabase.from("site_leads").select("id", { count: "exact", head: true }).eq("status", status)
+    );
+    const [totalRes, ...statusRes] = await Promise.all([totalQuery, ...statusQueries]);
+    setTotalCount(totalRes.count ?? 0);
+    const nextCounts: Record<string, number> = {};
+    STATUS_OPTIONS.forEach((status, idx) => {
+      nextCounts[status] = statusRes[idx].count ?? 0;
+    });
+    setCounts(nextCounts);
+  };
+
+  const applyListFilters = (query: any, includeLanguage: boolean) => {
+    let next = query;
+    if (statusFilter !== "all") next = next.eq("status", statusFilter);
+    if (nicheFilter !== "all") next = next.eq("niche", nicheFilter);
+    if (includeLanguage && languageFilter !== "all") next = next.eq("language", languageFilter);
+    const q = search.trim();
+    if (q) {
+      const safe = q.replace(/[%]/g, "");
+      next = next.or(`company_name.ilike.%${safe}%,email.ilike.%${safe}%,website.ilike.%${safe}%,category.ilike.%${safe}%,address.ilike.%${safe}%`);
+    }
+    if (sortBy === "created_asc") next = next.order("created_at", { ascending: true });
+    else if (sortBy === "company") next = next.order("company_name", { ascending: true });
+    else if (sortBy === "audit_asc") next = next.order("audit_score", { ascending: true, nullsFirst: false });
+    else if (sortBy === "audit_desc") next = next.order("audit_score", { ascending: false, nullsFirst: false });
+    else if (sortBy === "status") next = next.order("status", { ascending: true }).order("created_at", { ascending: false });
+    else next = next.order("created_at", { ascending: false });
+    return next.range((page - 1) * LEADS_PAGE_SIZE, page * LEADS_PAGE_SIZE - 1);
+  };
 
   const load = async () => {
     try {
-      const { data, error } = await supabase
+      const { data, error, count } = await applyListFilters(
+        supabase
         .from("site_leads")
-        .select("id, company_name, email, website, phone, address, category, niche, rating, reviews_count, review_snippets, feedback, status, audit_score, demo_url, created_at, language")
-        .order("created_at", { ascending: false })
-        .limit(500);
+        .select("id, company_name, email, website, phone, address, category, niche, rating, reviews_count, review_snippets, feedback, status, audit_score, demo_url, created_at, language", { count: "exact" }),
+        true,
+      );
       if (error) throw error;
       setLeads((data ?? []) as Lead[]);
       setSelected(new Set());
-      const c: Record<string, number> = {};
-      for (const l of data ?? []) c[l.status] = (c[l.status] ?? 0) + 1;
-      setCounts(c);
+      setTotalCount(count ?? 0);
+      await loadCounts();
       return;
     } catch (err) {
       const message = (err as Error).message || "";
@@ -152,18 +190,18 @@ export default function SiteLeads() {
     }
 
     try {
-      const { data, error } = await supabase
+      const { data, error, count } = await applyListFilters(
+        supabase
         .from("site_leads")
-        .select("id, company_name, email, website, phone, address, category, niche, rating, reviews_count, review_snippets, feedback, status, audit_score, demo_url, created_at")
-        .order("created_at", { ascending: false })
-        .limit(500);
+        .select("id, company_name, email, website, phone, address, category, niche, rating, reviews_count, review_snippets, feedback, status, audit_score, demo_url, created_at", { count: "exact" }),
+        false,
+      );
       if (error) throw error;
       const rows = ((data ?? []) as any[]).map((row) => ({ ...row, language: "sv" })) as Lead[];
       setLeads(rows);
       setSelected(new Set());
-      const c: Record<string, number> = {};
-      for (const l of rows) c[l.status] = (c[l.status] ?? 0) + 1;
-      setCounts(c);
+      setTotalCount(count ?? 0);
+      await loadCounts();
       toast({
         title: "Leads laddade i kompatibilitetsläge",
         description: "Språkfältet saknas eller är inte migrerat fullt i databasen ännu. Svenska leads visas ändå.",
@@ -173,6 +211,7 @@ export default function SiteLeads() {
       toast({ title: "Kunde inte ladda leads", description: (fallbackErr as Error).message, variant: "destructive" });
       setLeads([]);
       setCounts({});
+      setTotalCount(0);
     }
   };
 
@@ -184,6 +223,38 @@ export default function SiteLeads() {
       .maybeSingle();
     setAutoState(((data?.value as any)?.state ?? "running") as "running" | "paused" | "stopped");
   };
+
+  const loadGenMode = async () => {
+    const { data } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("key", "site_generation_mode")
+      .maybeSingle();
+    setGenMode(((data?.value as any)?.mode ?? "template") as "template" | "freeform");
+  };
+
+  const changeGenMode = async (mode: "template" | "freeform") => {
+    setAutoBusy(true);
+    try {
+      const { error } = await supabase
+        .from("app_settings")
+        .upsert({ key: "site_generation_mode", value: { mode } as any, updated_at: new Date().toISOString() });
+      if (error) throw error;
+      setGenMode(mode);
+      toast({
+        title: mode === "freeform" ? "Byggmotor: AI bygger fritt" : "Byggmotor: Mall",
+        description: mode === "freeform"
+          ? "Nya hemsidor byggs från grunden av DeepSeek V4 Flash."
+          : "Nya hemsidor byggs med de befintliga mallarna.",
+      });
+    } catch (err) {
+      toast({ title: "Kunde inte byta byggmotor", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setAutoBusy(false);
+    }
+  };
+
+
 
   const changeAutoState = async (state: "running" | "paused" | "stopped") => {
     setAutoBusy(true);
@@ -236,29 +307,12 @@ export default function SiteLeads() {
     }
   };
 
-  useEffect(() => { load(); loadAutoState(); }, []);
+  useEffect(() => { loadAutoState(); loadGenMode(); }, []);
+  useEffect(() => { load(); }, [page, search, statusFilter, nicheFilter, languageFilter, sortBy]);
+  useEffect(() => { setPage(1); }, [search, statusFilter, nicheFilter, languageFilter, sortBy]);
 
 
-  const visible = leads
-    .filter((l) => (statusFilter === "all" ? true : l.status === statusFilter))
-    .filter((l) => (nicheFilter === "all" ? true : (l.niche ?? "") === nicheFilter))
-    .filter((l) => (languageFilter === "all" ? true : (l.language ?? "sv") === languageFilter))
-    .filter((l) => {
-      const q = search.trim().toLowerCase();
-      if (!q) return true;
-      return [l.company_name, l.email, l.website, l.category, l.address]
-        .some((v) => (v ?? "").toLowerCase().includes(q));
-    })
-    .sort((a, b) => {
-      switch (sortBy) {
-        case "created_asc": return a.created_at.localeCompare(b.created_at);
-        case "company": return a.company_name.localeCompare(b.company_name, "sv");
-        case "audit_asc": return (a.audit_score ?? 99) - (b.audit_score ?? 99);
-        case "audit_desc": return (b.audit_score ?? -1) - (a.audit_score ?? -1);
-        case "status": return a.status.localeCompare(b.status);
-        default: return b.created_at.localeCompare(a.created_at);
-      }
-    });
+  const visible = leads;
 
   const allVisibleSelected = visible.length > 0 && visible.every((l) => selected.has(l.id));
   const toggleAllVisible = () => {
@@ -562,10 +616,19 @@ export default function SiteLeads() {
             <RefreshCw className="h-4 w-4" /> Kör pipeline nu
           </Button>
         </div>
-        <div className="border-t pt-3">
-          <p className="text-xs text-muted-foreground">
-            Nya hemsidor använder alltid den moderna byggaren. Systemet väljer mallfamilj utifrån kategori, källa och feedback,
-            och bygger fler sidor när underlaget räcker i stället för att falla tillbaka till den äldre enklare 3-sidorsmotorn.
+        <div className="flex flex-wrap items-center gap-2 border-t pt-3">
+          <div className="text-sm font-medium">Byggmotor</div>
+          <Button size="sm" variant={genMode === "template" ? "default" : "outline"}
+            disabled={autoBusy || genMode === "template"} onClick={() => changeGenMode("template")}>
+            Mall (nuvarande)
+          </Button>
+          <Button size="sm" variant={genMode === "freeform" ? "default" : "outline"}
+            disabled={autoBusy || genMode === "freeform"} onClick={() => changeGenMode("freeform")}>
+            AI bygger fritt (DeepSeek V4)
+          </Button>
+          <p className="text-xs text-muted-foreground basis-full">
+            Gäller nya bygg. "AI bygger fritt" låter AI:n designa hela sajten från grunden utifrån rådatan —
+            minst start, om oss och kontakt, fler sidor när underlaget räcker. Byt tillbaka när som helst.
           </p>
         </div>
       </Card>
@@ -622,7 +685,7 @@ export default function SiteLeads() {
             <SelectItem value="status">Status</SelectItem>
           </SelectContent>
         </Select>
-        <span className="text-xs text-muted-foreground ml-auto">{visible.length} av {leads.length} leads</span>
+        <span className="text-xs text-muted-foreground ml-auto">Visar {visible.length} av {totalCount} leads</span>
       </Card>
 
       {selected.size > 0 && (
@@ -708,11 +771,30 @@ export default function SiteLeads() {
             ))}
             {visible.length === 0 && (
               <tr><td colSpan={10} className="p-6 text-center text-muted-foreground">
-                {leads.length === 0 ? "Inga leads än. Ladda upp en CSV för att börja." : "Inga leads matchar filtret."}
+                {totalCount === 0 ? "Inga leads än. Ladda upp en CSV för att börja." : "Inga leads matchar filtret."}
               </td></tr>
             )}
           </tbody>
         </table>
+      </Card>
+
+      <Card className="p-3 flex items-center justify-between">
+        <div className="text-sm text-muted-foreground">
+          Sida {page} av {Math.max(1, Math.ceil(totalCount / LEADS_PAGE_SIZE))}
+        </div>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+            Föregående
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={page >= Math.max(1, Math.ceil(totalCount / LEADS_PAGE_SIZE))}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            Nästa
+          </Button>
+        </div>
       </Card>
 
       <Dialog open={!!editing} onOpenChange={(open) => !open && setEditing(null)}>

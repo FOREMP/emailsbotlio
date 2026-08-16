@@ -1,6 +1,6 @@
 // Approve, regenerate or park generated demo sites for site leads.
 // Only leads with status = 'awaiting_approval' block outreach; also shows
-// 'generating' and 'failed' so we can see what's in flight.
+// in-flight, failed and reset rows so regenerations never seem to disappear.
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -37,16 +37,14 @@ const STATUS_BADGE: Record<string, string> = {
   needs_site: "bg-amber-500",
 };
 
-const CANONICAL_DEMO_HOST = /^demo-[a-z0-9-]+\.vercel\.app$/;
+const APPROVAL_STATUSES = ["awaiting_approval", "generating", "failed", "approved", "site_good_enough", "needs_site"] as const;
+const APPROVALS_PAGE_SIZE = 20;
 
 function isCanonicalDemoUrl(value?: string | null): boolean {
   if (!value) return false;
   try {
     const url = new URL(value);
-    if (url.protocol !== "https:") return false;
-    if (!CANONICAL_DEMO_HOST.test(url.hostname)) return false;
-    if (/-(foremp|[a-z0-9]+s-projects)\.vercel\.app$/.test(url.hostname)) return false;
-    return true;
+    return url.protocol === "https:" && url.hostname.endsWith(".vercel.app") && !url.hostname.endsWith("-foremp.vercel.app");
   } catch {
     return false;
   }
@@ -54,25 +52,52 @@ function isCanonicalDemoUrl(value?: string | null): boolean {
 
 export default function SiteApprovals() {
   const [rows, setRows] = useState<LeadRow[]>([]);
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [regen, setRegen] = useState<LeadRow | null>(null);
   const [feedback, setFeedback] = useState("");
+  const [regenMode, setRegenMode] = useState<"keep" | "template" | "freeform">("keep");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [ticking, setTicking] = useState(false);
   const [filter, setFilter] = useState<string>("awaiting_approval");
   const [languageFilter, setLanguageFilter] = useState<string>("all");
+  const [page, setPage] = useState(1);
+
+  const loadCounts = async () => {
+    const statusQueries = APPROVAL_STATUSES.map((status) =>
+      supabase.from("site_leads").select("id", { count: "exact", head: true }).eq("status", status)
+    );
+    const results = await Promise.all(statusQueries);
+    const nextCounts: Record<string, number> = {};
+    APPROVAL_STATUSES.forEach((status, idx) => {
+      nextCounts[status] = results[idx].count ?? 0;
+    });
+    setCounts(nextCounts);
+  };
+
+  const applyListFilters = (query: any, includeLanguage: boolean) => {
+    let next = query.in("status", [...APPROVAL_STATUSES]);
+    if (filter !== "all") next = next.eq("status", filter);
+    if (includeLanguage && languageFilter !== "all") next = next.eq("language", languageFilter);
+    return next
+      .order("updated_at", { ascending: false })
+      .range((page - 1) * APPROVALS_PAGE_SIZE, page * APPROVALS_PAGE_SIZE - 1);
+  };
 
   const load = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("site_leads")
-        .select("id, company_name, language, email, website, phone, category, status, audit_score, audit_reason, audit_details, demo_url, generated_site_id, feedback, updated_at")
-        .in("status", ["awaiting_approval", "generating", "failed", "approved", "site_good_enough", "needs_site"])
-        .order("updated_at", { ascending: false })
-        .limit(400);
+      const { data, error, count } = await applyListFilters(
+        supabase
+          .from("site_leads")
+          .select("id, company_name, language, email, website, phone, category, status, audit_score, audit_reason, audit_details, demo_url, generated_site_id, feedback, updated_at", { count: "exact" }),
+        true,
+      );
       if (error) throw error;
       setRows((data ?? []) as LeadRow[]);
+      setTotalCount(count ?? 0);
+      await loadCounts();
       setLoading(false);
       return;
     } catch (err) {
@@ -81,20 +106,24 @@ export default function SiteApprovals() {
       if (!maybeMissingLanguage) {
         toast({ title: "Kunde inte ladda approvals", description: message, variant: "destructive" });
         setRows([]);
+        setCounts({});
+        setTotalCount(0);
         setLoading(false);
         return;
       }
     }
 
     try {
-      const { data, error } = await supabase
-        .from("site_leads")
-        .select("id, company_name, email, website, phone, category, status, audit_score, audit_reason, audit_details, demo_url, generated_site_id, feedback, updated_at")
-        .in("status", ["awaiting_approval", "generating", "failed", "approved", "site_good_enough", "needs_site"])
-        .order("updated_at", { ascending: false })
-        .limit(400);
+      const { data, error, count } = await applyListFilters(
+        supabase
+          .from("site_leads")
+          .select("id, company_name, email, website, phone, category, status, audit_score, audit_reason, audit_details, demo_url, generated_site_id, feedback, updated_at", { count: "exact" }),
+        false,
+      );
       if (error) throw error;
       setRows(((data ?? []) as any[]).map((row) => ({ ...row, language: "sv" })) as LeadRow[]);
+      setTotalCount(count ?? 0);
+      await loadCounts();
       toast({
         title: "Approvals laddade i kompatibilitetsläge",
         description: "Språkfältet saknas eller är inte migrerat fullt i databasen ännu. Svenska leads visas ändå.",
@@ -103,6 +132,8 @@ export default function SiteApprovals() {
     } catch (fallbackErr) {
       toast({ title: "Kunde inte ladda approvals", description: (fallbackErr as Error).message, variant: "destructive" });
       setRows([]);
+      setCounts({});
+      setTotalCount(0);
     } finally {
       setLoading(false);
     }
@@ -113,7 +144,11 @@ export default function SiteApprovals() {
     // Poll every 30s so newly-live demos + status changes show up automatically
     const t = setInterval(load, 30_000);
     return () => clearInterval(t);
-  }, []);
+  }, [filter, languageFilter, page]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filter, languageFilter]);
 
   const runTick = async () => {
     setTicking(true);
@@ -318,7 +353,13 @@ export default function SiteApprovals() {
         }
 
         // 3. Re-queue the site so the worker picks it up on the next tick.
-        //    Regeneration now always uses the modern block-family builder.
+        //    Freeform builds page-by-page, so its progress must start clean.
+        const modeFields =
+          regenMode === "keep"
+            ? {}
+            : regenMode === "freeform"
+              ? { generation_mode: "freeform", gen_progress: null, generated_files: null }
+              : { generation_mode: "template" };
         await supabase
           .from("generated_sites")
           .update({
@@ -326,24 +367,15 @@ export default function SiteApprovals() {
             queued_at: new Date().toISOString(),
             error_message: null,
             attempts: 0,
-            generation_mode: "freeform",
-            gen_progress: null,
-            generated_files: null,
+            ...modeFields,
           })
           .eq("id", regen.generated_site_id);
-
-        await supabase.functions.invoke("process-site-jobs", {
-          body: { generated_site_id: regen.generated_site_id },
-        });
-      } else {
-        await supabase.functions.invoke("process-site-leads", {
-          body: { force: true, lead_ids: [regen.id] },
-        });
       }
 
       toast({ title: "Regenererar", description: "Ny version byggs, kolla igen om några minuter." });
       setRegen(null);
       setFeedback("");
+      setRegenMode("keep");
       load();
     } catch (e) {
       toast({ title: "Fel", description: (e as Error).message, variant: "destructive" });
@@ -351,11 +383,6 @@ export default function SiteApprovals() {
       setBusyId(null);
     }
   };
-
-  const counts = rows.reduce<Record<string, number>>((acc, r) => {
-    acc[r.status] = (acc[r.status] ?? 0) + 1;
-    return acc;
-  }, {});
 
   return (
     <div className="space-y-6">
@@ -378,8 +405,8 @@ export default function SiteApprovals() {
           { key: "approved", label: "Godkända" },
           { key: "site_good_enough", label: "Nekade / behövs ej" },
           { key: "generating", label: "Genererar / regenereras" },
-          { key: "failed", label: "Misslyckade" },
           { key: "needs_site", label: "Behöver byggas om" },
+          { key: "failed", label: "Misslyckade" },
           { key: "all", label: "Alla" },
         ].map((f) => (
           <Button
@@ -388,7 +415,7 @@ export default function SiteApprovals() {
             variant={filter === f.key ? "default" : "outline"}
             onClick={() => setFilter(f.key)}
           >
-            {f.label} ({f.key === "all" ? rows.length : counts[f.key] ?? 0})
+            {f.label} ({f.key === "all" ? Object.values(counts).reduce((sum, value) => sum + value, 0) : counts[f.key] ?? 0})
           </Button>
         ))}
         <Button size="sm" variant={languageFilter === "all" ? "default" : "outline"} onClick={() => setLanguageFilter("all")}>
@@ -404,14 +431,14 @@ export default function SiteApprovals() {
 
       {loading && <div className="text-sm text-muted-foreground">Laddar…</div>}
 
-      {!loading && rows.filter((r) => (filter === "all" || r.status === filter) && (languageFilter === "all" || (r.language ?? "sv") === languageFilter)).length === 0 && (
+      {!loading && rows.length === 0 && (
         <Card className="p-8 text-center text-muted-foreground">
           Inga leads i denna vy just nu.
         </Card>
       )}
 
       <div className="grid gap-6">
-        {rows.filter((r) => (filter === "all" || r.status === filter) && (languageFilter === "all" || (r.language ?? "sv") === languageFilter)).map((row) => (
+        {rows.map((row) => (
           <Card key={row.id} className="p-5 space-y-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
@@ -481,15 +508,48 @@ export default function SiteApprovals() {
         ))}
       </div>
 
+      <Card className="p-3 flex items-center justify-between">
+        <div className="text-sm text-muted-foreground">
+          Sida {page} av {Math.max(1, Math.ceil(totalCount / APPROVALS_PAGE_SIZE))} · Visar {rows.length} av {totalCount}
+        </div>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+            Föregående
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={page >= Math.max(1, Math.ceil(totalCount / APPROVALS_PAGE_SIZE))}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            Nästa
+          </Button>
+        </div>
+      </Card>
+
       <Dialog open={!!regen} onOpenChange={(o) => !o && setRegen(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Regenerera hemsida</DialogTitle>
             <DialogDescription>
-              Skriv vad AI:n ska ändra i nästa version. Regenerering använder nu alltid den moderna byggaren som väljer rätt mallfamilj och bygger om sidan från det underlaget.
+              Skriv vad AI:n ska ändra i nästa version. T.ex. "ta bort priser", "ändra hero-rubriken till XYZ", "byt färger till mörkgrönt", "tona ner brommbudskapet".
             </DialogDescription>
           </DialogHeader>
           <Textarea rows={6} value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="Feedback till AI:n…" />
+          <div className="space-y-2">
+            <div className="text-sm font-medium">Byggmotor för denna regenerering</div>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant={regenMode === "keep" ? "default" : "outline"} onClick={() => setRegenMode("keep")}>
+                Samma som förut
+              </Button>
+              <Button size="sm" variant={regenMode === "template" ? "default" : "outline"} onClick={() => setRegenMode("template")}>
+                Mall
+              </Button>
+              <Button size="sm" variant={regenMode === "freeform" ? "default" : "outline"} onClick={() => setRegenMode("freeform")}>
+                AI bygger fritt (DeepSeek V4)
+              </Button>
+            </div>
+          </div>
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setRegen(null)} disabled={busyId === regen?.id}>Avbryt</Button>
