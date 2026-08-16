@@ -148,6 +148,12 @@ export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<st
   }
   if (progress.stage === 'render') {
     const content = cleanContentMap(progress.content)
+    if (plan.templateFamily && plan.templateFamily !== 'service_clarity_default') {
+      const genericFallbackUsed = (progress.fallbacksUsed || []).some((label) => /^(content|polish):index$/.test(label))
+      if (genericFallbackUsed) {
+        throw new Error(`modern-template-content retry required for ${plan.templateFamily}`)
+      }
+    }
     for (const p of plan.pages) files[fileNameFor(p.slug)] = render(ctx, plan, p, repairContent(ctx, content[p.slug] ?? fallbackContent(ctx, p)))
     return step(false, files, meta({ ...progress, stage: 'quality_check', rendered: plan.pages.map((p) => p.slug), built: plan.pages.map((p) => p.slug), lastStage: 'render' }), `v${VERSION} rendered ${plan.pages.length} pages`)
   }
@@ -232,6 +238,42 @@ function matchKind(text: string): { kind: BizKind; label: string } | null {
   return null
 }
 
+function localizeBusinessType(raw: string, kind: BizKind, en: boolean): string {
+  const value = clean(decodeText(raw))
+  if (!value) return ''
+  if (en) return value
+  const lower = value.toLowerCase()
+  const exactMap: Record<string, string> = {
+    'hair salon': 'Frisörsalong',
+    'hairdresser': 'Frisörsalong',
+    'barbershop': 'Barbershop',
+    'beauty salon': 'Skönhetssalong',
+    'beauty studio': 'Skönhetsstudio',
+    'nail salon': 'Nagelstudio',
+    'massage clinic': 'Massageklinik',
+    'massage studio': 'Massagestudio',
+    'massage': 'Massage',
+    'clinic': 'Klinik',
+    'private clinic': 'Privatklinik',
+    'restaurant': 'Restaurang',
+    'bistro': 'Bistro',
+    'electrician': 'Elfirma',
+    'electrical': 'Elfirma',
+    'plumbing': 'VVS- och rörfirma',
+    'construction': 'Byggföretag',
+    'builder': 'Byggföretag',
+    'car repair': 'Bilverkstad',
+    'auto repair': 'Bilverkstad',
+    'mechanic': 'Bilverkstad',
+    'cleaning service': 'Städfirma',
+  }
+  if (exactMap[lower]) return exactMap[lower]
+  if (kind === 'hair' && /\bhair|barber|fris/i.test(lower)) return 'Frisörsalong'
+  if ((kind === 'nails' || kind === 'beauty') && /\bnail|beauty|lash|brow|skin/i.test(lower)) return kind === 'nails' ? 'Nagelstudio' : 'Skönhetssalong'
+  if ((kind === 'clinic' || kind === 'massage') && /\bclinic|massage|therapy|therapeut|care|wellness/i.test(lower)) return kind === 'massage' ? 'Massageklinik' : 'Klinik'
+  return value
+}
+
 function buildProfile(ctx: FreeformCtx): BusinessProfile {
   const en = isEnglish(ctx)
   const category = clean(decodeText(ctx.category || '')).toLowerCase()
@@ -258,7 +300,8 @@ function buildProfile(ctx: FreeformCtx): BusinessProfile {
   let businessType = hit?.label || ''
   if (category && category.length <= 34 && !/,|;/.test(category)) businessType = category
   if (!businessType) businessType = nicheTag ? titleCaseSv(nicheTag.replace(/_/g, ' ')) : (en ? 'Business' : 'Företag')
-  businessType = titleCaseSv(businessType)
+  businessType = localizeBusinessType(businessType, kind, en)
+  businessType = en ? businessType : titleCaseSv(businessType)
 
   const city = ctx.facts.city ? `${en ? ' in ' : ' i '}${decodeText(ctx.facts.city)}` : ''
   const venueNoun = en
@@ -277,14 +320,34 @@ function buildProfile(ctx: FreeformCtx): BusinessProfile {
     aboutTitle,
     heroEyebrow: `${businessType}${city}`,
     servicesHeading: en
-      ? beauty ? 'Treatments presented clearly.' : 'Services explained clearly.'
-      : beauty ? 'Behandlingar med tydlig väg in.' : 'Tjänster som är lätta att förstå.',
+      ? clinic
+        ? 'Care paths presented with clarity.'
+        : salon
+          ? 'Signature services shaped around the guest.'
+          : kind === 'nails' || kind === 'beauty'
+            ? 'Services that feel curated and easy to choose.'
+            : 'Services explained clearly.'
+      : clinic
+        ? 'Omsorg och behandlingar med tydlig riktning.'
+        : salon
+          ? 'Utvalda behandlingar med tydlig känsla.'
+          : kind === 'nails' || kind === 'beauty'
+            ? 'Behandlingar som känns genomtänkta och lätta att välja.'
+            : 'Tjänster som är lätta att förstå.',
     servicesLead: en
-      ? beauty
-        ? 'The visitor should quickly understand what is offered, what fits, and how to take the next step.'
+      ? clinic
+        ? 'The visitor should quickly understand the offer, the tone of care and how the first contact can happen.'
+        : salon
+          ? 'The service mix should feel personal, elevated and easy to act on without sounding generic.'
+          : kind === 'nails' || kind === 'beauty'
+            ? 'The visitor should quickly understand what is offered, what feels relevant and how to move forward.'
         : 'The offer should feel concrete, clear and easy to act on.'
-      : beauty
-        ? 'Besökaren ska snabbt förstå vad som erbjuds, vad som passar och hur nästa steg tas.'
+      : clinic
+        ? 'Besökaren ska snabbt förstå utbudet, känslan i bemötandet och hur första kontakten kan gå till.'
+        : salon
+          ? 'Utbudet ska kännas personligt, genomarbetat och lätt att agera på utan att låta generiskt.'
+          : kind === 'nails' || kind === 'beauty'
+            ? 'Besökaren ska snabbt förstå vad som erbjuds, vad som känns relevant och hur nästa steg tas.'
         : 'Erbjudandet presenteras konkret med tydliga vägar till kontakt.',
     isBeauty: beauty,
     isClinic: clinic,
@@ -439,6 +502,7 @@ function fallbackContent(ctx: FreeformCtx, page: FreeformPageSpec): FreeformPage
   const business = ctx.facts.business_name || ctx.nicheLabel || (isEnglish(ctx) ? 'Business' : 'Företaget')
   const city = ctx.facts.city ? `${en ? ' in ' : ' i '}${ctx.facts.city}` : ''
   const salon = profile.isBeauty
+  const family = buildPlan(ctx).templateFamily
   const services = serviceIdeas(ctx).map((title) => ({
     title,
     text: serviceText(title, salon, en),
@@ -461,12 +525,16 @@ function fallbackContent(ctx: FreeformCtx, page: FreeformPageSpec): FreeformPage
         ? profile.isClinic
           ? 'Thoughtful care with personal guidance'
           : salon
-            ? 'An experience that feels right from the first impression'
+            ? family === 'salon_editorial_luxury'
+              ? 'A first impression with warmth, style and confidence'
+              : 'An experience that feels right from the first impression'
             : `A clearer path to ${business}`
         : profile.isClinic
           ? 'Trygga behandlingar med personlig vägledning'
           : salon
-            ? 'En upplevelse som känns rätt från start'
+            ? family === 'salon_editorial_luxury'
+              ? 'Ett första intryck med värme, stil och självklar känsla'
+              : 'En upplevelse som känns rätt från start'
             : `En tydligare väg till ${business}`
       : page.title,
     heroLead: en
@@ -482,8 +550,16 @@ function fallbackContent(ctx: FreeformCtx, page: FreeformPageSpec): FreeformPage
           : `${business}${city} presenterar tjänster, förtroende och kontakt på ett tydligt sätt.`,
     introTitle: page.slug === 'index'
       ? en
-        ? profile.isClinic ? 'A calm way into the right care' : 'A first impression that feels considered'
-        : profile.isClinic ? 'Trygg väg in till rätt behandling' : 'Ett första intryck som känns genomarbetat'
+        ? profile.isClinic
+          ? 'A calm way into the right care'
+          : salon
+            ? 'A first feeling with warmth and character'
+            : 'A first impression that feels considered'
+        : profile.isClinic
+          ? 'Trygg väg in till rätt behandling'
+          : salon
+            ? 'En första känsla med värme och karaktär'
+            : 'Ett första intryck som känns genomarbetat'
       : page.title,
     introText: sourceFor(ctx, page).slice(0, 360) || (en
       ? `Here the visitor quickly understands what ${business} offers and how to get in touch.`
@@ -495,18 +571,26 @@ function fallbackContent(ctx: FreeformCtx, page: FreeformPageSpec): FreeformPage
       {
         eyebrow: en ? (salon ? 'Confidence' : 'Trust') : (salon ? 'Trygghet' : 'Förtroende'),
         title: en
-          ? profile.isClinic ? 'The right care starts with clear information' : salon ? 'Warm, thoughtful and easy to choose' : 'Clear, reassuring and easy to understand'
-          : profile.isClinic ? 'Rätt behandling börjar med tydlig information' : salon ? 'Varmt, noggrant och lätt att välja' : 'Tydligt, tryggt och lätt att förstå',
+          ? profile.isClinic
+            ? 'The right care starts with clear information'
+            : salon
+              ? 'A personal expression with room for confidence'
+              : 'Clear, reassuring and easy to understand'
+          : profile.isClinic
+            ? 'Rätt behandling börjar med tydlig information'
+            : salon
+              ? 'En personlig känsla med plats för trygghet'
+              : 'Tydligt, tryggt och lätt att förstå',
         text: en
           ? profile.isClinic
             ? `${profile.venueNoun[0].toUpperCase() + profile.venueNoun.slice(1)} makes it easy to understand the offer and get in touch before booking.`
             : salon
-              ? 'Every visit starts with an understanding of the client’s needs and ends with a clear next step.'
+              ? 'The presentation should make the style, service and next step feel natural before any booking happens.'
               : 'The most important things are shown first so the next step feels simple.'
           : profile.isClinic
             ? `${profile.venueNoun[0].toUpperCase() + profile.venueNoun.slice(1)} gör det enkelt att förstå utbudet och ta kontakt innan bokning.`
             : salon
-              ? 'Varje besök börjar med förståelse för kundens behov och avslutas med en tydlig väg vidare.'
+              ? 'Presentation, ton och utbud ska göra nästa steg naturligt redan innan bokning.'
               : 'Det viktigaste lyfts fram först så att nästa steg blir enkelt.',
         bullets: en
           ? salon ? ['Personal guidance', profile.servicePlural, 'Mobile-friendly contact'] : ['Clear structure', 'Fast contact', 'No invented details']
@@ -516,8 +600,8 @@ function fallbackContent(ctx: FreeformCtx, page: FreeformPageSpec): FreeformPage
         eyebrow: en ? 'Next step' : 'Nästa steg',
         title: en ? 'Make contact easy' : 'Gör kontakten enkel',
         text: en
-          ? 'The visitor should never have to search for the phone number, email address or the right way forward.'
-          : 'Besökaren ska aldrig behöva leta efter telefon, e-post eller rätt väg vidare.',
+          ? 'Phone, email and the next step should feel obvious immediately, especially on mobile.'
+          : 'Telefon, mejl och nästa steg ska kännas självklara direkt, särskilt på mobilen.',
         bullets: [
           ctx.facts.phone || (en ? 'Phone can be added' : 'Telefon kan läggas till'),
           ctx.facts.email || (en ? 'Email can be added' : 'E-post kan läggas till'),
@@ -599,14 +683,16 @@ function render(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, c:
   const showContact = shouldRenderContact(plan, page)
   const html = [
     nav(plan, business, page.slug, ctx),
-    home ? hero(c, imgs[0], ctx) : pageHero(c, imgs[0], ctx),
-    showIntro ? intro(c, imgs[1], ctx) : '',
-    showServices ? services(c, ctx) : '',
-    sections(c, processPage, ctx),
-    showGallery ? gallery(ctx, imgs) : '',
-    faq(c, faqPage, ctx),
-    showContact ? contact(ctx, c) : '',
-    contactPage ? '' : cta(c, ctx),
+    ...familyBody(plan, page, c, ctx, imgs, {
+      home,
+      faqPage,
+      processPage,
+      contactPage,
+      showServices,
+      showIntro,
+      showGallery,
+      showContact,
+    }),
     footer(plan, business, ctx),
   ].filter(Boolean).join('\n')
   return `<!DOCTYPE html>
@@ -622,6 +708,44 @@ function render(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, c:
 ${html}
 </body>
 </html>`
+}
+
+function familyBody(
+  plan: FreeformPlan,
+  page: FreeformPageSpec,
+  c: FreeformPageContent,
+  ctx: FreeformCtx,
+  imgs: string[],
+  flags: {
+    home: boolean
+    faqPage: boolean
+    processPage: boolean
+    contactPage: boolean
+    showServices: boolean
+    showIntro: boolean
+    showGallery: boolean
+    showContact: boolean
+  },
+): string[] {
+  const heroBlock = flags.home ? hero(c, imgs[0], ctx) : pageHero(c, imgs[0], ctx)
+  const introBlock = flags.showIntro ? intro(c, imgs[1], ctx) : ''
+  const servicesBlock = flags.showServices ? services(c, ctx) : ''
+  const sectionsBlock = sections(c, flags.processPage, ctx)
+  const galleryBlock = flags.showGallery ? gallery(ctx, imgs) : ''
+  const faqBlock = faq(c, flags.faqPage, ctx)
+  const contactBlock = flags.showContact ? contact(ctx, c) : ''
+  const ctaBlock = flags.contactPage ? '' : cta(c, ctx)
+
+  if (plan.templateFamily === 'salon_editorial_luxury') {
+    return [heroBlock, introBlock, galleryBlock, servicesBlock, sectionsBlock, faqBlock, contactBlock, ctaBlock]
+  }
+  if (plan.templateFamily === 'clinic_private_care') {
+    return [heroBlock, servicesBlock, introBlock, sectionsBlock, faqBlock, contactBlock, ctaBlock]
+  }
+  if (plan.templateFamily === 'byggform_architectural_trust') {
+    return [heroBlock, servicesBlock, sectionsBlock, introBlock, faqBlock, contactBlock, ctaBlock]
+  }
+  return [heroBlock, introBlock, servicesBlock, sectionsBlock, galleryBlock, faqBlock, contactBlock, ctaBlock]
 }
 
 function nav(plan: FreeformPlan, business: string, active: string, ctx: FreeformCtx): string {
