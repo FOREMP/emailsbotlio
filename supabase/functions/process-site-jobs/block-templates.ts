@@ -499,7 +499,7 @@ export function pagesForTemplate(
   }
 
   if (family.key === 'salon_editorial_luxury') {
-    return [
+    const pages: BlockTemplatePage[] = [
       {
         slug: 'index',
         title: input.business,
@@ -528,6 +528,15 @@ export function pagesForTemplate(
         sections: ['about_warm_brand_story', 'gallery_atmospheric_mosaic', 'contact_booking_panel'],
       },
       {
+        slug: 'process',
+        title: en ? 'Your visit' : 'Ditt besök',
+        purpose: en
+          ? 'Explain the booking flow, what the first visit can feel like and how guidance works without inventing promises.'
+          : 'Förklara bokningsflödet, hur ett första besök kan kännas och hur vägledning går till utan att hitta på löften.',
+        pageKind: 'process',
+        sections: ['experience_story_dual_visual', 'faq_practical_visit_details', 'contact_booking_panel'],
+      },
+      {
         slug: pageSlug.contact,
         title: pageTitle.contact,
         purpose: en
@@ -537,6 +546,18 @@ export function pagesForTemplate(
         sections: ['contact_booking_panel', 'faq_practical_visit_details'],
       },
     ]
+    if (input.includeFaqPage) {
+      pages.splice(4, 0, {
+        slug: pageSlug.faq,
+        title: pageTitle.faq,
+        purpose: en
+          ? 'Collect real pre-booking questions and practical answers when the source material is strong enough.'
+          : 'Samla riktiga frågor inför bokning och praktiska svar när underlaget är tillräckligt starkt.',
+        pageKind: 'faq',
+        sections: ['faq_practical_visit_details', 'contact_booking_panel'],
+      })
+    }
+    return pages
   }
 
   if (family.key === 'byggform_architectural_trust') {
@@ -622,6 +643,15 @@ export function pagesForTemplate(
         sections: ['service_groups_clear_cards', 'about_trust_story_split', 'cta_direct_action_band'],
       },
       {
+        slug: 'process',
+        title: en ? 'Process' : 'Process',
+        purpose: en
+          ? 'Explain how first contact, planning, scope and delivery usually work so the visitor understands the next step.'
+          : 'Förklara hur första kontakt, planering, omfattning och leverans brukar fungera så att besökaren förstår nästa steg.',
+        pageKind: 'process',
+        sections: ['trust_badges_premium', 'about_trust_story_split', 'contact_options_modern'],
+      },
+      {
         slug: pageSlug.about,
         title: input.aboutTitle,
         purpose: en
@@ -641,7 +671,7 @@ export function pagesForTemplate(
       },
     ]
     if (input.includeFaqPage) {
-        pages.splice(3, 0, {
+        pages.splice(4, 0, {
           slug: pageSlug.faq,
           title: pageTitle.faq,
           purpose: en

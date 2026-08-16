@@ -1,4 +1,5 @@
 import {
+  BLOCK_TEMPLATE_FAMILIES,
   pagesForTemplate,
   selectBlockTemplateFamily,
   templateDirective,
@@ -30,6 +31,7 @@ export interface FreeformCtx {
   siteId: string
   openrouterKey: string
   scraped: any
+  selectedTemplateFamily?: BlockTemplateFamilyKey | null
   facts: FreeformFacts
   nicheLabel: string
   category?: string | null
@@ -170,13 +172,15 @@ function isEnglish(ctx: FreeformCtx): boolean {
 function buildPlan(ctx: FreeformCtx): FreeformPlan {
   const profile = buildProfile(ctx)
   const business = ctx.facts.business_name || ctx.nicheLabel || (isEnglish(ctx) ? 'Business' : 'Företaget')
-  const family = selectBlockTemplateFamily({
-    category: ctx.category,
-    niche: ctx.facts.niche,
-    nicheLabel: ctx.nicheLabel,
-    businessName: ctx.facts.business_name,
-    source: sourceFor(ctx, { slug: 'index', title: '', purpose: '', sections: [] }),
-  })
+  const family =
+    (ctx.selectedTemplateFamily && BLOCK_TEMPLATE_FAMILIES[ctx.selectedTemplateFamily])
+    || selectBlockTemplateFamily({
+      category: ctx.category,
+      niche: ctx.facts.niche,
+      nicheLabel: ctx.nicheLabel,
+      businessName: ctx.facts.business_name,
+      source: sourceFor(ctx, { slug: 'index', title: '', purpose: '', sections: [] }),
+    })
   const pages = pagesForTemplate(family, {
     business,
     serviceTitle: profile.servicePlural,
@@ -303,6 +307,15 @@ function buildFactPack(ctx: FreeformCtx): FactPack {
 async function pageContent(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec): Promise<{ source: 'ai' | 'fallback'; content: FreeformPageContent; error?: string; model?: string }> {
   const profile = buildProfile(ctx)
   const pack = buildFactPack(ctx)
+  const chosenFamily =
+    (plan.templateFamily && BLOCK_TEMPLATE_FAMILIES[plan.templateFamily])
+    || selectBlockTemplateFamily({
+      category: ctx.category,
+      niche: ctx.facts.niche,
+      nicheLabel: ctx.nicheLabel,
+      businessName: ctx.facts.business_name,
+      source: sourceFor(ctx, page),
+    })
   const system = `${isEnglish(ctx)
     ? 'You are writing the first draft for a premium English-language website. If any instruction below is in Swedish, interpret it and still produce final website copy in natural English. Respond only with JSON. No HTML. No CSS.'
     : 'Du skriver första utkastet till innehåll för en svensk premium-webbplats. Svara endast med JSON. Ingen HTML. Ingen CSS.'}
@@ -344,13 +357,7 @@ Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","he
     `Sida: ${page.slug} - ${page.title}`,
     `Syfte: ${page.purpose}`,
     `Templatefamilj: ${plan.templateLabel || plan.templateFamily || '[saknas]'}`,
-    `Template/block-instruktioner:\n${templatePromptNotes(selectBlockTemplateFamily({
-      category: ctx.category,
-      niche: ctx.facts.niche,
-      nicheLabel: ctx.nicheLabel,
-      businessName: ctx.facts.business_name,
-      source: sourceFor(ctx, page),
-    }), page)}`,
+    `Template/block-instruktioner:\n${templatePromptNotes(chosenFamily, page)}`,
     ctx.regenFeedback ? `Feedback: ${ctx.regenFeedback}` : '',
     `Alla sidor: ${plan.pages.map((p) => p.slug + ':' + p.title).join(', ')}`,
     'Faktapaket som får användas:',
@@ -375,6 +382,15 @@ Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","he
 async function polishContent(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, draft: FreeformPageContent): Promise<{ source: 'polished' | 'fallback'; content: FreeformPageContent; error?: string; model?: string }> {
   const profile = buildProfile(ctx)
   const pack = buildFactPack(ctx)
+  const chosenFamily =
+    (plan.templateFamily && BLOCK_TEMPLATE_FAMILIES[plan.templateFamily])
+    || selectBlockTemplateFamily({
+      category: ctx.category,
+      niche: ctx.facts.niche,
+      nicheLabel: ctx.nicheLabel,
+      businessName: ctx.facts.business_name,
+      source: sourceFor(ctx, page),
+    })
   const system = `${isEnglish(ctx)
     ? 'You are a senior English editor and conversion copywriter. You receive JSON content for one page. Rewrite it into natural, polished English and improve thin content carefully using the approved fact pack.'
     : 'Du är en senior svensk redaktör och conversion copywriter. Du får JSON-innehåll till EN sida. Uppgift: skriv om till naturlig, korrekt, premium svensk text och fyll ut tunt innehåll med försiktig, relevant copy från faktapaketet.'}
@@ -397,13 +413,7 @@ HÅRDA REGLER:
     `Sida: ${page.slug} - ${page.title}`,
     `Profil från uppladdad kategori: ${JSON.stringify(profile)}`,
     `Templatefamilj: ${plan.templateLabel || plan.templateFamily || '[saknas]'}`,
-    `Template/block-instruktioner:\n${templatePromptNotes(selectBlockTemplateFamily({
-      category: ctx.category,
-      niche: ctx.facts.niche,
-      nicheLabel: ctx.nicheLabel,
-      businessName: ctx.facts.business_name,
-      source: sourceFor(ctx, page),
-    }), page)}`,
+    `Template/block-instruktioner:\n${templatePromptNotes(chosenFamily, page)}`,
     `Faktapaket: ${JSON.stringify(pack)}`,
     `Alla sidor: ${plan.pages.map((p) => p.slug + ':' + p.title).join(', ')}`,
     ctx.regenFeedback ? `Feedback: ${ctx.regenFeedback}` : '',
@@ -896,7 +906,7 @@ body.template-service_clarity_default .card{border-radius:24px}
 }
 
 function shouldIncludeFaqPage(ctx: FreeformCtx, profile: BusinessProfile, template: BlockTemplateFamilyKey): boolean {
-  if (template !== 'byggform_architectural_trust' && template !== 'service_company_modern' && template !== 'clinic_private_care' && template !== 'mechanic_precision_workshop') return false
+  if (template !== 'byggform_architectural_trust' && template !== 'service_company_modern' && template !== 'clinic_private_care' && template !== 'mechanic_precision_workshop' && template !== 'salon_editorial_luxury') return false
   const source = sourceFor(ctx, { slug: 'index', title: '', purpose: '', sections: [] })
   const serviceCount = serviceIdeas(ctx).filter(isGoodServiceTitle).length
   const questionSignals = (source.match(/\?/g) || []).length
@@ -908,6 +918,7 @@ function shouldIncludeFaqPage(ctx: FreeformCtx, profile: BusinessProfile, templa
   if (template === 'mechanic_precision_workshop') return total >= 4
   if (template === 'clinic_private_care') return total >= 4
   if (template === 'service_company_modern') return total >= 5
+  if (template === 'salon_editorial_luxury') return total >= 4
   return total >= 6
 }
 

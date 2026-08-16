@@ -13,7 +13,7 @@
 // The whole file uses the service role; cron sends the anon key just so
 // pg_net can hit the function endpoint (verify_jwt is off).
 import { createClient } from 'npm:@supabase/supabase-js@2'
-import { classifyNiche, templateForNiche, type NicheKey } from '../_shared/niche.ts'
+import { classifyNiche, type NicheKey } from '../_shared/niche.ts'
 import {
   blockTemplateFamilyCatalog,
   BLOCK_TEMPLATE_FAMILIES,
@@ -627,25 +627,16 @@ async function startGeneration(
   // Resolve the niche up-front: it is used both on the ghost contact and on
   // the generated_sites row (previously declared after first use -> TDZ crash).
   const niche = inferLeadNiche(lead)
-  const nicheTemplate = templateForNiche(niche)
   const chosenFamily = await chooseTemplateFamilyForLead({
     ...lead,
     niche: lead?.niche ?? niche ?? null,
   })
   const blockFamily = chosenFamily.family
 
-  // No template exists for this category yet -> the site can only be built by
-  // the freeform (AI-from-scratch) engine.
-  const resolvedMode = await resolveGenerationMode(supabase)
-  const shouldUseBlockTemplateRenderer = lead.language !== 'en'
-    && blockFamily.key !== 'service_clarity_default'
-  const generationMode = lead.language === 'en'
-    ? 'freeform'
-    : shouldUseBlockTemplateRenderer
-      ? 'freeform'
-    : nicheTemplate
-      ? resolvedMode
-      : 'freeform'
+  // Always use the newer freeform + block-family engine for generation.
+  // The older 3-template renderer is kept in the codebase for legacy rows,
+  // but new builds should not fall back to that simpler path.
+  const generationMode = 'freeform'
 
 
   // Ensure ghost list for this user
@@ -720,9 +711,8 @@ async function startGeneration(
       source_url: normaliseUrl(lead.website),
       status: 'pending',
       language: lead.language === 'en' ? 'en' : 'sv',
-      // NOT NULL column: freeform builds have no template, use a marker so the
-      // insert can't fail (this used to abort every non-template category).
-      template: generationMode === 'freeform' ? blockFamily.key : (nicheTemplate ?? 'freeform'),
+      // The chosen block template family is the source of truth for the modern renderer.
+      template: blockFamily.key,
       generation_mode: generationMode,
     })
     .select('id')

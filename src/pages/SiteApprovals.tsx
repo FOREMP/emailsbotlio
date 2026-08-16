@@ -319,13 +319,12 @@ export default function SiteApprovals() {
         }
 
         // 3. Re-queue the site so the worker picks it up on the next tick.
-        //    Freeform builds page-by-page, so its progress must start clean.
+        //    The modern block-family renderer always runs through freeform, so
+        //    progress must start clean for both "template family" and "freeform".
         const modeFields =
           regenMode === "keep"
             ? {}
-            : regenMode === "freeform"
-              ? { generation_mode: "freeform", gen_progress: null, generated_files: null }
-              : { generation_mode: "template" };
+            : { generation_mode: "freeform", gen_progress: null, generated_files: null };
         await supabase
           .from("generated_sites")
           .update({
@@ -505,10 +504,10 @@ export default function SiteApprovals() {
                 Samma som förut
               </Button>
               <Button size="sm" variant={regenMode === "template" ? "default" : "outline"} onClick={() => setRegenMode("template")}>
-                Mall
+                Modern mallfamilj
               </Button>
               <Button size="sm" variant={regenMode === "freeform" ? "default" : "outline"} onClick={() => setRegenMode("freeform")}>
-                AI bygger fritt (DeepSeek V4)
+                Friare AI-variant
               </Button>
             </div>
           </div>

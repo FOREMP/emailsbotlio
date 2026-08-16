@@ -607,8 +607,8 @@ export default function SiteLeads() {
             AI bygger fritt (DeepSeek V4)
           </Button>
           <p className="text-xs text-muted-foreground basis-full">
-            Gäller nya bygg. "AI bygger fritt" låter AI:n designa hela sajten från grunden utifrån rådatan —
-            minst start, om oss och kontakt, fler sidor när underlaget räcker. Byt tillbaka när som helst.
+            Gäller nya bygg. Den moderna byggaren använder nu alltid de nyare mallfamiljerna och bygger fler sidor när underlaget räcker,
+            i stället för att falla tillbaka till den äldre enklare 3-sidorsmotorn.
           </p>
         </div>
       </Card>

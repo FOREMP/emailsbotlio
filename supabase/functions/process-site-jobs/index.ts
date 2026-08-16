@@ -1050,6 +1050,9 @@ Deno.serve(async (req) => {
         siteId: generated_site_id,
         openrouterKey,
         scraped,
+        selectedTemplateFamily: effectiveTemplate in BLOCK_TEMPLATE_FAMILIES
+          ? effectiveTemplate as BlockTemplateFamilyKey
+          : null,
         facts: {
           business_name: facts.business_name,
           phone: facts.phone,
