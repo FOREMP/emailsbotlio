@@ -31,9 +31,45 @@ function slug(input: string) {
 
 function stableProjectName(companyName: string, generatedSiteId: string) {
   const companySlug = slug(companyName) || 'site'
-  const uniqueSuffix = generatedSiteId.replace(/-/g, '').slice(0, 8)
-  const base = companySlug.slice(0, 36).replace(/-+$/g, '') || 'site'
+  const uniqueSuffix = generatedSiteId.replace(/-/g, '').slice(0, 6)
+  const base = companySlug
+    .replace(/\b(studio|salong|salon|klinik|clinic|ab|hb|kb|llc|ltd|inc|co)\b/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 18)
+    .replace(/-+$/g, '') || 'site'
   return `demo-${base}-${uniqueSuffix}`.slice(0, 60).replace(/-+$/g, '')
+}
+
+function stableProjectUrls(projectName: string, scopeSlug?: string | null) {
+  const out = [`https://${projectName}.vercel.app`]
+  if (scopeSlug) out.unshift(`https://${projectName}-${scopeSlug}.vercel.app`)
+  return out
+}
+
+function inferScopeSlug(projectName: string, deploymentUrl?: string | null, aliasCandidates?: string[] | null) {
+  const candidates = [
+    ...(aliasCandidates ?? []),
+    ...(deploymentUrl ? [deploymentUrl] : []),
+  ]
+  for (const raw of candidates) {
+    const normalised = normaliseAliasCandidate(raw)
+    if (!normalised) continue
+    try {
+      const host = new URL(normalised).hostname.replace(/\.vercel\.app$/i, '')
+      if (!host.startsWith(`${projectName}-`)) continue
+      const remainder = host.slice(projectName.length + 1)
+      if (!remainder) continue
+      if (!remainder.includes('-')) return remainder
+      const parts = remainder.split('-')
+      if (parts.length >= 2 && /^[a-z0-9]{8,12}$/i.test(parts[0])) {
+        return parts.slice(1).join('-')
+      }
+    } catch {
+      continue
+    }
+  }
+  return null
 }
 
 function delay(ms: number) {
@@ -132,12 +168,13 @@ function mergeAliasCandidates(...lists: Array<string[] | null | undefined>): str
 async function resolvePublicDemoUrl(args: {
   vercelToken: string
   teamId?: string | null
+  scopeSlug?: string | null
   projectName: string
   deploymentId?: string | null
   deploymentUrl?: string | null
   aliasCandidates?: string[]
 }): Promise<VerifyResult> {
-  const { vercelToken, teamId, projectName, deploymentId, deploymentUrl, aliasCandidates } = args
+  const { vercelToken, teamId, scopeSlug, projectName, deploymentId, deploymentUrl, aliasCandidates } = args
   const attempts = [0, 2000, 5000, 10000, 15000, 25000]
   let lastStatus: number | null = null
   let lastDetail = ''
@@ -180,7 +217,7 @@ async function resolvePublicDemoUrl(args: {
     const candidates = mergeAliasCandidates(
       liveAliasCandidates,
       collectedAliases,
-      [`https://${projectName}.vercel.app`],
+      stableProjectUrls(projectName, scopeSlug),
       deploymentUrl ? [deploymentUrl] : [],
     )
 
@@ -212,6 +249,7 @@ Deno.serve(async (req) => {
     const vercelToken = Deno.env.get('VERCEL_API_TOKEN')
     if (!vercelToken) return json({ error: 'VERCEL_API_TOKEN missing' }, 500)
     const vercelTeamId = Deno.env.get('VERCEL_TEAM_ID')?.trim() || null
+    const vercelScopeSlug = Deno.env.get('VERCEL_SCOPE_SLUG')?.trim() || null
 
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
@@ -363,9 +401,11 @@ Deno.serve(async (req) => {
       }
     }
 
+    const effectiveScopeSlug = vercelScopeSlug || inferScopeSlug(projectName, deploymentUrl, aliasCandidates)
     const verify = await resolvePublicDemoUrl({
       vercelToken,
       teamId: vercelTeamId,
+      scopeSlug: effectiveScopeSlug,
       projectName,
       deploymentId,
       deploymentUrl,
