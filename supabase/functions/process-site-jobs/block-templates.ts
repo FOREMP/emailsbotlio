@@ -293,6 +293,24 @@ export const BLOCK_TEMPLATE_FAMILIES: Record<BlockTemplateFamilyKey, BlockTempla
   },
 }
 
+export function blockTemplateFamilyCatalog(): Array<{
+  key: BlockTemplateFamilyKey
+  label: string
+  mode: 'full_site' | 'landing_page'
+  bestFor: string[]
+  avoidFor: string[]
+  notes: string[]
+}> {
+  return Object.values(BLOCK_TEMPLATE_FAMILIES).map((family) => ({
+    key: family.key,
+    label: family.label,
+    mode: family.mode,
+    bestFor: family.bestFor,
+    avoidFor: family.avoidFor,
+    notes: [...family.notesFromEric, ...family.aiDecisionNotes].slice(0, 8),
+  }))
+}
+
 const RESTAURANT_RE = /(restaurang|restaurant|bistro|bar\b|pub\b|café|cafe|pizzeria|bageri|catering|mat|lunch|krog|diner|brasserie|trattoria)/i
 const CLINIC_PRIVATE_RE = /(klinik|clinic|tandläkare|dentist|dental|terapi|therapy|psykolog|counselling|counseling|fysioterap|physio|naprapat|kiropraktor|hälsa|halsa|wellbeing|wellness clinic|medical|medicinsk|vård|vard|rehab|rehabilitering)/i
 const EDITORIAL_SERVICE_RE = /(frisör|frisor|hair|barber|salong|skönhet|beauty|nagel|nail|frans|bryn|lash|brow|spa\b|massage|klinik|clinic|hudvård|skin|wellness|terapi|terapeut|kosmetisk|makeup|stylist|studio)/i

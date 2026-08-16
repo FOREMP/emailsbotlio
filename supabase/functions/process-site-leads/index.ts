@@ -14,7 +14,13 @@
 // pg_net can hit the function endpoint (verify_jwt is off).
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { classifyNiche, templateForNiche, type NicheKey } from '../_shared/niche.ts'
-import { selectBlockTemplateFamily } from '../process-site-jobs/block-templates.ts'
+import {
+  blockTemplateFamilyCatalog,
+  BLOCK_TEMPLATE_FAMILIES,
+  selectBlockTemplateFamily,
+  type BlockTemplateFamily,
+  type BlockTemplateFamilyKey,
+} from '../process-site-jobs/block-templates.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -27,9 +33,8 @@ const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
 const AUDIT_PER_TICK = 3    // Firecrawl+Gemini per invocation — keep memory low
 const GEN_PER_TICK = 3      // how many new pipelines may START per tick
 const MAX_CONCURRENT_GEN = 5 // how many leads may be mid-pipeline at once
-const DAILY_SEND_CAP_FALLBACK = 16  // per language, used only if we can't read sender limits
-const LANGUAGES = ['sv', 'en'] as const
-type SiteLanguage = (typeof LANGUAGES)[number]
+const DAILY_GEN_CAP_FALLBACK = 16  // used only if we can't read sender limits
+const OUTREACH_DOMAINS = ['foremp.email', 'foremp.eu'] as const
 const GHOST_LIST_NAME = 'Site Leads (auto)'
 
 function isCanonicalDemoUrl(value?: string | null): boolean {
@@ -46,12 +51,7 @@ function isCanonicalDemoUrl(value?: string | null): boolean {
 }
 const STALE_PIPELINE_MINUTES = 30 // never let one dead scrape/generate/deploy block the whole queue
 const ORPHAN_GRACE_MINUTES = 10   // 'generating' with no generated_sites row = dead job
-
-function senderLanguage(row: { language?: string | null; from_email?: string | null }): SiteLanguage {
-  if (row.language === 'en' || row.language === 'sv') return row.language
-  const email = String(row.from_email ?? '').toLowerCase()
-  return email.endsWith('@foremp.eu') ? 'en' : 'sv'
-}
+const TEMPLATE_PICKER_MODEL = 'deepseek/deepseek-chat-v3.1'
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
@@ -59,16 +59,7 @@ Deno.serve(async (req) => {
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   const supabase = createClient(supabaseUrl, serviceKey)
 
-  const report = {
-    reconciled: 0,
-    recovered: 0,
-    audited: 0,
-    generated: 0,
-    capacity: 0,
-    capacity_by_language: { sv: 0, en: 0 } as Record<SiteLanguage, number>,
-    send_capacity_by_language: { sv: 0, en: 0 } as Record<SiteLanguage, number>,
-    errors: [] as string[],
-  }
+  const report = { reconciled: 0, recovered: 0, audited: 0, generated: 0, capacity: 0, errors: [] as string[] }
 
   // Manual override from the Site Leads UI: build these leads right now,
   // ignoring the automation switch and the daily cap.
@@ -135,92 +126,58 @@ Deno.serve(async (req) => {
     }
 
     // ---------------- 3. GENERATE -----------------
-    // Daily generation cap = 2x today's outreach send capacity PER LANGUAGE.
-    // This keeps Swedish and English as separate pools, so one language never
-    // steals the other's website budget, and lets operators add more sender
-    // addresses later without hard-coding domains into the counter logic.
+    // Daily generation cap = today's outreach send capacity (sum of active
+    // sender daily_limits on the outreach domain). Keeps sites-created/day in
+    // lockstep with contacts-emailed/day so we never build stock we can't send.
     const { data: dailySenders } = await supabase
       .from('senders')
-      .select('daily_limit, from_email, language')
+      .select('daily_limit, from_email')
       .eq('is_active', true)
-    const sendCaps: Record<SiteLanguage, number> = { sv: 0, en: 0 }
-    const senderCounts: Record<SiteLanguage, number> = { sv: 0, en: 0 }
-    for (const row of dailySenders ?? []) {
-      const lang = senderLanguage(row as any)
-      sendCaps[lang] += Number((row as any).daily_limit ?? 0)
-      senderCounts[lang] += 1
-    }
-    for (const lang of LANGUAGES) {
-      if ((dailySenders?.length ?? 0) === 0) {
-        sendCaps[lang] = DAILY_SEND_CAP_FALLBACK
-      } else if (senderCounts[lang] === 0) {
-        sendCaps[lang] = 0
-      } else if (sendCaps[lang] <= 0) {
-        sendCaps[lang] = DAILY_SEND_CAP_FALLBACK
-      }
-      report.send_capacity_by_language[lang] = sendCaps[lang]
-    }
+    const dailyCap = (dailySenders ?? [])
+      .filter((r: any) => OUTREACH_DOMAINS.some((domain) => String(r.from_email ?? '').toLowerCase().endsWith(`@${domain}`)))
+      .reduce((s: number, r: any) => s + (r.daily_limit ?? 0), 0)
+      || DAILY_GEN_CAP_FALLBACK
 
     // Count builds actually STARTED today. Using site_leads.updated_at made
     // approvals of older leads eat today's quota, starving generation.
     const today = new Date().toISOString().slice(0, 10)
-    const buildCaps: Record<SiteLanguage, number> = { sv: 0, en: 0 }
-    for (const lang of LANGUAGES) {
-      const { count: doneToday } = await supabase
-        .from('generated_sites')
-        .select('id', { count: 'exact', head: true })
-        .eq('language', lang)
-        .gte('created_at', `${today}T00:00:00Z`)
-      buildCaps[lang] = Math.max(0, sendCaps[lang] * 2 - (doneToday ?? 0))
-      report.capacity_by_language[lang] = buildCaps[lang]
-    }
-    report.capacity = buildCaps.sv + buildCaps.en
+    const { count: doneToday } = await supabase
+      .from('generated_sites')
+      .select('id', { count: 'exact', head: true })
+      .gte('created_at', `${today}T00:00:00Z`)
+    const capacity = Math.max(0, dailyCap - (doneToday ?? 0))
+    report.capacity = capacity
 
-    if (report.capacity > 0) {
-      // Keep one shared concurrency ceiling for the worker, while the daily
-      // build quota itself is split per language.
+    if (capacity > 0) {
+      // Bounded-concurrency pipeline: keep up to MAX_CONCURRENT_GEN leads
+      // mid-flight so the daily quota can actually be reached, instead of the
+      // old strictly-serial gate where one lead blocked the whole queue.
       const { count: inFlight } = await supabase
         .from('site_leads')
         .select('id', { count: 'exact', head: true })
         .eq('status', 'generating')
 
-      const slots = Math.max(0, Math.min(GEN_PER_TICK, MAX_CONCURRENT_GEN - (inFlight ?? 0), report.capacity))
+      const slots = Math.max(0, MAX_CONCURRENT_GEN - (inFlight ?? 0))
       if (slots === 0) {
         report.errors.push(`skip generate: ${inFlight} lead(s) still in flight`)
       } else {
-        const candidatesByLanguage: Record<SiteLanguage, any[]> = { sv: [], en: [] }
-        for (const lang of LANGUAGES) {
-          if (buildCaps[lang] <= 0) continue
-          const { data: needsSite } = await supabase
-            .from('site_leads')
-            .select('id, user_id, company_name, website, email, phone, address, category, niche, rating, review_snippets, audit_reason, audit_details, feedback, language')
-            .eq('status', 'needs_site')
-            .eq('language', lang)
-            .not('website', 'is', null)
-            .not('email', 'is', null)
-            .order('audit_score', { ascending: true, nullsFirst: false })
-            .limit(Math.min(slots, buildCaps[lang]))
-          candidatesByLanguage[lang] = (needsSite ?? []) as any[]
-        }
+        const take = Math.min(GEN_PER_TICK, capacity, slots)
+        const { data: needsSite } = await supabase
+          .from('site_leads')
+          .select('id, user_id, company_name, website, email, phone, address, category, niche, rating, review_snippets, audit_reason, audit_details, feedback, language')
+          .eq('status', 'needs_site')
+          .not('website', 'is', null)
+          .not('email', 'is', null)
+          .order('audit_score', { ascending: true, nullsFirst: false })
+          .limit(take)
 
-        const queue: any[] = []
-        while (queue.length < slots) {
-          let added = false
-          for (const lang of LANGUAGES) {
-            const next = candidatesByLanguage[lang].shift()
-            if (!next) continue
-            queue.push(next)
-            added = true
-            if (queue.length >= slots) break
-          }
-          if (!added) break
-        }
-
-        if (!queue.length) {
+        if (!needsSite?.length) {
+          // Nothing to build right now — the tick simply idles and picks up
+          // new needs_site leads as soon as the audit phase produces them.
           report.errors.push('idle: no needs_site leads ready')
         }
 
-        for (const lead of queue) {
+        for (const lead of needsSite ?? []) {
           try {
             await startGeneration(supabase, supabaseUrl, serviceKey, lead as any)
             report.generated++
@@ -553,6 +510,91 @@ async function resolveGenerationMode(
   return cachedGenerationMode
 }
 
+async function chooseTemplateFamilyForLead(lead: any): Promise<{
+  family: BlockTemplateFamily
+  source: 'ai' | 'rules'
+  reason?: string
+}> {
+  const fallback = selectBlockTemplateFamily({
+    category: lead?.category ?? null,
+    niche: lead?.niche ?? null,
+    businessName: lead?.company_name ?? null,
+  })
+  const lovableKey = Deno.env.get('LOVABLE_API_KEY')
+  if (!lovableKey) return { family: fallback, source: 'rules', reason: 'LOVABLE_API_KEY missing' }
+
+  const familyCatalog = blockTemplateFamilyCatalog()
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 12_000)
+  try {
+    const resp = await fetch(`${AI_GATEWAY}/chat/completions`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'Lovable-API-Key': lovableKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: TEMPLATE_PICKER_MODEL,
+        temperature: 0,
+        top_p: 1,
+        seed: 42,
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'You choose the best website template family for a local-business lead.',
+              'You must choose ONLY from the provided template families.',
+              'Use the lead category as the strongest signal, then niche, then company name.',
+              'If operator feedback says the previous template was wrong or asks for a more fitting template, treat that feedback as high priority when choosing a better family.',
+              'Read the notes carefully: some templates fit visual/beauty businesses with many images, some fit practical service companies, some fit clinics, restaurants, mechanics or construction.',
+              'Do not choose based on one random keyword if the broader business type points elsewhere.',
+              'If the lead is unclear, choose the safest broad fit instead of forcing a niche-specific template.',
+              'Return strict JSON only.',
+              '{"templateFamily":"one of the provided keys","reason":"short explanation","confidence":0}',
+            ].join('\n'),
+          },
+          {
+            role: 'user',
+            content: JSON.stringify({
+              lead: {
+                category: lead?.category ?? null,
+                niche: lead?.niche ?? null,
+                company_name: lead?.company_name ?? null,
+                language: lead?.language ?? 'sv',
+                feedback: lead?.feedback ?? null,
+              },
+              templateFamilies: familyCatalog,
+            }),
+          },
+        ],
+        response_format: { type: 'json_object' },
+      }),
+    })
+    clearTimeout(timeoutId)
+    const data = await resp.json().catch(() => ({}))
+    if (!resp.ok) {
+      return { family: fallback, source: 'rules', reason: `AI picker failed (${resp.status})` }
+    }
+    const raw = String(data?.choices?.[0]?.message?.content ?? '{}')
+    const parsed = JSON.parse(raw) as { templateFamily?: string; reason?: string; confidence?: number }
+    const key = parsed?.templateFamily
+    if (!key || !(key in BLOCK_TEMPLATE_FAMILIES)) {
+      return { family: fallback, source: 'rules', reason: 'AI picker returned unknown family' }
+    }
+    return {
+      family: BLOCK_TEMPLATE_FAMILIES[key as BlockTemplateFamilyKey],
+      source: 'ai',
+      reason: typeof parsed.reason === 'string' ? parsed.reason.slice(0, 240) : undefined,
+    }
+  } catch (err) {
+    return {
+      family: fallback,
+      source: 'rules',
+      reason: (err as Error).name === 'AbortError' ? 'AI picker timed out' : `AI picker error: ${(err as Error).message}`,
+    }
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
 // GENERATE — creates synthetic contact + generated_sites row, kicks off
 // scrape-lead-data. The reconciler above then walks the pipeline forward.
 // ---------------------------------------------------------------------------
@@ -566,22 +608,17 @@ async function startGeneration(
   // the generated_sites row (previously declared after first use -> TDZ crash).
   const niche = inferLeadNiche(lead)
   const nicheTemplate = templateForNiche(niche)
-  const blockFamily = selectBlockTemplateFamily({
-    category: lead?.category ?? null,
+  const chosenFamily = await chooseTemplateFamilyForLead({
+    ...lead,
     niche: lead?.niche ?? niche ?? null,
-    businessName: lead?.company_name ?? null,
   })
+  const blockFamily = chosenFamily.family
 
   // No template exists for this category yet -> the site can only be built by
   // the freeform (AI-from-scratch) engine.
   const resolvedMode = await resolveGenerationMode(supabase)
-  const shouldUseBlockTemplateRenderer = lead.language !== 'en' && [
-    'salon_editorial_luxury',
-    'clinic_private_care',
-    'mechanic_precision_workshop',
-    'byggform_architectural_trust',
-    'bistro_atmospheric_landing',
-  ].includes(blockFamily.key)
+  const shouldUseBlockTemplateRenderer = lead.language !== 'en'
+    && blockFamily.key !== 'service_clarity_default'
   const generationMode = lead.language === 'en'
     ? 'freeform'
     : shouldUseBlockTemplateRenderer
@@ -641,6 +678,9 @@ async function startGeneration(
           audit_details: lead.audit_details ?? null,
           language: lead.language === 'en' ? 'en' : 'sv',
           niche,
+          template_family: blockFamily.key,
+          template_family_source: chosenFamily.source,
+          template_family_reason: chosenFamily.reason ?? null,
         },
       })
       .select('id')
@@ -688,6 +728,9 @@ async function startGeneration(
         language: lead.language === 'en' ? 'en' : 'sv',
         regen_feedback: lead.feedback ?? null,
         niche,
+        template_family: blockFamily.key,
+        template_family_source: chosenFamily.source,
+        template_family_reason: chosenFamily.reason ?? null,
       },
     })
     .eq('id', contactId)
