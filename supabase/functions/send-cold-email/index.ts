@@ -90,10 +90,13 @@ function appendFooter(
   senderName: string,
   company: string,
   postalAddress?: string | null,
+  language?: string | null,
 ): string {
   const cleaned = stripExistingSignOff(bodyText)
-  // Swedish sign-off: Vänliga hälsningar / namn / telefon / FÖRETAG
-  const signoff = `Vänliga hälsningar\n${senderName}\n${CONTACT_PHONE}\n${company.toUpperCase()}`
+  const isEnglish = String(language ?? '').toLowerCase().startsWith('en')
+  // Sign-off: greeting / name / phone / COMPANY
+  const greeting = isEnglish ? 'Best regards' : 'Vänliga hälsningar'
+  const signoff = `${greeting}\n${senderName}\n${CONTACT_PHONE}\n${company.toUpperCase()}`
   const legal: string[] = []
   if (postalAddress && postalAddress.trim()) legal.push(postalAddress.trim())
   const legalBlock = legal.length > 0 ? `\n\n---\n${legal.join('\n')}` : ''
@@ -299,11 +302,17 @@ Deno.serve(async (req) => {
   // and adds the single visible unsubscribe link itself, so we do not duplicate
   // it in the Best regards footer.
   const company = deriveCompany(domain, (domainRow as any).brand)
+  const footerLanguage =
+    (contactFields.language as string | undefined)
+    ?? (contact?.language as string | undefined)
+    ?? (chosenSender.language as string | undefined)
+    ?? (domain.endsWith('.eu') ? 'en' : 'sv')
   finalBody = appendFooter(
     finalBody,
     chosenSender.from_name,
     company,
     (domainRow as any).postal_address ?? null,
+    footerLanguage,
   )
 
   // Final safety rails before creating a queued row.
