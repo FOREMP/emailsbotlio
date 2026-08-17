@@ -302,11 +302,17 @@ Deno.serve(async (req) => {
   // and adds the single visible unsubscribe link itself, so we do not duplicate
   // it in the Best regards footer.
   const company = deriveCompany(domain, (domainRow as any).brand)
+  const footerLanguage =
+    (contactFields.language as string | undefined)
+    ?? (contact?.language as string | undefined)
+    ?? (chosenSender.language as string | undefined)
+    ?? (domain.endsWith('.eu') ? 'en' : 'sv')
   finalBody = appendFooter(
     finalBody,
     chosenSender.from_name,
     company,
     (domainRow as any).postal_address ?? null,
+    footerLanguage,
   )
 
   // Final safety rails before creating a queued row.
