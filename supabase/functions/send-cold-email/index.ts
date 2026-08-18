@@ -94,14 +94,17 @@ function appendFooter(
 ): string {
   const cleaned = stripExistingSignOff(bodyText)
   const isEnglish = String(language ?? '').toLowerCase().startsWith('en')
-  // Sign-off: greeting / name / phone / COMPANY
+  // Sign-off: greeting / name / phone / Company (normal casing — ALL CAPS reads
+  // as bulk mail to Gmail's classifier and pushes us into Promotions/Spam).
   const greeting = isEnglish ? 'Best regards' : 'Vänliga hälsningar'
-  const signoff = `${greeting}\n${senderName}\n${CONTACT_PHONE}\n${company.toUpperCase()}`
-  const legal: string[] = []
-  if (postalAddress && postalAddress.trim()) legal.push(postalAddress.trim())
-  const legalBlock = legal.length > 0 ? `\n\n---\n${legal.join('\n')}` : ''
+  const signoff = `${greeting}\n${senderName}\n${CONTACT_PHONE}\n${company}`
+  const legal = (postalAddress ?? '').trim()
+  // No "---" separator block: a divider + address block is a classic newsletter
+  // pattern. One quiet line instead.
+  const legalBlock = legal ? `\n${legal}` : ''
   return `${cleaned}\n\n${signoff}${legalBlock}`
 }
+
 
 function normaliseFollowupSubject(orig: string): string {
   const trimmed = (orig ?? '').trim()
