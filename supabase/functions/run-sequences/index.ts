@@ -104,6 +104,60 @@ function nextStockholmMidnightUtc(now = new Date()): Date {
   return stockholmWallToUTC(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate(), 0, 0)
 }
 
+// --- Human-looking sending pattern -------------------------------------------
+// Sends only on weekdays, only between SEND_WINDOW_START and SEND_WINDOW_END
+// Stockholm time, and paced so a sender's daily quota is spread evenly across
+// the window instead of firing as one burst when the cron ticks.
+const SEND_WINDOW_START = 9   // 09:00 Stockholm
+const SEND_WINDOW_END = 16    // 16:00 Stockholm
+
+function stockholmParts(now = new Date()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: STOCKHOLM_TZ, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', weekday: 'short',
+  }).formatToParts(now).map((x) => [x.type, x.value])) as any
+  return {
+    year: Number(p.year), month: Number(p.month), day: Number(p.day),
+    hour: Number(p.hour), minute: Number(p.minute), weekday: String(p.weekday),
+  }
+}
+
+// Next weekday window opening (with a few minutes of jitter so every deferred
+// enrollment doesn't wake up at the exact same second).
+function nextSendWindowStartUtc(now = new Date()): Date {
+  const p = stockholmParts(now)
+  const nowMins = p.hour * 60 + p.minute
+  const jitter = Math.floor(Math.random() * 25)
+  let y = p.year, mo = p.month, d = p.day
+  let dayName = p.weekday
+  const isWeekend = (n: string) => n === 'Sat' || n === 'Sun'
+  const startToday = nowMins < SEND_WINDOW_START * 60 && !isWeekend(dayName)
+  if (!startToday) {
+    for (let i = 1; i <= 4; i++) {
+      const nd = new Date(Date.UTC(y, mo - 1, d + i))
+      dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][nd.getUTCDay()]
+      if (!isWeekend(dayName)) {
+        return stockholmWallToUTC(nd.getUTCFullYear(), nd.getUTCMonth() + 1, nd.getUTCDate(), SEND_WINDOW_START, jitter)
+      }
+    }
+  }
+  return stockholmWallToUTC(y, mo, d, SEND_WINDOW_START, jitter)
+}
+
+function insideSendWindow(now = new Date()): boolean {
+  const p = stockholmParts(now)
+  if (p.weekday === 'Sat' || p.weekday === 'Sun') return false
+  const mins = p.hour * 60 + p.minute
+  return mins >= SEND_WINDOW_START * 60 && mins < SEND_WINDOW_END * 60
+}
+
+function minutesLeftInWindow(now = new Date()): number {
+  const p = stockholmParts(now)
+  return Math.max(1, SEND_WINDOW_END * 60 - (p.hour * 60 + p.minute))
+}
+
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders })
 
@@ -181,6 +235,9 @@ Deno.serve(async (req) => {
   // Per-tick cache of domain usage (Stockholm-day approximated as UTC-day for query efficiency).
   // We count today's sends grouped by sender domain to enforce PER_DOMAIN_DAILY_CAP.
   const domainSentToday = new Map<string, number>()
+  // Per-tick cache of each sender's last send time (ms epoch) for pacing.
+  const senderLastSentAt = new Map<string, number>()
+
   const domainCounted = new Set<string>() // domains we've already initialised from DB
 
   const domainCap = new Map<string, number>()
@@ -648,6 +705,60 @@ Deno.serve(async (req) => {
           }
         }
 
+        // --- Human sending pattern gate -------------------------------------
+        // 1) Weekends and evenings/nights never send: defer to the next window.
+        if (!insideSendWindow()) {
+          const resumeAt = nextSendWindowStartUtc()
+          await supabase.from('enrollments').update({
+            next_send_at: resumeAt.toISOString(),
+            status: 'active',
+            last_error: 'outside sending window (weekdays 09–16 Stockholm)',
+            error_at: nowIso,
+          }).eq('id', enr.id)
+          console.log(`[enr ${enr.id}] outside send window → wait until ${resumeAt.toISOString()}`)
+          continue
+        }
+
+        // 2) Pace each sender: spread its remaining quota across the remaining
+        // minutes of the window, with jitter, so the daily curve is flat and
+        // gaps between messages look human instead of machine-gun bursts.
+        {
+          const { data: remQuota } = await supabase.rpc('sender_capacity_remaining', {
+            _sender_id: preSenderId, _is_followup: isFollowupEnr,
+          })
+          const left = minutesLeftInWindow()
+          const spacing = Math.max(3, Math.min(25, Math.round(left / Math.max(1, Number(remQuota ?? 1)))))
+          const gapMin = spacing + Math.floor(Math.random() * 5)
+
+          let lastAt = senderLastSentAt.get(preSenderId)
+          if (lastAt === undefined) {
+            const { data: lastRow } = await supabase
+              .from('sent_emails')
+              .select('sent_at')
+              .eq('sender_id', preSenderId)
+              .in('status', ['sent', 'queued'])
+              .order('sent_at', { ascending: false })
+              .limit(1)
+              .maybeSingle()
+            lastAt = lastRow?.sent_at ? new Date(lastRow.sent_at).getTime() : 0
+            senderLastSentAt.set(preSenderId, lastAt)
+          }
+
+          const sinceMin = (Date.now() - lastAt) / 60_000
+          if (sinceMin < gapMin) {
+            const waitMs = Math.ceil((gapMin - sinceMin) * 60_000)
+            await supabase.from('enrollments').update({
+              next_send_at: new Date(Date.now() + waitMs).toISOString(),
+              status: 'active',
+              last_error: `paced: waiting ${Math.round(gapMin - sinceMin)} min before next send from this sender`,
+              error_at: nowIso,
+            }).eq('id', enr.id)
+            console.log(`[enr ${enr.id}] paced → wait ${Math.round(gapMin - sinceMin)} min (sender ${preSenderId})`)
+            continue
+          }
+        }
+
+
         // If the previous tick advanced through a throttle, it stamped the throttle id
         // into last_error as `__pending_throttle:<id>`. Forward it so send-cold-email
         // tags the email_sent activity for accurate throttle accounting.
@@ -778,6 +889,8 @@ Deno.serve(async (req) => {
           continue
         }
         sent++
+        senderLastSentAt.set(preSenderId, Date.now())
+
         // Bump per-domain in-memory counter so subsequent enrollments in this same
         // tick respect PER_DOMAIN_DAILY_CAP without re-querying the DB.
         {
