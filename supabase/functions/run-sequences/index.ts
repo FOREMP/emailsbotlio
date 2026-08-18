@@ -235,6 +235,9 @@ Deno.serve(async (req) => {
   // Per-tick cache of domain usage (Stockholm-day approximated as UTC-day for query efficiency).
   // We count today's sends grouped by sender domain to enforce PER_DOMAIN_DAILY_CAP.
   const domainSentToday = new Map<string, number>()
+  // Per-tick cache of each sender's last send time (ms epoch) for pacing.
+  const senderLastSentAt = new Map<string, number>()
+
   const domainCounted = new Set<string>() // domains we've already initialised from DB
 
   const domainCap = new Map<string, number>()
@@ -886,6 +889,8 @@ Deno.serve(async (req) => {
           continue
         }
         sent++
+        senderLastSentAt.set(preSenderId, Date.now())
+
         // Bump per-domain in-memory counter so subsequent enrollments in this same
         // tick respect PER_DOMAIN_DAILY_CAP without re-querying the DB.
         {
