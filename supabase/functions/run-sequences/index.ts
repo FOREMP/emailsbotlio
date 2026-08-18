@@ -104,6 +104,60 @@ function nextStockholmMidnightUtc(now = new Date()): Date {
   return stockholmWallToUTC(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate(), 0, 0)
 }
 
+// --- Human-looking sending pattern -------------------------------------------
+// Sends only on weekdays, only between SEND_WINDOW_START and SEND_WINDOW_END
+// Stockholm time, and paced so a sender's daily quota is spread evenly across
+// the window instead of firing as one burst when the cron ticks.
+const SEND_WINDOW_START = 9   // 09:00 Stockholm
+const SEND_WINDOW_END = 16    // 16:00 Stockholm
+
+function stockholmParts(now = new Date()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: STOCKHOLM_TZ, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', weekday: 'short',
+  }).formatToParts(now).map((x) => [x.type, x.value])) as any
+  return {
+    year: Number(p.year), month: Number(p.month), day: Number(p.day),
+    hour: Number(p.hour), minute: Number(p.minute), weekday: String(p.weekday),
+  }
+}
+
+// Next weekday window opening (with a few minutes of jitter so every deferred
+// enrollment doesn't wake up at the exact same second).
+function nextSendWindowStartUtc(now = new Date()): Date {
+  const p = stockholmParts(now)
+  const nowMins = p.hour * 60 + p.minute
+  const jitter = Math.floor(Math.random() * 25)
+  let y = p.year, mo = p.month, d = p.day
+  let dayName = p.weekday
+  const isWeekend = (n: string) => n === 'Sat' || n === 'Sun'
+  const startToday = nowMins < SEND_WINDOW_START * 60 && !isWeekend(dayName)
+  if (!startToday) {
+    for (let i = 1; i <= 4; i++) {
+      const nd = new Date(Date.UTC(y, mo - 1, d + i))
+      dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][nd.getUTCDay()]
+      if (!isWeekend(dayName)) {
+        return stockholmWallToUTC(nd.getUTCFullYear(), nd.getUTCMonth() + 1, nd.getUTCDate(), SEND_WINDOW_START, jitter)
+      }
+    }
+  }
+  return stockholmWallToUTC(y, mo, d, SEND_WINDOW_START, jitter)
+}
+
+function insideSendWindow(now = new Date()): boolean {
+  const p = stockholmParts(now)
+  if (p.weekday === 'Sat' || p.weekday === 'Sun') return false
+  const mins = p.hour * 60 + p.minute
+  return mins >= SEND_WINDOW_START * 60 && mins < SEND_WINDOW_END * 60
+}
+
+function minutesLeftInWindow(now = new Date()): number {
+  const p = stockholmParts(now)
+  return Math.max(1, SEND_WINDOW_END * 60 - (p.hour * 60 + p.minute))
+}
+
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders })
 
