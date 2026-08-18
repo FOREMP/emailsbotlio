@@ -11,17 +11,28 @@ const PIXEL = Uint8Array.from([
 const pixelHeaders = {
   'Content-Type': 'image/gif',
   'Content-Length': String(PIXEL.byteLength),
-  'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
-  'Pragma': 'no-cache',
-  'Expires': '0',
+  // Normal-looking image caching. Aggressive no-store/Pragma/Expires headers on
+  // a 1x1 GIF are a tracker fingerprint; private + must-revalidate still gives
+  // us the open event through Gmail's image proxy.
+  'Cache-Control': 'private, max-age=0, must-revalidate',
   'Access-Control-Allow-Origin': '*',
+}
+
+// Accept both the legacy ?m=<id> form and the asset-style /o/<id>.gif path.
+function extractMessageId(url: URL): string | null {
+  const q = url.searchParams.get('m')
+  if (q) return q
+  const seg = url.pathname.split('/').filter(Boolean).pop() ?? ''
+  const m = seg.match(/^([0-9a-f-]{16,})\.gif$/i)
+  return m ? m[1] : null
 }
 
 Deno.serve(async (req) => {
   // Always return the pixel; tracking is best-effort
   try {
     const url = new URL(req.url)
-    const messageId = url.searchParams.get('m')
+    const messageId = extractMessageId(url)
+
     if (messageId) {
       const supabase = createClient(
         Deno.env.get('SUPABASE_URL')!,
