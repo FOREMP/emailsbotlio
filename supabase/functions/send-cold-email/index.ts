@@ -409,22 +409,46 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: 'LOVABLE_API_KEY missing' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
   }
 
+  // Mail 1 (the cold first touch) goes out as plain text with no tracking pixel:
+  // a short text-only 1:1 mail almost never lands in Promotions, and mail 1 is
+  // the message that decides how the whole thread gets classified.
+  const isFirstTouch = !is_followup
+  const basePayload: Record<string, any> = {
+    message_id: messageId,
+    to: contact.email,
+    from: `${chosenSender.from_name} <${fromEmail}>`,
+    reply_to: replyTo,
+    sender_domain: senderDomain,
+    subject: finalSubject,
+    text: finalBody,
+    purpose: 'transactional',
+    label: 'cold-outreach',
+    idempotency_key: messageId,
+    unsubscribe_token: unsubscribeToken,
+  }
+
   try {
-    await sendLovableEmail({
-      message_id: messageId,
-      to: contact.email,
-      from: `${chosenSender.from_name} <${fromEmail}>`,
-      reply_to: replyTo,
-      sender_domain: senderDomain,
-      subject: finalSubject,
-      html: plainToHtml(finalBody, `${url}/functions/v1/track-open?m=${encodeURIComponent(messageId)}`),
-      text: finalBody,
-      purpose: 'transactional',
-      label: 'cold-outreach',
-      idempotency_key: messageId,
-      unsubscribe_token: unsubscribeToken,
-    } as any, { apiKey, idempotencyKey: messageId })
+    if (isFirstTouch) {
+      try {
+        await sendLovableEmail(basePayload as any, { apiKey, idempotencyKey: messageId })
+      } catch (err) {
+        // Some API versions require an html part — fall back to a bare HTML
+        // rendering (still no tracking pixel) rather than failing the send.
+        const msg = err instanceof Error ? err.message : String(err)
+        if (!/html/i.test(msg)) throw err
+        await sendLovableEmail(
+          { ...basePayload, html: plainToHtml(finalBody) } as any,
+          { apiKey, idempotencyKey: messageId },
+        )
+      }
+    } else {
+      await sendLovableEmail(
+        { ...basePayload, html: plainToHtml(finalBody, trackingPixelUrl(url, messageId)) } as any,
+        { apiKey, idempotencyKey: messageId },
+      )
+    }
     await supabase.from('sent_emails').update({ status: 'sent' }).eq('id', messageId)
+
   } catch (err) {
     const detail = err instanceof EmailAPIError ? `${err.status}: ${err.message}` : (err instanceof Error ? err.message : String(err))
     await supabase.from('sent_emails').update({ status: 'failed', error_message: detail }).eq('id', messageId)
