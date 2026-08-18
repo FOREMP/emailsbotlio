@@ -702,6 +702,60 @@ Deno.serve(async (req) => {
           }
         }
 
+        // --- Human sending pattern gate -------------------------------------
+        // 1) Weekends and evenings/nights never send: defer to the next window.
+        if (!insideSendWindow()) {
+          const resumeAt = nextSendWindowStartUtc()
+          await supabase.from('enrollments').update({
+            next_send_at: resumeAt.toISOString(),
+            status: 'active',
+            last_error: 'outside sending window (weekdays 09–16 Stockholm)',
+            error_at: nowIso,
+          }).eq('id', enr.id)
+          console.log(`[enr ${enr.id}] outside send window → wait until ${resumeAt.toISOString()}`)
+          continue
+        }
+
+        // 2) Pace each sender: spread its remaining quota across the remaining
+        // minutes of the window, with jitter, so the daily curve is flat and
+        // gaps between messages look human instead of machine-gun bursts.
+        {
+          const { data: remQuota } = await supabase.rpc('sender_capacity_remaining', {
+            _sender_id: preSenderId, _is_followup: isFollowupEnr,
+          })
+          const left = minutesLeftInWindow()
+          const spacing = Math.max(3, Math.min(25, Math.round(left / Math.max(1, Number(remQuota ?? 1)))))
+          const gapMin = spacing + Math.floor(Math.random() * 5)
+
+          let lastAt = senderLastSentAt.get(preSenderId)
+          if (lastAt === undefined) {
+            const { data: lastRow } = await supabase
+              .from('sent_emails')
+              .select('sent_at')
+              .eq('sender_id', preSenderId)
+              .in('status', ['sent', 'queued'])
+              .order('sent_at', { ascending: false })
+              .limit(1)
+              .maybeSingle()
+            lastAt = lastRow?.sent_at ? new Date(lastRow.sent_at).getTime() : 0
+            senderLastSentAt.set(preSenderId, lastAt)
+          }
+
+          const sinceMin = (Date.now() - lastAt) / 60_000
+          if (sinceMin < gapMin) {
+            const waitMs = Math.ceil((gapMin - sinceMin) * 60_000)
+            await supabase.from('enrollments').update({
+              next_send_at: new Date(Date.now() + waitMs).toISOString(),
+              status: 'active',
+              last_error: `paced: waiting ${Math.round(gapMin - sinceMin)} min before next send from this sender`,
+              error_at: nowIso,
+            }).eq('id', enr.id)
+            console.log(`[enr ${enr.id}] paced → wait ${Math.round(gapMin - sinceMin)} min (sender ${preSenderId})`)
+            continue
+          }
+        }
+
+
         // If the previous tick advanced through a throttle, it stamped the throttle id
         // into last_error as `__pending_throttle:<id>`. Forward it so send-cold-email
         // tags the email_sent activity for accurate throttle accounting.
