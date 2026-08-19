@@ -1,10 +1,17 @@
 # Open tracking across two domains + remaining DNS work
 
-## Short answers to your three questions
+## Short answer: the tracking data is already correct
 
-1. **Is the tracking correct for both domains?** Yes. The pixel identifies the email by its `message_id`, not by domain, so opens from `foremp.email` and `foremp.eu` are both counted correctly. Neither domain is giving false data. The one caveat: mail 1 has no pixel at all (on purpose), so your real open rate is higher than the dashboard shows.
-2. **Do replies go to eric@foremp.se?** Yes. Every verified sending domain (`foremp.email`, `foremp.eu`, `foremp.one`, `botlio.email`, `botlio.eu`) has `reply_to_email = eric@foremp.se`, and that is set as Reply-To on every send.
-3. **Is the link in the later emails clickable?** Yes. Mails 2-4 are sent as HTML and every bare URL is turned into a real `<a href>` anchor before sending. Mail 1 is plain text and contains no link at all, by design.
+- **Is the tracking correct for both domains?** Yes. The pixel identifies the email by its `message_id`, not by domain. Opens from `foremp.email` and `foremp.eu` are both counted correctly. Neither domain is giving false data. The only caveat: mail 1 has no pixel at all (on purpose), so your real open rate is higher than the dashboard shows.
+- **Do replies go to eric@foremp.se?** Yes. Every verified sending domain has `reply_to_email = eric@foremp.se`.
+- **Is the link in the later emails clickable?** Yes. Mails 2-4 are HTML, and bare URLs are turned into real `<a href>` anchors. Mail 1 is plain text and has no link, by design.
+
+## Then why did I suggest changing tracking?
+
+Not because the data is wrong — because the pixel host does **not match** the From domain. Today the pixel loads from a `supabase.co` URL while the email says it is from `foremp.email`. Gmail sees that mismatch as a bulk-mail signal, which can push more of your emails into Promotions/Spam. Fixing it means hosting the pixel under each sending domain (e.g. `t.foremp.email`, `t.foremp.eu`) so the image host matches the From domain.
+
+That is a deliverability improvement, not a tracking-accuracy fix. If you do not want to spend time on it, leave it: the numbers are still correct.
+
 
 
 
