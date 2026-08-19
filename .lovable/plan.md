@@ -1,5 +1,13 @@
 # Open tracking across two domains + remaining DNS work
 
+## Short answers to your three questions
+
+1. **Is the tracking correct for both domains?** Yes. The pixel identifies the email by its `message_id`, not by domain, so opens from `foremp.email` and `foremp.eu` are both counted correctly. Neither domain is giving false data. The one caveat: mail 1 has no pixel at all (on purpose), so your real open rate is higher than the dashboard shows.
+2. **Do replies go to eric@foremp.se?** Yes. Every verified sending domain (`foremp.email`, `foremp.eu`, `foremp.one`, `botlio.email`, `botlio.eu`) has `reply_to_email = eric@foremp.se`, and that is set as Reply-To on every send.
+3. **Is the link in the later emails clickable?** Yes. Mails 2-4 are sent as HTML and every bare URL is turned into a real `<a href>` anchor before sending. Mail 1 is plain text and contains no link at all, by design.
+
+
+
 ## How tracking works today (verified)
 
 - Every follow-up email (mail 2, 3, 4) gets a 1x1 GIF whose URL is built by `trackingPixelUrl()` in `send-cold-email`.
