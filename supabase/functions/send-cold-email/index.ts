@@ -47,16 +47,18 @@ function plainToHtml(s: string, trackingPixelUrl?: string): string {
   return `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.55">${escaped}${pixel}</div>`
 }
 
-// Tracking pixel URL. Prefer a host on our own sending domain (set
-// TRACKING_BASE_URL to e.g. https://t.foremp.email) so the image host matches
-// the From domain — a remote image from an unrelated *.supabase.co host is one
-// of the strongest "bulk mail" signals Gmail looks at. Falls back to the
-// function URL when no custom host is configured.
-function trackingPixelUrl(supabaseUrl: string, messageId: string): string {
-  const custom = (Deno.env.get('TRACKING_BASE_URL') ?? '').trim().replace(/\/+$/, '')
-  const base = custom || `${supabaseUrl.replace(/\/+$/, '')}/functions/v1/track-open`
+// Tracking pixel URL. Prefer a host stored on the sending domain (e.g.
+// https://t.foremp.email) so the image host matches the From domain — a remote
+// image from an unrelated *.supabase.co host is one of the strongest "bulk mail"
+// signals Gmail looks at. Falls back to TRACKING_BASE_URL, then the Supabase
+// function URL when nothing else is configured.
+function trackingPixelUrl(domainRow: any, supabaseUrl: string, messageId: string): string {
+  const domainHost = (domainRow?.tracking_host ?? '').trim().replace(/\/+$/, '')
+  const globalHost = (Deno.env.get('TRACKING_BASE_URL') ?? '').trim().replace(/\/+$/, '')
+  const base = domainHost || globalHost || `${supabaseUrl.replace(/\/+$/, '')}/functions/v1/track-open`
   return `${base}/o/${encodeURIComponent(messageId)}.gif`
 }
+
 
 
 
@@ -443,10 +445,11 @@ Deno.serve(async (req) => {
       }
     } else {
       await sendLovableEmail(
-        { ...basePayload, html: plainToHtml(finalBody, trackingPixelUrl(url, messageId)) } as any,
+        { ...basePayload, html: plainToHtml(finalBody, trackingPixelUrl(domainRow, url, messageId)) } as any,
         { apiKey, idempotencyKey: messageId },
       )
     }
+
     await supabase.from('sent_emails').update({ status: 'sent' }).eq('id', messageId)
 
   } catch (err) {
