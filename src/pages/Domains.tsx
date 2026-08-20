@@ -88,49 +88,83 @@ const Domains = () => {
           ) : (
             <Table>
               <TableHeader>
-                <TableRow>
-                  <TableHead>Domain</TableHead>
-                  <TableHead>Brand</TableHead>
-                  <TableHead>Sender subdomain</TableHead>
-                  <TableHead>Reply-to</TableHead>
-                  <TableHead>Postal address</TableHead>
-                  <TableHead>Active</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {domains.map((d) => (
-                  <TableRow key={d.id}>
-                    <TableCell className="font-medium">{d.domain}</TableCell>
-                    <TableCell>{d.brand}</TableCell>
-                    <TableCell className="font-mono text-xs">
-                      {d.sender_subdomain}.{d.domain}
-                    </TableCell>
-                    <TableCell className="text-xs">{d.reply_to_email}</TableCell>
-                    <TableCell className="text-xs">
-                      {d.postal_address?.trim() ? (
-                        <span className="text-muted-foreground">{d.postal_address}</span>
-                      ) : (
-                        <Badge variant="outline" className="text-xs">Not set (GDPR)</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={d.is_active ? "default" : "secondary"}>
-                        {d.is_active ? "Yes" : "No"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      {d.is_verified ? (
-                        <Badge className="gap-1">
-                          <CheckCircle2 className="h-3 w-3" /> Verified — can send
-                        </Badge>
-                      ) : (
-                        <Badge variant="destructive" className="gap-1">
-                          <XCircle className="h-3 w-3" /> Not verified — cannot send
-                        </Badge>
-                      )}
-                    </TableCell>
+                  <TableRow>
+                    <TableHead>Domain</TableHead>
+                    <TableHead>Brand</TableHead>
+                    <TableHead>Sender subdomain</TableHead>
+                    <TableHead>Reply-to</TableHead>
+                    <TableHead>Postal address</TableHead>
+                    <TableHead>Tracking host</TableHead>
+                    <TableHead>Active</TableHead>
+                    <TableHead>Status</TableHead>
                   </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {domains.map((d) => (
+                    <TableRow key={d.id}>
+                      <TableCell className="font-medium">{d.domain}</TableCell>
+                      <TableCell>{d.brand}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {d.sender_subdomain}.{d.domain}
+                      </TableCell>
+                      <TableCell className="text-xs">{d.reply_to_email}</TableCell>
+                      <TableCell className="text-xs">
+                        {d.postal_address?.trim() ? (
+                          <span className="text-muted-foreground">{d.postal_address}</span>
+                        ) : (
+                          <Badge variant="outline" className="text-xs">Not set (GDPR)</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-xs min-w-[200px]">
+                        {editing[d.id] !== undefined ? (
+                          <div className="flex items-center gap-2">
+                            <Input
+                              value={editing[d.id]}
+                              onChange={(e) => setEditing((prev) => ({ ...prev, [d.id]: e.target.value }))}
+                              placeholder="t.foremp.email"
+                              className="h-7 text-xs"
+                            />
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7"
+                              disabled={saving[d.id]}
+                              onClick={() => saveTrackingHost(d.id)}
+                            >
+                              <Save className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setEditing((prev) => ({ ...prev, [d.id]: d.tracking_host ?? "" }))}
+                            className="text-left hover:underline text-muted-foreground"
+                          >
+                            {d.tracking_host?.trim() ? (
+                              <span className="font-mono text-foreground">{d.tracking_host}</span>
+                            ) : (
+                              <span>Not set (Supabase fallback)</span>
+                            )}
+                          </button>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={d.is_active ? "default" : "secondary"}>
+                          {d.is_active ? "Yes" : "No"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {d.is_verified ? (
+                          <Badge className="gap-1">
+                            <CheckCircle2 className="h-3 w-3" /> Verified — can send
+                          </Badge>
+                        ) : (
+                          <Badge variant="destructive" className="gap-1">
+                            <XCircle className="h-3 w-3" /> Not verified — cannot send
+                          </Badge>
+                        )}
+                      </TableCell>
+                    </TableRow>
+
                 ))}
               </TableBody>
             </Table>
