@@ -18,7 +18,9 @@ interface Domain {
   is_active: boolean;
   is_verified: boolean;
   postal_address: string | null;
+  tracking_host: string | null;
 }
+
 
 const Domains = () => {
   const [domains, setDomains] = useState<Domain[]>([]);
