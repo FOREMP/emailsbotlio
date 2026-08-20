@@ -445,10 +445,11 @@ Deno.serve(async (req) => {
       }
     } else {
       await sendLovableEmail(
-        { ...basePayload, html: plainToHtml(finalBody, trackingPixelUrl(url, messageId)) } as any,
+        { ...basePayload, html: plainToHtml(finalBody, trackingPixelUrl(domainRow, url, messageId)) } as any,
         { apiKey, idempotencyKey: messageId },
       )
     }
+
     await supabase.from('sent_emails').update({ status: 'sent' }).eq('id', messageId)
 
   } catch (err) {
