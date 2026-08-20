@@ -25,18 +25,46 @@ interface Domain {
 const Domains = () => {
   const [domains, setDomains] = useState<Domain[]>([]);
   const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
-    (async () => {
-      const { data } = await supabase
-        .from("sending_domains")
-        .select("*")
-        .order("is_verified", { ascending: false })
-        .order("domain", { ascending: true });
-      setDomains((data ?? []) as Domain[]);
-      setLoading(false);
-    })();
+    loadDomains();
   }, []);
+
+  const loadDomains = async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from("sending_domains")
+      .select("*")
+      .order("is_verified", { ascending: false })
+      .order("domain", { ascending: true });
+    setDomains((data ?? []) as Domain[]);
+    setLoading(false);
+  };
+
+  const saveTrackingHost = async (id: string) => {
+    const host = editing[id]?.trim() || null;
+    setSaving((s) => ({ ...s, [id]: true }));
+    const { error } = await supabase
+      .from("sending_domains")
+      .update({ tracking_host: host })
+      .eq("id", id);
+    setSaving((s) => ({ ...s, [id]: false }));
+    if (error) {
+      console.error("Failed to update tracking_host", error);
+      return;
+    }
+    setDomains((prev) =>
+      prev.map((d) => (d.id === id ? { ...d, tracking_host: host } : d))
+    );
+    setEditing((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  };
+
 
   const unverified = domains.filter((d) => !d.is_verified);
   const missingPostal = domains.filter((d) => d.is_verified && d.is_active && !d.postal_address?.trim());
