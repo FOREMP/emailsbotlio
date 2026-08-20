@@ -1,0 +1,1 @@
+CREATE POLICY "Authenticated can update sending_domains" ON public.sending_domains FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
