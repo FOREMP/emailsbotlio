@@ -738,6 +738,7 @@ export type Database = {
           postal_address: string | null
           reply_to_email: string
           sender_subdomain: string
+          tracking_host: string | null
           updated_at: string
         }
         Insert: {
@@ -750,6 +751,7 @@ export type Database = {
           postal_address?: string | null
           reply_to_email: string
           sender_subdomain?: string
+          tracking_host?: string | null
           updated_at?: string
         }
         Update: {
@@ -762,6 +764,7 @@ export type Database = {
           postal_address?: string | null
           reply_to_email?: string
           sender_subdomain?: string
+          tracking_host?: string | null
           updated_at?: string
         }
         Relationships: []
