@@ -172,6 +172,63 @@ const Domains = () => {
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader>
+          <CardTitle>Automatic tracking host</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Sets up a Vercel proxy that serves the open-tracking pixel from{" "}
+            <span className="font-mono">t.&lt;your domain&gt;</span> so the image host matches the
+            From domain. Add the CNAME below at your DNS provider, then run it again to finish.
+          </p>
+          <Button onClick={runSetup} disabled={setupRunning}>
+            {setupRunning ? "Setting up…" : "Set up tracking host automatically"}
+          </Button>
+          {setupError && (
+            <Alert variant="destructive">
+              <XCircle className="h-4 w-4" />
+              <AlertTitle>Setup failed</AlertTitle>
+              <AlertDescription className="text-xs">{setupError}</AlertDescription>
+            </Alert>
+          )}
+          {setupResults.length > 0 && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Domain</TableHead>
+                  <TableHead>Tracking host</TableHead>
+                  <TableHead>DNS record to add</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {setupResults.map((r) => (
+                  <TableRow key={r.domain}>
+                    <TableCell className="font-medium">{r.domain}</TableCell>
+                    <TableCell className="font-mono text-xs">{r.tracking_host}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      CNAME&nbsp;&nbsp;t.{r.domain}&nbsp;&nbsp;→&nbsp;&nbsp;{r.dns?.value}
+                    </TableCell>
+                    <TableCell>
+                      {r.verified ? (
+                        <Badge className="gap-1">
+                          <CheckCircle2 className="h-3 w-3" /> Verified
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline">Waiting for DNS</Badge>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+
+
       {unverified.length > 0 && (
         <Alert>
           <Info className="h-4 w-4" />
