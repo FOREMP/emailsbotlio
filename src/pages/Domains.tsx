@@ -27,6 +27,27 @@ const Domains = () => {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<Record<string, boolean>>({});
+  const [setupRunning, setSetupRunning] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const [setupResults, setSetupResults] = useState<any[]>([]);
+
+  const runSetup = async () => {
+    setSetupRunning(true);
+    setSetupError(null);
+    const { data, error } = await supabase.functions.invoke("setup-tracking-proxy");
+    setSetupRunning(false);
+    if (error) {
+      setSetupError(error.message);
+      return;
+    }
+    if ((data as any)?.error) {
+      setSetupError(String((data as any).error));
+      return;
+    }
+    setSetupResults(((data as any)?.results ?? []) as any[]);
+    loadDomains();
+  };
+
 
   useEffect(() => {
     loadDomains();
