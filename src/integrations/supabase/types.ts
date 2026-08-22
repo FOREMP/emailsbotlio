@@ -1022,6 +1022,7 @@ export type Database = {
           audit_details: Json | null
           audit_reason: string | null
           audit_score: number | null
+          auto_send: boolean
           category: string | null
           company_name: string
           company_name_normalized: string
@@ -1043,6 +1044,7 @@ export type Database = {
           reviews_count: number | null
           source_file_id: string | null
           status: string
+          triaged_at: string | null
           updated_at: string
           user_id: string
           website: string | null
@@ -1053,6 +1055,7 @@ export type Database = {
           audit_details?: Json | null
           audit_reason?: string | null
           audit_score?: number | null
+          auto_send?: boolean
           category?: string | null
           company_name: string
           company_name_normalized: string
@@ -1074,6 +1077,7 @@ export type Database = {
           reviews_count?: number | null
           source_file_id?: string | null
           status?: string
+          triaged_at?: string | null
           updated_at?: string
           user_id: string
           website?: string | null
@@ -1084,6 +1088,7 @@ export type Database = {
           audit_details?: Json | null
           audit_reason?: string | null
           audit_score?: number | null
+          auto_send?: boolean
           category?: string | null
           company_name?: string
           company_name_normalized?: string
@@ -1105,6 +1110,7 @@ export type Database = {
           reviews_count?: number | null
           source_file_id?: string | null
           status?: string
+          triaged_at?: string | null
           updated_at?: string
           user_id?: string
           website?: string | null
