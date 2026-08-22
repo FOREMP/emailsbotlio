@@ -21,7 +21,7 @@ import {
   selectBlockTemplateFamily,
   type BlockTemplateFamily,
   type BlockTemplateFamilyKey,
-} from '../process-site-jobs/block-templates.ts'
+} from '../_shared/block-templates.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
