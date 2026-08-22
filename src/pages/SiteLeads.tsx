@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { FileSpreadsheet, Upload, Pencil, Trash2, Play, Pause, StopCircle, Wand2, RefreshCw } from "lucide-react";
 import * as XLSX from "xlsx";
+import TriageQueue from "@/components/site-leads/TriageQueue";
 
 type Lead = {
   id: string;
@@ -27,6 +28,7 @@ type Lead = {
   review_snippets: string[] | null;
   feedback: string | null;
   status: string;
+  auto_send?: boolean | null;
   audit_score: number | null;
   demo_url: string | null;
   created_at: string;
@@ -70,11 +72,13 @@ const ROLE_LABELS: Record<ImportRole, string> = {
 const STATUS_OPTIONS = [
   "pending_audit",
   "auditing",
+  "needs_triage",
   "site_good_enough",
   "needs_site",
   "generating",
   "awaiting_approval",
   "approved",
+  "auto_approved",
   "skipped_no_contact",
   "failed",
 ];
@@ -83,10 +87,12 @@ const STATUS_COLORS: Record<string, string> = {
   pending_audit: "bg-slate-500",
   auditing: "bg-blue-500",
   site_good_enough: "bg-green-500",
+  needs_triage: "bg-orange-500",
   needs_site: "bg-amber-500",
   generating: "bg-purple-500",
   awaiting_approval: "bg-indigo-500",
   approved: "bg-emerald-500",
+  auto_approved: "bg-teal-500",
   skipped_no_contact: "bg-neutral-400",
   failed: "bg-red-500",
 };
@@ -124,6 +130,7 @@ export default function SiteLeads() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [page, setPage] = useState(1);
+  const [triageRefresh, setTriageRefresh] = useState(0);
 
   // Automation switch + manual override (moved here from the old Sites page)
   const [autoState, setAutoState] = useState<"running" | "paused" | "stopped">("running");
@@ -169,7 +176,7 @@ export default function SiteLeads() {
       const { data, error, count } = await applyListFilters(
         supabase
         .from("site_leads")
-        .select("id, company_name, email, website, phone, address, category, niche, rating, reviews_count, review_snippets, feedback, status, audit_score, demo_url, created_at, language", { count: "exact" }),
+        .select("id, company_name, email, website, phone, address, category, niche, rating, reviews_count, review_snippets, feedback, status, auto_send, audit_score, demo_url, created_at, language", { count: "exact" }),
         true,
       );
       if (error) throw error;
@@ -356,6 +363,7 @@ export default function SiteLeads() {
       const { error } = await supabase.from("site_leads").update(patch as any).in("id", ids);
       if (error) throw error;
       toast({ title: `${ids.length} leads uppdaterade`, description: label });
+      setTriageRefresh((n) => n + 1);
       await load();
     } catch (err) {
       toast({ title: "Kunde inte uppdatera", description: (err as Error).message, variant: "destructive" });
@@ -635,6 +643,13 @@ export default function SiteLeads() {
 
 
 
+      <TriageQueue
+        languageFilter={languageFilter}
+        nicheFilter={nicheFilter}
+        refreshKey={triageRefresh}
+        onChanged={() => load()}
+      />
+
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {Object.entries(counts).map(([k, v]) => (
           <Card key={k} className="p-4">
@@ -691,9 +706,13 @@ export default function SiteLeads() {
       {selected.size > 0 && (
         <Card className="p-3 flex flex-wrap items-center gap-2 border-primary/40">
           <span className="text-sm font-medium">{selected.size} valda</span>
-          <Button size="sm" variant="outline" disabled={bulkBusy}
-            onClick={() => bulkSet({ status: "needs_site" }, "Köade för hemsidebygge")}>
-            Köa för hemsida
+          <Button size="sm" variant="default" disabled={bulkBusy}
+            onClick={() => bulkSet({ status: "needs_site", auto_send: true, triaged_at: new Date().toISOString() }, "Byggs och skickas direkt")}>
+            Bygg + skicka direkt
+          </Button>
+          <Button size="sm" variant="secondary" disabled={bulkBusy}
+            onClick={() => bulkSet({ status: "needs_site", auto_send: false, triaged_at: new Date().toISOString() }, "Byggs, du granskar innan utskick")}>
+            Bygg + jag granskar
           </Button>
           <Button size="sm" variant="default" className="gap-1" disabled={bulkBusy} onClick={forceBuildSelected}>
             <Wand2 className="h-4 w-4" /> Bygg nu (override)
@@ -704,7 +723,7 @@ export default function SiteLeads() {
             Kör audit igen
           </Button>
           <Button size="sm" variant="outline" disabled={bulkBusy}
-            onClick={() => bulkSet({ status: "site_good_enough" }, "Uteslutna från bygget")}>
+            onClick={() => bulkSet({ status: "site_good_enough", auto_send: false }, "Uteslutna från bygget")}>
             Ta bort från byggkön
           </Button>
           <Select disabled={bulkBusy} onValueChange={(v) => bulkSet({ niche: v }, "Bransch uppdaterad")}>
@@ -756,7 +775,10 @@ export default function SiteLeads() {
                   {l.website ? <a href={l.website} target="_blank" rel="noreferrer" className="underline">{l.website}</a> : "—"}
                 </td>
                 <td className="p-3">
-                  <Badge className={STATUS_COLORS[l.status] ?? "bg-slate-400"}>{l.status}</Badge>
+                  <div className="flex flex-wrap items-center gap-1">
+                    <Badge className={STATUS_COLORS[l.status] ?? "bg-slate-400"}>{l.status}</Badge>
+                    {l.auto_send && <Badge variant="outline" className="text-[10px]">auto</Badge>}
+                  </div>
                 </td>
                 <td className="p-3">{l.audit_score ?? "—"}</td>
                 <td className="p-3">

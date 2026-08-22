@@ -5,7 +5,7 @@ import {
   templateDirective,
   templatePromptNotes,
   type BlockTemplateFamilyKey,
-} from './block-templates.ts'
+} from '../_shared/block-templates.ts'
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 export const BUILD_MODEL = 'deepseek/deepseek-v4-flash-0731'

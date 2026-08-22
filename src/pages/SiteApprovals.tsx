@@ -34,10 +34,12 @@ const STATUS_BADGE: Record<string, string> = {
   generating: "bg-purple-500",
   failed: "bg-red-500",
   approved: "bg-emerald-500",
+  auto_approved: "bg-teal-500",
+  needs_triage: "bg-orange-500",
   needs_site: "bg-amber-500",
 };
 
-const APPROVAL_STATUSES = ["awaiting_approval", "generating", "failed", "approved", "site_good_enough", "needs_site"] as const;
+const APPROVAL_STATUSES = ["awaiting_approval", "generating", "failed", "approved", "auto_approved", "site_good_enough", "needs_triage", "needs_site"] as const;
 const APPROVALS_PAGE_SIZE = 20;
 
 function isCanonicalDemoUrl(value?: string | null): boolean {
@@ -445,6 +447,9 @@ export default function SiteApprovals() {
                 <div className="flex items-center gap-2">
                   <h2 className="text-lg font-semibold">{row.company_name}</h2>
                   <Badge className={STATUS_BADGE[row.status] ?? "bg-slate-500"}>{row.status}</Badge>
+                  {row.status === "auto_approved" && (
+                    <Badge variant="outline" className="ml-1 text-[10px]">auto-skickad</Badge>
+                  )}
                   <Badge variant="outline">{(row.language ?? "sv").toUpperCase()}</Badge>
                   {row.audit_score != null && (
                     <Badge variant="outline">Audit {row.audit_score}/10</Badge>

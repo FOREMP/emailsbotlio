@@ -13,7 +13,7 @@ import {
   BLOCK_TEMPLATE_FAMILIES,
   selectBlockTemplateFamily,
   type BlockTemplateFamilyKey,
-} from './block-templates.ts'
+} from '../_shared/block-templates.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
