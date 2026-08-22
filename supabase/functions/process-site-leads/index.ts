@@ -447,7 +447,7 @@ async function reconcile(
   // Only look at leads currently mid-flight
   const { data: leads } = await supabase
     .from('site_leads')
-    .select('id, status, generated_site_id')
+    .select('id, user_id, company_name, language, email, phone, website, category, audit_score, audit_reason, audit_details, demo_url, status, auto_send, generated_site_id')
     .eq('status', 'generating')
     .not('generated_site_id', 'is', null)
     .limit(50)
@@ -492,6 +492,26 @@ async function reconcile(
         demo_url: gs.demo_site_url,
       }).eq('id', lead.id)
       moved++
+
+      // Pre-triaged as "build + send directly" → enroll now, no second review.
+      if ((lead as any).auto_send && (lead as any).email) {
+        try {
+          await approveLeadForOutreach(supabase, {
+            ...(lead as any),
+            demo_url: gs.demo_site_url,
+          })
+          await supabase.from('site_leads').update({
+            status: 'auto_approved',
+            approved_at: new Date().toISOString(),
+          }).eq('id', lead.id)
+        } catch (e) {
+          // Stays in awaiting_approval so it never disappears silently.
+          await supabase.from('site_leads').update({
+            feedback: `Auto-send failed, needs manual approval: ${(e as Error).message}`.slice(0, 400),
+          }).eq('id', lead.id)
+          report.errors.push(`auto-approve ${lead.id}: ${(e as Error).message}`)
+        }
+      }
     } else if (gs.status === 'failed') {
       await supabase.from('site_leads').update({
         status: 'failed',
@@ -541,7 +561,7 @@ async function auditOne(
 
   if (unreachable || !markdown) {
     await supabase.from('site_leads').update({
-      status: 'needs_site',
+      status: 'needs_triage',
       audit_score: 1,
       audit_reason: unreachable ? 'Could not reach existing website.' : 'Site returned empty content.',
       audit_details: { weaknesses: ['Ingen nåbar eller läsbar hemsida idag.'] },
@@ -595,7 +615,8 @@ async function auditOne(
   let parsed: { score: number; reason: string; weaknesses?: string[] } = { score: 5, reason: 'unparsed' }
   try { parsed = JSON.parse(aiData.choices?.[0]?.message?.content ?? '{}') } catch (_) { /* keep default */ }
   const score = Math.max(1, Math.min(10, Math.round(parsed.score)))
-  const nextStatus = score >= 7 ? 'site_good_enough' : 'needs_site'
+  // Below the quality bar → the user triages it (build+send directly, build+review, or park).
+  const nextStatus = score >= 7 ? 'site_good_enough' : 'needs_triage'
 
   await supabase.from('site_leads').update({
     status: nextStatus,
