@@ -14,6 +14,7 @@
 // pg_net can hit the function endpoint (verify_jwt is off).
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { classifyNiche, type NicheKey } from '../_shared/niche.ts'
+import { approveLeadForOutreach } from '../_shared/approve-lead.ts'
 import {
   blockTemplateFamilyCatalog,
   BLOCK_TEMPLATE_FAMILIES,
