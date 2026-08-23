@@ -622,10 +622,10 @@ Deno.serve(async (req) => {
               failed++; continue
             }
             const dom = (specific.from_email as string).split('@')[1]
-            if (cfg.sender_domain && dom !== cfg.sender_domain) {
+            if (allowedDomains.length > 0 && !allowedDomains.includes(dom)) {
               await supabase.from('enrollments').update({
                 status: 'failed',
-                last_error: `configured sender must use ${cfg.sender_domain}`,
+                last_error: `configured sender must use ${domainLabel}`,
                 error_at: nowIso,
               }).eq('id', enr.id)
               failed++; continue
@@ -641,18 +641,19 @@ Deno.serve(async (req) => {
             preSenderId = cfg.sender_id
           } else {
             let candidates = verifiedActive
-            if (cfg.sender_domain) {
-              candidates = candidates.filter((s: any) => (s.from_email as string).split('@')[1] === cfg.sender_domain)
+            if (allowedDomains.length > 0) {
+              candidates = candidates.filter((s: any) => allowedDomains.includes((s.from_email as string).split('@')[1]))
               if (candidates.length === 0) {
-                console.warn(`[enr ${enr.id}] no verified senders on domain "${cfg.sender_domain}" → failed`)
+                console.warn(`[enr ${enr.id}] no verified senders on domain "${domainLabel}" → failed`)
                 await supabase.from('enrollments').update({
                   status: 'failed',
-                  last_error: `no verified active senders on ${cfg.sender_domain}`,
+                  last_error: `no verified active senders on ${domainLabel}`,
                   error_at: nowIso,
                 }).eq('id', enr.id)
                 failed++; continue
               }
             }
+
             if (cfg.sender_strategy === 'brand' && cfg.brand) {
               const filtered = candidates.filter((s: any) => {
                 const dom = (s.from_email as string).split('@')[1] ?? ''
