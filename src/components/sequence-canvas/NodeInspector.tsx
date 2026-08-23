@@ -255,6 +255,18 @@ export const NodeInspector = ({ node, onChange, onClose, onDelete, contactListId
               </div>
             )}
             <div>
+              <Label>Sender domain(s)</Label>
+              <Input
+                value={cfg.sender_domain ?? ""}
+                onChange={(e) => set("sender_domain", e.target.value)}
+                placeholder="foremp.eu,foremp.one"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Restrict this send to specific domains. Leave empty for no restriction, or list several separated by commas.
+              </p>
+            </div>
+
+            <div>
               <Label>Email content</Label>
               <div className="grid grid-cols-2 gap-2 mt-1">
                 <Button
