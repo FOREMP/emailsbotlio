@@ -6,14 +6,22 @@ import {
   templatePromptNotes,
   type BlockTemplateFamilyKey,
 } from '../_shared/block-templates.ts'
+import {
+  kindsForSections,
+  pickVariant,
+  variantById,
+  type FamilyVariant,
+  type SectionKind,
+} from './sections.ts'
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 export const BUILD_MODEL = 'deepseek/deepseek-v4-flash-0731'
 export const BUILD_FALLBACK_MODEL = 'deepseek/deepseek-chat-v3.1'
 export const BUILD_LAST_RESORT_MODEL = 'openai/gpt-4o-mini'
 export const LANG_MODEL = 'openai/gpt-4o-mini'
-const VERSION = 10
+const VERSION = 11
 const MAX_PAGES = 6
+
 type Stage = 'plan' | 'theme' | 'content' | 'polish_content' | 'render' | 'quality_check' | 'done'
 
 export interface FreeformFacts {
