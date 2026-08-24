@@ -689,26 +689,24 @@ function fallbackContent(ctx: FreeformCtx, page: FreeformPageSpec): FreeformPage
 function render(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, c: FreeformPageContent): string {
   const business = decodeText(ctx.facts.business_name || ctx.nicheLabel || (isEnglish(ctx) ? 'Business' : 'Företaget'))
   const imgs = images(ctx)
+  const variant = variantFor(ctx, plan)
   const home = page.slug === 'index'
   const faqPage = page.pageKind === 'faq'
   const processPage = page.pageKind === 'process'
   const contactPage = page.pageKind === 'contact'
-  const showServices = shouldRenderServices(plan, page)
-  const showIntro = shouldRenderIntro(plan, page)
-  const showGallery = shouldRenderGallery(plan, page, home)
-  const showContact = shouldRenderContact(plan, page)
+  const flags = {
+    home,
+    faqPage,
+    processPage,
+    contactPage,
+    showServices: shouldRenderServices(plan, page),
+    showIntro: shouldRenderIntro(plan, page),
+    showGallery: shouldRenderGallery(plan, page, home),
+    showContact: shouldRenderContact(plan, page),
+  }
   const html = [
     nav(plan, business, page.slug, ctx),
-    ...familyBody(plan, page, c, ctx, imgs, {
-      home,
-      faqPage,
-      processPage,
-      contactPage,
-      showServices,
-      showIntro,
-      showGallery,
-      showContact,
-    }),
+    ...familyBody(plan, page, c, ctx, imgs, variant, flags),
     footer(plan, business, ctx),
   ].filter(Boolean).join('\n')
   return `<!DOCTYPE html>
@@ -720,34 +718,91 @@ function render(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, c:
   <meta name='description' content='${attr(c.metaDescription || business)}'>
   <link rel='stylesheet' href='style.css'>
 </head>
-<body class='template-${attr(plan.templateFamily || 'service_clarity_default')}'>
+<body class='template-${attr(plan.templateFamily || 'service_clarity_default')} variant-${attr(variant.id)}'>
 ${html}
 </body>
 </html>`
 }
 
+interface BodyFlags {
+  home: boolean
+  faqPage: boolean
+  processPage: boolean
+  contactPage: boolean
+  showServices: boolean
+  showIntro: boolean
+  showGallery: boolean
+  showContact: boolean
+}
+
+/**
+ * Section-driven page body. The section keys declared by the template family
+ * decide both which blocks appear and in which order; the variant decides how
+ * the hero, service list and gallery are laid out.
+ */
 function familyBody(
   plan: FreeformPlan,
   page: FreeformPageSpec,
   c: FreeformPageContent,
   ctx: FreeformCtx,
   imgs: string[],
-  flags: {
-    home: boolean
-    faqPage: boolean
-    processPage: boolean
-    contactPage: boolean
-    showServices: boolean
-    showIntro: boolean
-    showGallery: boolean
-    showContact: boolean
-  },
+  variant: FamilyVariant,
+  flags: BodyFlags,
 ): string[] {
-  const heroBlock = flags.home ? hero(c, imgs[0], ctx) : pageHero(c, imgs[0], ctx)
+  const renderKind = (kind: SectionKind): string => {
+    switch (kind) {
+      case 'hero':
+        return flags.home
+          ? hero(c, imgs[0], ctx, variant.heroLayout)
+          : pageHero(c, imgs[0], ctx, variant.pageHeroLayout)
+      case 'intro':
+        return flags.showIntro ? intro(c, imgs[1], ctx) : ''
+      case 'services':
+        return flags.showServices ? services(c, ctx, variant.serviceStyle) : ''
+      case 'sections':
+        return sections(c, false, ctx)
+      case 'process':
+        return sections(c, true, ctx)
+      case 'gallery':
+        return flags.showGallery ? gallery(ctx, imgs, variant.galleryStyle) : ''
+      case 'trust':
+        return trustBand(ctx, c)
+      case 'faq':
+        return faq(c, flags.faqPage, ctx)
+      case 'contact':
+        return flags.showContact ? contact(ctx, c) : ''
+      case 'cta':
+        return flags.contactPage ? '' : cta(c, ctx)
+      default:
+        return ''
+    }
+  }
+
+  const kinds = kindsForSections(page.sections)
+  const rendered = kinds.map(renderKind).filter(Boolean)
+  // A page whose section list produced nothing but a hero falls back to the
+  // known-good ordering so no lead ever ends up with an empty page.
+  if (rendered.length > 1) {
+    if (!kinds.includes('contact') && flags.contactPage) rendered.push(renderKind('contact'))
+    if (!kinds.includes('cta') && !flags.contactPage) rendered.push(renderKind('cta'))
+    return rendered.filter(Boolean)
+  }
+  return legacyBody(plan, c, ctx, imgs, variant, flags)
+}
+
+function legacyBody(
+  plan: FreeformPlan,
+  c: FreeformPageContent,
+  ctx: FreeformCtx,
+  imgs: string[],
+  variant: FamilyVariant,
+  flags: BodyFlags,
+): string[] {
+  const heroBlock = flags.home ? hero(c, imgs[0], ctx, variant.heroLayout) : pageHero(c, imgs[0], ctx, variant.pageHeroLayout)
   const introBlock = flags.showIntro ? intro(c, imgs[1], ctx) : ''
-  const servicesBlock = flags.showServices ? services(c, ctx) : ''
+  const servicesBlock = flags.showServices ? services(c, ctx, variant.serviceStyle) : ''
   const sectionsBlock = sections(c, flags.processPage, ctx)
-  const galleryBlock = flags.showGallery ? gallery(ctx, imgs) : ''
+  const galleryBlock = flags.showGallery ? gallery(ctx, imgs, variant.galleryStyle) : ''
   const faqBlock = faq(c, flags.faqPage, ctx)
   const contactBlock = flags.showContact ? contact(ctx, c) : ''
   const ctaBlock = flags.contactPage ? '' : cta(c, ctx)
@@ -763,6 +818,7 @@ function familyBody(
   }
   return [heroBlock, introBlock, servicesBlock, sectionsBlock, galleryBlock, faqBlock, contactBlock, ctaBlock]
 }
+
 
 function nav(plan: FreeformPlan, business: string, active: string, ctx: FreeformCtx): string {
   const en = isEnglish(ctx)
