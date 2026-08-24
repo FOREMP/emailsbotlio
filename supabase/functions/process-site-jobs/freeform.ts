@@ -207,9 +207,17 @@ function buildPlan(ctx: FreeformCtx): FreeformPlan {
     templateFamily: family.key,
     templateLabel: family.label,
     templateNotes: [...family.notesFromEric, ...family.aiDecisionNotes],
+    variant: pickVariant(family.key, `${ctx.siteId}:${family.key}`).id,
     pages,
   }
 }
+
+/** The layout variant for this build — stable per lead, never random. */
+function variantFor(ctx: FreeformCtx, plan?: FreeformPlan): FamilyVariant {
+  const family = plan?.templateFamily
+  return variantById(family, plan?.variant) ?? pickVariant(family, `${ctx.siteId}:${family ?? 'default'}`)
+}
+
 
 // --------------------------------------------------------------------------
 // Business classification.
