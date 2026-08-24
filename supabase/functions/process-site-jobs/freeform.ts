@@ -51,7 +51,7 @@ export interface FreeformCtx {
   progress: FreeformProgress | null
 }
 export interface FreeformPageSpec { slug: string; title: string; purpose: string; sections: string[]; pageKind?: 'landing' | 'services' | 'process' | 'about' | 'faq' | 'contact'; templateFamily?: BlockTemplateFamilyKey }
-export interface FreeformPlan { designDirective?: string; templateFamily?: BlockTemplateFamilyKey; templateLabel?: string; templateNotes?: string[]; pages: FreeformPageSpec[] }
+export interface FreeformPlan { designDirective?: string; templateFamily?: BlockTemplateFamilyKey; templateLabel?: string; templateNotes?: string[]; variant?: string; pages: FreeformPageSpec[] }
 export interface BusinessProfile {
   category: string
   businessType: string
