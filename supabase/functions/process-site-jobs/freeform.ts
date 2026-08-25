@@ -1003,9 +1003,50 @@ function buildCss(ctx: FreeformCtx, plan?: FreeformPlan): string {
 @media(max-width:960px){.wrap{width:min(100% - 32px,var(--wrap))}.nav-desktop{display:none!important}.nav-mobile{display:block!important}.brand{max-width:calc(100vw - 140px)}.split,.contact-grid,.footer-grid,.cta-band{grid-template-columns:1fr}.grid{grid-template-columns:1fr 1fr}.gallery-grid{grid-template-columns:1fr 1fr}.hero{min-height:auto;align-items:center}}
 @media(min-width:961px){.nav-mobile{display:none!important}.nav-desktop{display:flex!important}}
 @media(max-width:640px){body{font-size:15px}.wrap{width:calc(100% - 28px)}.nav-shell{min-height:68px}.brand{font-size:19px;max-width:calc(100vw - 122px)}.section{padding:58px 0}.hero{padding:72px 0 44px}.hero-card{padding:24px;border-radius:24px}h1{font-size:clamp(38px,13vw,58px);max-width:11ch}h2{font-size:clamp(29px,10vw,44px)}.lead{font-size:16px}.grid,.gallery-grid{grid-template-columns:1fr}.btn-row{display:grid}.btn{width:100%;min-height:52px}.media-card img,.gallery-grid img,.gallery-grid img:first-child{height:230px}.cta-band{border-radius:24px;padding:26px}}
+${LAYOUT_CSS}
 ${templateCss(template)}
+${variantCss(variantFor(ctx, plan))}
 `.trim()
 }
+
+/** Styles for the layout blocks the variant system can pick. */
+const LAYOUT_CSS = `
+.hero-split,.hero-calm,.hero-type,.page-hero-calm{background:linear-gradient(180deg,color-mix(in srgb,var(--surface) 70%,var(--background)),var(--background))}
+.hero-split{min-height:auto;align-items:center;padding:clamp(70px,8vw,120px) 0}
+.hero-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(260px,.95fr);gap:clamp(28px,5vw,72px);align-items:center}
+.hero-figure{margin:0;overflow:hidden;border-radius:var(--radius);box-shadow:0 30px 90px var(--shadow)}
+.hero-figure img{position:static;width:100%;height:clamp(320px,46vw,560px);object-fit:cover;filter:none}
+.hero-calm{min-height:auto;align-items:center;padding:clamp(84px,10vw,150px) 0;text-align:left}
+.hero-panel{display:flex;flex-wrap:wrap;gap:12px;margin-top:32px}
+.hero-panel span{padding:12px 18px;border:1px solid var(--border);border-radius:999px;background:color-mix(in srgb,var(--surface) 84%,transparent);font-weight:800;font-size:14px}
+.hero-industrial{align-items:end}
+.hero-industrial .hero-slab{max-width:820px;padding:clamp(28px,4vw,54px);border-left:6px solid var(--primary);background:color-mix(in srgb,var(--background) 84%,transparent);box-shadow:0 30px 90px var(--shadow)}
+.hero-type{min-height:auto;padding:clamp(96px,12vw,170px) 0 clamp(60px,8vw,110px);text-align:center}
+.hero-type .wrap{display:grid;justify-items:center}
+.hero-type h1{max-width:16ch;text-align:center}
+.hero-type .lead{text-align:center;max-width:58ch}
+.hero-type .rule{width:120px;height:2px;margin:26px 0;background:var(--primary)}
+.page-hero-calm{padding:clamp(90px,10vw,140px) 0 clamp(48px,6vw,80px)}
+.service-rows{display:grid;gap:0;margin-top:34px;border-top:1px solid var(--border)}
+.service-rows article{display:grid;grid-template-columns:78px minmax(0,.9fr) minmax(0,1.35fr);gap:24px;align-items:start;padding:clamp(22px,3vw,34px) 0;border-bottom:1px solid var(--border)}
+.service-rows .num{font-family:var(--display);font-size:20px;font-weight:900;color:var(--primary)}
+.service-rows p+p{margin-top:10px}
+.trust-band{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:clamp(20px,3vw,40px);padding:clamp(26px,4vw,46px);border:1px solid var(--border);border-radius:var(--radius);background:color-mix(in srgb,var(--surface) 76%,transparent)}
+.trust-band h3{margin-bottom:10px;font-size:clamp(18px,1.7vw,23px)}
+.gallery-strip-section{padding-bottom:0}
+.gallery-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:clamp(32px,5vw,56px)}
+.gallery-strip img{width:100%;height:clamp(220px,26vw,380px);object-fit:cover}
+@media(max-width:960px){.hero-grid,.trust-band{grid-template-columns:1fr}.service-rows article{grid-template-columns:52px 1fr}.service-rows article>div{grid-column:1/-1}.gallery-strip{grid-template-columns:1fr 1fr}}
+@media(max-width:640px){.service-rows article{grid-template-columns:1fr;gap:10px}.hero-figure img{height:260px}.gallery-strip{grid-template-columns:1fr}}
+`.trim()
+
+/** Small per-variant tweaks so two leads in the same family never match. */
+function variantCss(v: FamilyVariant): string {
+  if (v.id === 'b') return `body.variant-b{--radius:14px}\nbody.variant-b .btn{border-radius:10px}\nbody.variant-b .cta-band{border-radius:18px}\nbody.variant-b .card{box-shadow:none;border-width:1px}\nbody.variant-b .eyebrow:before{width:44px}`
+  if (v.id === 'c') return `body.variant-c{--radius:0px}\nbody.variant-c .btn{border-radius:0}\nbody.variant-c .cta-band{border-radius:0}\nbody.variant-c .section-alt{background:color-mix(in srgb,var(--primary) 7%,transparent)}\nbody.variant-c .eyebrow:before{display:none}\nbody.variant-c .eyebrow{letter-spacing:.3em}`
+  return `body.variant-a .card:nth-child(3n+2){background:color-mix(in srgb,var(--primary) 6%,var(--surface))}`
+}
+
 
 function templateCss(template: BlockTemplateFamilyKey): string {
   if (template === 'bistro_atmospheric_landing') return `
