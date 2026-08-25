@@ -16,6 +16,11 @@ type VerifyResult = {
   readyState?: string | null
   aliases?: string[]
 }
+type VercelAccessCheck = {
+  ok: boolean
+  status: number
+  detail: string
+}
 const MAX_PUBLIC_URL_CHECKS = 8
 const READY_STATES_FAILED = new Set(['ERROR', 'CANCELED'])
 
@@ -98,6 +103,86 @@ function withTeamScope(url: string, teamId?: string | null) {
 
 function deploymentApiUrl(path: string, teamId?: string | null) {
   return withTeamScope(`https://api.vercel.com${path}`, teamId)
+}
+
+function shouldRetryWithoutTeamScope(status: number, payload: unknown): boolean {
+  if (![400, 401, 403, 404].includes(status)) return false
+  const text = JSON.stringify(payload ?? {}).toLowerCase()
+  return (
+    text.includes('team') ||
+    text.includes('scope') ||
+    text.includes('collaboration') ||
+    text.includes('forbidden') ||
+    text.includes('not authorized') ||
+    text.includes('unauthorized') ||
+    text.includes('invalid') ||
+    text.includes('not found')
+  )
+}
+
+async function vercelJson(path: string, init: RequestInit, teamId?: string | null) {
+  const headers = init.headers as Record<string, string> | undefined
+  const firstResp = await fetch(deploymentApiUrl(path, teamId), init)
+  const firstData = await firstResp.json().catch(() => ({}))
+  if (firstResp.ok || !teamId || !shouldRetryWithoutTeamScope(firstResp.status, firstData)) {
+    return { resp: firstResp, data: firstData, scoped: Boolean(teamId) }
+  }
+
+  console.warn('vercel scoped request failed; retrying without team scope', JSON.stringify({
+    path,
+    status: firstResp.status,
+    preview: JSON.stringify(firstData).slice(0, 240),
+  }))
+
+  const retryResp = await fetch(`https://api.vercel.com${path}`, {
+    ...init,
+    headers,
+  })
+  const retryData = await retryResp.json().catch(() => ({}))
+  return { resp: retryResp, data: retryData, scoped: false }
+}
+
+function buildVercelTokenHint(status: number, payload: unknown, teamId?: string | null, scopeSlug?: string | null) {
+  const preview = JSON.stringify(payload ?? {}).toLowerCase()
+  const teamHint = teamId || scopeSlug
+    ? ` The token also needs access to the Vercel team ${scopeSlug ? `"${scopeSlug}"` : `"${teamId}"`}.`
+    : ''
+  if ([401, 403].includes(status)) {
+    return [
+      'VERCEL_API_TOKEN is not accepted by the Vercel REST API.',
+      'Use a Vercel Access Token from Vercel Account Settings → Tokens.',
+      'Do not use an AI Gateway API key here.',
+      teamHint.trim(),
+      preview.includes('forbidden') ? 'Vercel returned a forbidden response for this token.' : '',
+    ].filter(Boolean).join(' ')
+  }
+  return ''
+}
+
+async function validateVercelAccess(args: {
+  vercelToken: string
+  teamId?: string | null
+  scopeSlug?: string | null
+}): Promise<VercelAccessCheck> {
+  const { vercelToken, teamId, scopeSlug } = args
+  const resp = await fetch('https://api.vercel.com/v2/user', {
+    headers: { Authorization: `Bearer ${vercelToken}` },
+  })
+  const data = await resp.json().catch(() => ({}))
+  if (resp.ok) {
+    return {
+      ok: true,
+      status: resp.status,
+      detail: String((data as any)?.user?.id ?? (data as any)?.id ?? 'ok'),
+    }
+  }
+  const hint = buildVercelTokenHint(resp.status, data, teamId, scopeSlug)
+  const preview = JSON.stringify(data).slice(0, 240)
+  return {
+    ok: false,
+    status: resp.status,
+    detail: [hint, preview].filter(Boolean).join(' ').trim(),
+  }
 }
 
 function normaliseAliasCandidate(value: unknown): string | null {
@@ -188,10 +273,9 @@ async function resolvePublicDemoUrl(args: {
 
     if (deploymentId) {
       try {
-        const deploymentResp = await fetch(deploymentApiUrl(`/v13/deployments/${deploymentId}`, teamId), {
+        const { resp: deploymentResp, data: deploymentData } = await vercelJson(`/v13/deployments/${deploymentId}`, {
           headers: { Authorization: `Bearer ${vercelToken}` },
-        })
-        const deploymentData = await deploymentResp.json().catch(() => ({}))
+        }, teamId)
         readyState = String(
           deploymentData?.readyState
           ?? deploymentData?.ready?.state
@@ -204,10 +288,9 @@ async function resolvePublicDemoUrl(args: {
       }
 
       try {
-        const aliasResp = await fetch(deploymentApiUrl(`/v2/deployments/${deploymentId}/aliases`, teamId), {
+        const { data: aliasData } = await vercelJson(`/v2/deployments/${deploymentId}/aliases`, {
           headers: { Authorization: `Bearer ${vercelToken}` },
-        })
-        const aliasData = await aliasResp.json().catch(() => ({}))
+        }, teamId)
         collectedAliases = mergeAliasCandidates(collectedAliases, extractAliasStrings(aliasData))
       } catch (err) {
         lastDetail = err instanceof Error ? err.message : String(err)
@@ -262,6 +345,24 @@ Deno.serve(async (req) => {
       .eq('id', generated_site_id)
       .single()
     if (siteErr || !site) return json({ error: 'site not found' }, 404)
+
+    const accessCheck = await validateVercelAccess({
+      vercelToken,
+      teamId: vercelTeamId,
+      scopeSlug: vercelScopeSlug,
+    })
+    if (!accessCheck.ok) {
+      const message = `Vercel access check failed (${accessCheck.status}). ${accessCheck.detail}`.slice(0, 500)
+      await supabase.from('generated_sites').update({
+        status: 'failed',
+        error_message: message,
+      }).eq('id', generated_site_id)
+      return json({
+        error: 'vercel auth failed',
+        details: message,
+      }, accessCheck.status || 502)
+    }
+
     const files = site.generated_files as Record<string, string> | null
     if (!files || !files['index.html']) return json({ error: 'no generated_files.index.html — run generate first' }, 400)
     const filesArray = Object.entries(files)
@@ -314,7 +415,7 @@ Deno.serve(async (req) => {
     if (shouldCreateFreshDeployment) {
       await supabase.from('generated_sites').update({ status: 'deploying', error_message: null }).eq('id', generated_site_id)
 
-      const deployResp = await fetch(deploymentApiUrl('/v13/deployments', vercelTeamId), {
+      const { resp: deployResp, data: deployDataRaw } = await vercelJson('/v13/deployments', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${vercelToken}`,
@@ -333,8 +434,8 @@ Deno.serve(async (req) => {
             devCommand: null,
           },
         }),
-      })
-      deployData = await deployResp.json()
+      }, vercelTeamId)
+      deployData = deployDataRaw
 
       if (!deployResp.ok) {
         await supabase.from('generated_sites').update({
@@ -382,7 +483,7 @@ Deno.serve(async (req) => {
     // Safe to call every deploy — idempotent.
     if (projectId) {
       try {
-        const patchResp = await fetch(deploymentApiUrl(`/v9/projects/${projectId}`, vercelTeamId), {
+        const { resp: patchResp, data: patchData } = await vercelJson(`/v9/projects/${projectId}`, {
           method: 'PATCH',
           headers: {
             Authorization: `Bearer ${vercelToken}`,
@@ -392,9 +493,9 @@ Deno.serve(async (req) => {
             ssoProtection: null,
             passwordProtection: null,
           }),
-        })
+        }, vercelTeamId)
         if (!patchResp.ok) {
-          console.warn('Could not disable protection:', patchResp.status, await patchResp.text())
+          console.warn('Could not disable protection:', patchResp.status, JSON.stringify(patchData).slice(0, 240))
         }
       } catch (e) {
         console.warn('protection patch failed', e)
