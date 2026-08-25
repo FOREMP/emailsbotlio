@@ -1111,8 +1111,18 @@ body.template-salon_editorial_luxury{--radius:34px}
 .template-salon_editorial_luxury .gallery-grid{grid-template-columns:1.05fr .75fr .9fr}
 .template-salon_editorial_luxury .gallery-grid img:first-child{height:410px}
 .template-salon_editorial_luxury .cta-band{border-radius:46px}
+.template-salon_editorial_luxury .brand,.template-salon_editorial_luxury h1,.template-salon_editorial_luxury h2,.template-salon_editorial_luxury h3{font-family:Georgia,"Times New Roman",serif;font-weight:400;letter-spacing:-.03em}
+.template-salon_editorial_luxury h1{font-size:clamp(46px,7.6vw,96px);max-width:13ch}
+.template-salon_editorial_luxury .eyebrow{letter-spacing:.3em;font-weight:800}
+.template-salon_editorial_luxury .section-alt{background:color-mix(in srgb,var(--accent) 16%,var(--background))}
+.template-salon_editorial_luxury .hero-figure{border-radius:220px 220px 24px 24px}
+.template-salon_editorial_luxury .hero-figure img{height:clamp(360px,50vw,620px)}
+.template-salon_editorial_luxury .service-rows article{border-bottom-color:color-mix(in srgb,var(--primary) 24%,transparent)}
+.template-salon_editorial_luxury .gallery-strip img{border-radius:200px 200px 18px 18px}
+.template-salon_editorial_luxury .trust-band{border-radius:44px;background:color-mix(in srgb,var(--accent) 22%,var(--surface))}
 @media(max-width:960px){.template-salon_editorial_luxury .grid{grid-template-columns:1fr 1fr}.template-salon_editorial_luxury .card:nth-child(2n){transform:none}}
-@media(max-width:640px){.template-salon_editorial_luxury .grid{grid-template-columns:1fr}.template-salon_editorial_luxury .media-card img,.template-salon_editorial_luxury .gallery-grid img:first-child{height:250px}}
+@media(max-width:640px){.template-salon_editorial_luxury .grid{grid-template-columns:1fr}.template-salon_editorial_luxury .media-card img,.template-salon_editorial_luxury .gallery-grid img:first-child{height:250px}.template-salon_editorial_luxury .hero-figure{border-radius:140px 140px 18px 18px}}
+
 `.trim()
 
   if (template === 'clinic_private_care') return `
