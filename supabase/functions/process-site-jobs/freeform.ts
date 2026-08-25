@@ -11,7 +11,10 @@ import {
   pickVariant,
   variantById,
   type FamilyVariant,
+  type GalleryStyle,
+  type HeroLayout,
   type SectionKind,
+  type ServiceStyle,
 } from './sections.ts'
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
