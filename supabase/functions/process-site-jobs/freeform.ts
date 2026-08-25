@@ -914,10 +914,18 @@ function sections(c: FreeformPageContent, processStyle = false, ctx: FreeformCtx
   }
   return `<section class='section'><div class='wrap stack'>${list.map((s) => `<article class='card'><p class='eyebrow'>${esc(s.eyebrow || (isEnglish(ctx) ? 'Detail' : 'Detalj'))}</p><h2>${esc(s.title)}</h2><p class='lead'>${esc(s.text)}</p>${s.bullets?.length ? `<div class='tag-row'>${s.bullets.slice(0, 5).map((b) => `<span>${esc(b)}</span>`).join('')}</div>` : ''}</article>`).join('')}</div></section>`
 }
-function gallery(ctx: FreeformCtx, imgs: string[]): string {
+function gallery(ctx: FreeformCtx, imgs: string[], style: GalleryStyle = 'mosaic'): string {
   const profile = buildProfile(ctx)
   if (imgs.length < 2) return ''
-  return `<section class='section'><div class='wrap split'><div><p class='eyebrow'>${profile.isBeauty ? (isEnglish(ctx) ? 'Atmosphere' : 'Känsla') : (isEnglish(ctx) ? 'Impression' : 'Intryck')}</p><h2>${profile.isClinic ? (isEnglish(ctx) ? 'A reassuring feeling before booking.' : 'En trygg känsla redan innan bokning.') : profile.isBeauty ? (isEnglish(ctx) ? 'A visual feeling that lifts the experience.' : 'En visuell känsla som lyfter upplevelsen.') : (isEnglish(ctx) ? 'A design that feels considered.' : 'En design som känns arbetad.')}</h2><p class='lead'>${isEnglish(ctx) ? 'Large image areas, clear rhythm and strong contrast create a more premium first impression and make the content easier to take in.' : 'Stora bildytor, tydlig rytm och bra kontrast ger ett mer exklusivt första intryck och gör innehållet lättare att ta in.'}</p></div><div class='gallery-grid'>${imgs.slice(0, 3).map((src) => `<img src='${attr(src)}' alt=''>`).join('')}</div></div></section>`
+  const en = isEnglish(ctx)
+  const eyebrow = profile.isBeauty ? (en ? 'Atmosphere' : 'Känsla') : (en ? 'Impression' : 'Intryck')
+  const heading = profile.isClinic ? (en ? 'A reassuring feeling before booking.' : 'En trygg känsla redan innan bokning.') : profile.isBeauty ? (en ? 'A visual feeling that lifts the experience.' : 'En visuell känsla som lyfter upplevelsen.') : (en ? 'A design that feels considered.' : 'En design som känns arbetad.')
+  const lead = en ? 'Large image areas, clear rhythm and strong contrast create a more premium first impression and make the content easier to take in.' : 'Stora bildytor, tydlig rytm och bra kontrast ger ett mer exklusivt första intryck och gör innehållet lättare att ta in.'
+  if (style === 'strip') {
+    return `<section class='section gallery-strip-section'><div class='wrap'><p class='eyebrow'>${esc(eyebrow)}</p><h2>${esc(heading)}</h2><p class='lead'>${esc(lead)}</p></div><div class='gallery-strip'>${imgs.slice(0, 4).map((src) => `<img src='${attr(src)}' alt=''>`).join('')}</div></section>`
+  }
+  return `<section class='section'><div class='wrap split'><div><p class='eyebrow'>${esc(eyebrow)}</p><h2>${esc(heading)}</h2><p class='lead'>${esc(lead)}</p></div><div class='gallery-grid'>${imgs.slice(0, 3).map((src) => `<img src='${attr(src)}' alt=''>`).join('')}</div></div></section>`
+
 }
 function faq(c: FreeformPageContent, fullPage = false, ctx: FreeformCtx): string {
   const groups = (c.faqGroups || []).filter((g) => g.title && g.items?.length).slice(0, 3)
