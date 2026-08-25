@@ -825,12 +825,46 @@ function nav(plan: FreeformPlan, business: string, active: string, ctx: Freeform
   const links = plan.pages.map((p) => `<a href='${attr(fileNameFor(p.slug))}'${p.slug === active ? ` aria-current='page'` : ''}>${esc(p.slug === 'index' ? (en ? 'Home' : 'Hem') : p.title)}</a>`).join('')
   return `<header class='site-header'><div class='wrap nav-shell'><a class='brand' href='index.html'>${esc(business)}</a><nav class='nav-desktop' aria-label='${en ? 'Main menu' : 'Huvudmeny'}'>${links}</nav><details class='nav-mobile'><summary>${en ? 'Menu' : 'Meny'}</summary><nav class='nav-drawer' aria-label='${en ? 'Mobile menu' : 'Mobilmeny'}'>${links}</nav></details></div></header>`
 }
-function hero(c: FreeformPageContent, img: string, ctx: FreeformCtx): string {
-  return `<section class='hero'>${img ? `<img src='${attr(img)}' alt=''>` : ''}<div class='wrap'><div class='hero-card'><p class='eyebrow'>${esc(c.heroEyebrow || (isEnglish(ctx) ? 'Selected experience' : 'Utvald upplevelse'))}</p><h1>${esc(c.heroTitle || (isEnglish(ctx) ? 'A modern website with a clear first impression' : 'En modern webbplats med tydligt första intryck'))}</h1><p class='lead lg'>${esc(c.heroLead || '')}</p>${buttons(ctx, c)}</div></div></section>`
+function hero(c: FreeformPageContent, img: string, ctx: FreeformCtx, layout: HeroLayout = 'overlay'): string {
+  const en = isEnglish(ctx)
+  const eyebrow = esc(c.heroEyebrow || (en ? 'Selected experience' : 'Utvald upplevelse'))
+  const title = esc(c.heroTitle || (en ? 'A modern website with a clear first impression' : 'En modern webbplats med tydligt första intryck'))
+  const lead = esc(c.heroLead || '')
+  const btns = buttons(ctx, c)
+
+  if (layout === 'editorial_split') {
+    return `<section class='hero hero-split'><div class='wrap hero-grid'><div class='hero-copy'><p class='eyebrow'>${eyebrow}</p><h1>${title}</h1><p class='lead lg'>${lead}</p>${btns}</div>${img ? `<figure class='hero-figure'><img src='${attr(img)}' alt=''></figure>` : ''}</div></section>`
+  }
+  if (layout === 'calm_panel') {
+    const facts = [
+      ctx.facts.city ? esc(decodeText(ctx.facts.city)) : '',
+      ctx.facts.phone ? esc(ctx.facts.phone) : '',
+      ctx.facts.email ? esc(ctx.facts.email) : '',
+    ].filter(Boolean)
+    return `<section class='hero hero-calm'><div class='wrap'><p class='eyebrow'>${eyebrow}</p><h1>${title}</h1><p class='lead lg'>${lead}</p>${btns}${facts.length ? `<div class='hero-panel'>${facts.map((f) => `<span>${f}</span>`).join('')}</div>` : ''}</div></section>`
+  }
+  if (layout === 'industrial') {
+    return `<section class='hero hero-industrial'>${img ? `<img src='${attr(img)}' alt=''>` : ''}<div class='wrap'><div class='hero-slab'><p class='eyebrow'>${eyebrow}</p><h1>${title}</h1><p class='lead lg'>${lead}</p>${btns}</div></div></section>`
+  }
+  if (layout === 'typographic') {
+    return `<section class='hero hero-type'><div class='wrap'><p class='eyebrow'>${eyebrow}</p><h1>${title}</h1><div class='rule'></div><p class='lead lg'>${lead}</p>${btns}</div></section>`
+  }
+  return `<section class='hero'>${img ? `<img src='${attr(img)}' alt=''>` : ''}<div class='wrap'><div class='hero-card'><p class='eyebrow'>${eyebrow}</p><h1>${title}</h1><p class='lead lg'>${lead}</p>${btns}</div></div></section>`
 }
-function pageHero(c: FreeformPageContent, img: string, ctx: FreeformCtx): string {
-  return `<section class='page-hero'>${img ? `<img src='${attr(img)}' alt=''>` : ''}<div class='wrap'><p class='eyebrow'>${esc(c.heroEyebrow || 'Information')}</p><h1>${esc(c.heroTitle || (isEnglish(ctx) ? 'Clear information' : 'Tydlig information'))}</h1><p class='lead'>${esc(c.heroLead || ctx.nicheLabel)}</p></div></section>`
+function pageHero(c: FreeformPageContent, img: string, ctx: FreeformCtx, layout: HeroLayout = 'overlay'): string {
+  const en = isEnglish(ctx)
+  const eyebrow = esc(c.heroEyebrow || 'Information')
+  const title = esc(c.heroTitle || (en ? 'Clear information' : 'Tydlig information'))
+  const lead = esc(c.heroLead || ctx.nicheLabel)
+  if (layout === 'calm_panel' || layout === 'typographic') {
+    return `<section class='page-hero page-hero-calm'><div class='wrap'><p class='eyebrow'>${eyebrow}</p><h1>${title}</h1><p class='lead'>${lead}</p></div></section>`
+  }
+  if (layout === 'editorial_split') {
+    return `<section class='page-hero page-hero-split'><div class='wrap hero-grid'><div><p class='eyebrow'>${eyebrow}</p><h1>${title}</h1><p class='lead'>${lead}</p></div>${img ? `<figure class='hero-figure'><img src='${attr(img)}' alt=''></figure>` : ''}</div></section>`
+  }
+  return `<section class='page-hero'>${img ? `<img src='${attr(img)}' alt=''>` : ''}<div class='wrap'><p class='eyebrow'>${eyebrow}</p><h1>${title}</h1><p class='lead'>${lead}</p></div></section>`
 }
+
 function intro(c: FreeformPageContent, img: string, ctx: FreeformCtx): string {
   const profile = buildProfile(ctx)
   const tags = profile.kind === 'restaurant'
