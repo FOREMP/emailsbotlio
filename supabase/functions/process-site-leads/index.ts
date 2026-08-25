@@ -55,6 +55,7 @@ function isCanonicalDemoUrl(value?: string | null): boolean {
 const STALE_PIPELINE_MINUTES = 30 // never let one dead scrape/generate/deploy block the whole queue
 const ORPHAN_GRACE_MINUTES = 10   // 'generating' with no generated_sites row = dead job
 const TEMPLATE_PICKER_MODEL = 'deepseek/deepseek-chat-v3.1'
+const ACTIVE_GENERATED_SITE_STATUSES = ['pending', 'scraped', 'queued', 'processing', 'generated', 'deploying'] as const
 
 function startOfStockholmDayUtc(now = new Date()): Date {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
@@ -114,7 +115,7 @@ Deno.serve(async (req) => {
         .in('id', overrideIds)
       for (const lead of forced ?? []) {
         try {
-          await startGeneration(supabase, supabaseUrl, serviceKey, lead as any)
+          await ensureGenerationForLead(supabase, supabaseUrl, serviceKey, lead as any)
           report.generated++
         } catch (e) {
           report.errors.push(`force ${lead.id}: ${(e as Error).message}`)
@@ -276,7 +277,7 @@ Deno.serve(async (req) => {
 
       for (const lead of [...needsSv, ...needsEn]) {
         try {
-          await startGeneration(supabase, supabaseUrl, serviceKey, lead as any)
+          await ensureGenerationForLead(supabase, supabaseUrl, serviceKey, lead as any)
           report.generated++
         } catch (e) {
           report.errors.push(`gen ${lead.id}: ${(e as Error).message}`)
@@ -708,6 +709,68 @@ async function chooseTemplateFamilyForLead(lead: any): Promise<{
     }
   } finally {
     clearTimeout(timeoutId)
+  }
+}
+
+async function ensureGenerationForLead(
+  supabase: ReturnType<typeof createClient>,
+  supabaseUrl: string,
+  serviceKey: string,
+  lead: any,
+) {
+  const reusable = await findReusableGeneratedSite(supabase, lead.id)
+  if (!reusable) {
+    await startGeneration(supabase, supabaseUrl, serviceKey, lead)
+    return { mode: 'created' as const }
+  }
+
+  await supabase.from('site_leads').update({
+    status: 'generating',
+    generated_site_id: reusable.id,
+    updated_at: new Date().toISOString(),
+  }).eq('id', lead.id)
+
+  await kickGeneratedSite(supabaseUrl, serviceKey, reusable.id, reusable.status)
+  return { mode: 'reused' as const, generated_site_id: reusable.id, status: reusable.status }
+}
+
+async function findReusableGeneratedSite(
+  supabase: ReturnType<typeof createClient>,
+  leadId: string,
+) {
+  const { data, error } = await supabase
+    .from('generated_sites')
+    .select('id, status, updated_at')
+    .eq('site_lead_id', leadId)
+    .in('status', [...ACTIVE_GENERATED_SITE_STATUSES])
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) throw new Error(`find active generated site: ${error.message}`)
+  return data
+}
+
+async function kickGeneratedSite(
+  supabaseUrl: string,
+  serviceKey: string,
+  generatedSiteId: string,
+  status: string,
+) {
+  if (status === 'pending') {
+    await invokeFn(supabaseUrl, serviceKey, 'scrape-lead-data', { generated_site_id: generatedSiteId })
+    return
+  }
+  if (status === 'scraped') {
+    await invokeFn(supabaseUrl, serviceKey, 'generate-site', { generated_site_id: generatedSiteId })
+    return
+  }
+  if (status === 'generated' || status === 'deploying') {
+    await invokeFn(supabaseUrl, serviceKey, 'deploy-site', { generated_site_id: generatedSiteId })
+    return
+  }
+  if (status === 'queued' || status === 'processing') {
+    await invokeFn(supabaseUrl, serviceKey, 'process-site-jobs', { generated_site_id: generatedSiteId })
+    return
   }
 }
 

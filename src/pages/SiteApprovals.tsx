@@ -327,10 +327,13 @@ export default function SiteApprovals() {
     }
     setBusyId(regen.id);
     try {
-      // 1. Save feedback on the lead + flip status back to generating.
+      const feedbackText = feedback.trim();
+      let reusedExistingJob = false;
+
+      // 1. Always persist the latest operator feedback first.
       await supabase
         .from("site_leads")
-        .update({ status: "generating", feedback: feedback.trim() })
+        .update({ feedback: feedbackText, updated_at: new Date().toISOString() })
         .eq("id", regen.id);
 
       // 2. Mirror feedback into the linked ghost contact so process-site-jobs
@@ -338,9 +341,9 @@ export default function SiteApprovals() {
       if (regen.generated_site_id) {
         const { data: gs } = await supabase
           .from("generated_sites")
-          .select("contact_id")
+          .select("id, contact_id")
           .eq("id", regen.generated_site_id)
-          .single();
+          .maybeSingle();
         if (gs?.contact_id) {
           const { data: contact } = await supabase
             .from("contacts")
@@ -350,35 +353,62 @@ export default function SiteApprovals() {
           const cf = (contact?.custom_fields ?? {}) as Record<string, unknown>;
           await supabase
             .from("contacts")
-            .update({ custom_fields: { ...cf, regen_feedback: feedback.trim() } })
+            .update({ custom_fields: { ...cf, regen_feedback: feedbackText } })
             .eq("id", gs.contact_id);
         }
 
-        // 3. Re-queue the site so the worker picks it up on the next tick.
-        //    Freeform builds page-by-page, so its progress must start clean.
-        const modeFields =
-          regenMode === "keep"
-            ? {}
-            : regenMode === "freeform"
-              ? { generation_mode: "freeform", gen_progress: null, generated_files: null }
-              : { generation_mode: "template" };
-        await supabase
-          .from("generated_sites")
-          .update({
-            status: "queued",
-            queued_at: new Date().toISOString(),
-            error_message: null,
-            attempts: 0,
-            ...modeFields,
-          })
-          .eq("id", regen.generated_site_id);
+        if (gs?.id) {
+          // 3a. Re-queue the existing site so the worker picks it up immediately.
+          const modeFields =
+            regenMode === "keep"
+              ? {}
+              : regenMode === "freeform"
+                ? { generation_mode: "freeform", gen_progress: null, generated_files: null }
+                : { generation_mode: "template" };
+          await supabase
+            .from("generated_sites")
+            .update({
+              status: "queued",
+              queued_at: new Date().toISOString(),
+              error_message: null,
+              attempts: 0,
+              ...modeFields,
+            })
+            .eq("id", gs.id);
+
+          await supabase
+            .from("site_leads")
+            .update({
+              status: "generating",
+              generated_site_id: gs.id,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", regen.id);
+
+          await supabase.functions.invoke("process-site-jobs", { body: { generated_site_id: gs.id } });
+          reusedExistingJob = true;
+        }
       }
 
-      toast({ title: "Regenererar", description: "Ny version byggs, kolla igen om några minuter." });
+      // 3b. If there is no usable generated-site row anymore, force the lead
+      // through the safe backend creation path so a fresh job is created.
+      if (!reusedExistingJob) {
+        const { error } = await supabase.functions.invoke("process-site-leads", {
+          body: { force: true, lead_ids: [regen.id] },
+        });
+        if (error) throw error;
+      }
+
+      toast({
+        title: reusedExistingJob ? "Regenererar" : "Ny ombyggnad startad",
+        description: reusedExistingJob
+          ? "Ny version byggs, kolla igen om några minuter."
+          : "En ny byggkö skapades för leaden. Kolla igen om några minuter.",
+      });
       setRegen(null);
       setFeedback("");
       setRegenMode("keep");
-      load();
+      await load();
     } catch (e) {
       toast({ title: "Fel", description: (e as Error).message, variant: "destructive" });
     } finally {
