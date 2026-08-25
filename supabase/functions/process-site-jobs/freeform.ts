@@ -1218,7 +1218,7 @@ body.template-service_clarity_default .card{border-radius:24px}
 function shouldIncludeFaqPage(ctx: FreeformCtx, profile: BusinessProfile, template: BlockTemplateFamilyKey): boolean {
   if (template !== 'byggform_architectural_trust' && template !== 'service_company_modern' && template !== 'clinic_private_care' && template !== 'mechanic_precision_workshop' && template !== 'salon_editorial_luxury') return false
   const source = sourceFor(ctx, { slug: 'index', title: '', purpose: '', sections: [] })
-  const serviceCount = serviceIdeas(ctx).filter(isGoodServiceTitle).length
+  const serviceCount = serviceIdeas(ctx).filter((s) => isGoodServiceTitle(ctx, s)).length
   const questionSignals = (source.match(/\?/g) || []).length
   const processSignals = (source.match(/\b(process|planering|offert|förfrågan|projekt|ritning|underlag|renovering|installation|service|genomförande|omfattning|kontakt)\b/gi) || []).length
   const categoryScore = ctx.category ? 2 : 0
