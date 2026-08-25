@@ -883,11 +883,29 @@ function intro(c: FreeformPageContent, img: string, ctx: FreeformCtx): string {
       : (isEnglish(ctx) ? 'A concrete presentation that makes the offer easy to understand and act on.' : 'En konkret presentation som gör det enkelt att förstå erbjudandet och ta kontakt.')
   return `<section class='section'><div class='wrap split'><div class='stack'><p class='eyebrow'>${profile.kind === 'restaurant' ? (isEnglish(ctx) ? 'Experience' : 'Upplevelse') : (isEnglish(ctx) ? 'First impression' : 'Första intrycket')}</p><h2>${esc(c.introTitle || c.heroTitle || (isEnglish(ctx) ? 'Built for trust' : 'Byggt för förtroende'))}</h2><p class='lead'>${esc(c.introText || '')}</p><div class='tag-row'>${tags.map((t) => `<span>${esc(t)}</span>`).join('')}</div></div>${img ? `<article class='media-card'><img src='${attr(img)}' alt=''><div class='media-body'><h3>${esc(mediaTitle)}</h3><p>${esc(mediaText)}</p></div></article>` : ''}</div></section>`
 }
-function services(c: FreeformPageContent, ctx: FreeformCtx): string {
+function services(c: FreeformPageContent, ctx: FreeformCtx, style: ServiceStyle = 'cards'): string {
   const profile = buildProfile(ctx)
   const list = (c.services?.length ? c.services : fallbackContent(ctx, { slug: 'x', title: 'x', purpose: '', sections: [] }).services || []).slice(0, 6)
-  return `<section class='section section-alt'><div class='wrap'><p class='eyebrow'>${esc(profile.servicePlural)}</p><h2>${esc(profile.servicesHeading)}</h2><p class='lead'>${esc(profile.servicesLead)}</p><div class='grid'>${list.map((s) => `<article class='card'><h3>${esc(s.title)}</h3><p>${esc(s.text)}</p>${s.detail ? `<p>${esc(s.detail)}</p>` : ''}</article>`).join('')}</div></div></section>`
+  const head = `<p class='eyebrow'>${esc(profile.servicePlural)}</p><h2>${esc(profile.servicesHeading)}</h2><p class='lead'>${esc(profile.servicesLead)}</p>`
+  if (style === 'rows') {
+    return `<section class='section section-alt'><div class='wrap'>${head}<div class='service-rows'>${list.map((s, i) => `<article><span class='num'>${String(i + 1).padStart(2, '0')}</span><h3>${esc(s.title)}</h3><div><p>${esc(s.text)}</p>${s.detail ? `<p>${esc(s.detail)}</p>` : ''}</div></article>`).join('')}</div></div></section>`
+  }
+  return `<section class='section section-alt'><div class='wrap'>${head}<div class='grid'>${list.map((s) => `<article class='card'><h3>${esc(s.title)}</h3><p>${esc(s.text)}</p>${s.detail ? `<p>${esc(s.detail)}</p>` : ''}</article>`).join('')}</div></div></section>`
 }
+function trustBand(ctx: FreeformCtx, c: FreeformPageContent): string {
+  const en = isEnglish(ctx)
+  const profile = buildProfile(ctx)
+  const business = decodeText(ctx.facts.business_name || ctx.nicheLabel || (en ? 'the business' : 'företaget'))
+  const items = profile.isBeauty
+    ? (en
+      ? [['Personal guidance', 'Every visit starts with a short conversation about what you actually want.'], ['A clear offer', `What ${business} offers is described without invented prices or promises.`], ['Easy contact', 'Call or email and get an answer about what fits best.']]
+      : [['Personlig rådgivning', 'Varje besök börjar med ett kort samtal om vad du faktiskt vill ha.'], ['Tydligt utbud', `Det ${business} erbjuder beskrivs utan påhittade priser eller löften.`], ['Enkel kontakt', 'Ring eller mejla så får du svar på vad som passar bäst.']])
+    : (en
+      ? [['Clear scope', 'What is included and what happens next is described before the work starts.'], ['Direct contact', `You reach ${business} without going through a form or a queue.`], ['No invented claims', 'Only information that comes from the business itself is presented here.']]
+      : [['Tydlig omfattning', 'Vad som ingår och vad som händer härnäst beskrivs innan arbetet börjar.'], ['Direkt kontakt', `Du når ${business} utan formulär eller kösystem.`], ['Inget påhittat', 'Här presenteras bara information som kommer från verksamheten själv.']])
+  return `<section class='section'><div class='wrap'><div class='trust-band'>${items.map(([t, x]) => `<div><h3>${esc(t)}</h3><p>${esc(x)}</p></div>`).join('')}</div></div></section>`
+}
+
 function sections(c: FreeformPageContent, processStyle = false, ctx: FreeformCtx): string {
   const list = (c.sections || []).slice(0, 4)
   if (!list.length) return ''
