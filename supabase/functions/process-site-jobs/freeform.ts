@@ -11,7 +11,10 @@ import {
   pickVariant,
   variantById,
   type FamilyVariant,
+  type GalleryStyle,
+  type HeroLayout,
   type SectionKind,
+  type ServiceStyle,
 } from './sections.ts'
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
@@ -825,12 +828,46 @@ function nav(plan: FreeformPlan, business: string, active: string, ctx: Freeform
   const links = plan.pages.map((p) => `<a href='${attr(fileNameFor(p.slug))}'${p.slug === active ? ` aria-current='page'` : ''}>${esc(p.slug === 'index' ? (en ? 'Home' : 'Hem') : p.title)}</a>`).join('')
   return `<header class='site-header'><div class='wrap nav-shell'><a class='brand' href='index.html'>${esc(business)}</a><nav class='nav-desktop' aria-label='${en ? 'Main menu' : 'Huvudmeny'}'>${links}</nav><details class='nav-mobile'><summary>${en ? 'Menu' : 'Meny'}</summary><nav class='nav-drawer' aria-label='${en ? 'Mobile menu' : 'Mobilmeny'}'>${links}</nav></details></div></header>`
 }
-function hero(c: FreeformPageContent, img: string, ctx: FreeformCtx): string {
-  return `<section class='hero'>${img ? `<img src='${attr(img)}' alt=''>` : ''}<div class='wrap'><div class='hero-card'><p class='eyebrow'>${esc(c.heroEyebrow || (isEnglish(ctx) ? 'Selected experience' : 'Utvald upplevelse'))}</p><h1>${esc(c.heroTitle || (isEnglish(ctx) ? 'A modern website with a clear first impression' : 'En modern webbplats med tydligt första intryck'))}</h1><p class='lead lg'>${esc(c.heroLead || '')}</p>${buttons(ctx, c)}</div></div></section>`
+function hero(c: FreeformPageContent, img: string, ctx: FreeformCtx, layout: HeroLayout = 'overlay'): string {
+  const en = isEnglish(ctx)
+  const eyebrow = esc(c.heroEyebrow || (en ? 'Selected experience' : 'Utvald upplevelse'))
+  const title = esc(c.heroTitle || (en ? 'A modern website with a clear first impression' : 'En modern webbplats med tydligt första intryck'))
+  const lead = esc(c.heroLead || '')
+  const btns = buttons(ctx, c)
+
+  if (layout === 'editorial_split') {
+    return `<section class='hero hero-split'><div class='wrap hero-grid'><div class='hero-copy'><p class='eyebrow'>${eyebrow}</p><h1>${title}</h1><p class='lead lg'>${lead}</p>${btns}</div>${img ? `<figure class='hero-figure'><img src='${attr(img)}' alt=''></figure>` : ''}</div></section>`
+  }
+  if (layout === 'calm_panel') {
+    const facts = [
+      ctx.facts.city ? esc(decodeText(ctx.facts.city)) : '',
+      ctx.facts.phone ? esc(ctx.facts.phone) : '',
+      ctx.facts.email ? esc(ctx.facts.email) : '',
+    ].filter(Boolean)
+    return `<section class='hero hero-calm'><div class='wrap'><p class='eyebrow'>${eyebrow}</p><h1>${title}</h1><p class='lead lg'>${lead}</p>${btns}${facts.length ? `<div class='hero-panel'>${facts.map((f) => `<span>${f}</span>`).join('')}</div>` : ''}</div></section>`
+  }
+  if (layout === 'industrial') {
+    return `<section class='hero hero-industrial'>${img ? `<img src='${attr(img)}' alt=''>` : ''}<div class='wrap'><div class='hero-slab'><p class='eyebrow'>${eyebrow}</p><h1>${title}</h1><p class='lead lg'>${lead}</p>${btns}</div></div></section>`
+  }
+  if (layout === 'typographic') {
+    return `<section class='hero hero-type'><div class='wrap'><p class='eyebrow'>${eyebrow}</p><h1>${title}</h1><div class='rule'></div><p class='lead lg'>${lead}</p>${btns}</div></section>`
+  }
+  return `<section class='hero'>${img ? `<img src='${attr(img)}' alt=''>` : ''}<div class='wrap'><div class='hero-card'><p class='eyebrow'>${eyebrow}</p><h1>${title}</h1><p class='lead lg'>${lead}</p>${btns}</div></div></section>`
 }
-function pageHero(c: FreeformPageContent, img: string, ctx: FreeformCtx): string {
-  return `<section class='page-hero'>${img ? `<img src='${attr(img)}' alt=''>` : ''}<div class='wrap'><p class='eyebrow'>${esc(c.heroEyebrow || 'Information')}</p><h1>${esc(c.heroTitle || (isEnglish(ctx) ? 'Clear information' : 'Tydlig information'))}</h1><p class='lead'>${esc(c.heroLead || ctx.nicheLabel)}</p></div></section>`
+function pageHero(c: FreeformPageContent, img: string, ctx: FreeformCtx, layout: HeroLayout = 'overlay'): string {
+  const en = isEnglish(ctx)
+  const eyebrow = esc(c.heroEyebrow || 'Information')
+  const title = esc(c.heroTitle || (en ? 'Clear information' : 'Tydlig information'))
+  const lead = esc(c.heroLead || ctx.nicheLabel)
+  if (layout === 'calm_panel' || layout === 'typographic') {
+    return `<section class='page-hero page-hero-calm'><div class='wrap'><p class='eyebrow'>${eyebrow}</p><h1>${title}</h1><p class='lead'>${lead}</p></div></section>`
+  }
+  if (layout === 'editorial_split') {
+    return `<section class='page-hero page-hero-split'><div class='wrap hero-grid'><div><p class='eyebrow'>${eyebrow}</p><h1>${title}</h1><p class='lead'>${lead}</p></div>${img ? `<figure class='hero-figure'><img src='${attr(img)}' alt=''></figure>` : ''}</div></section>`
+  }
+  return `<section class='page-hero'>${img ? `<img src='${attr(img)}' alt=''>` : ''}<div class='wrap'><p class='eyebrow'>${eyebrow}</p><h1>${title}</h1><p class='lead'>${lead}</p></div></section>`
 }
+
 function intro(c: FreeformPageContent, img: string, ctx: FreeformCtx): string {
   const profile = buildProfile(ctx)
   const tags = profile.kind === 'restaurant'
@@ -846,11 +883,29 @@ function intro(c: FreeformPageContent, img: string, ctx: FreeformCtx): string {
       : (isEnglish(ctx) ? 'A concrete presentation that makes the offer easy to understand and act on.' : 'En konkret presentation som gör det enkelt att förstå erbjudandet och ta kontakt.')
   return `<section class='section'><div class='wrap split'><div class='stack'><p class='eyebrow'>${profile.kind === 'restaurant' ? (isEnglish(ctx) ? 'Experience' : 'Upplevelse') : (isEnglish(ctx) ? 'First impression' : 'Första intrycket')}</p><h2>${esc(c.introTitle || c.heroTitle || (isEnglish(ctx) ? 'Built for trust' : 'Byggt för förtroende'))}</h2><p class='lead'>${esc(c.introText || '')}</p><div class='tag-row'>${tags.map((t) => `<span>${esc(t)}</span>`).join('')}</div></div>${img ? `<article class='media-card'><img src='${attr(img)}' alt=''><div class='media-body'><h3>${esc(mediaTitle)}</h3><p>${esc(mediaText)}</p></div></article>` : ''}</div></section>`
 }
-function services(c: FreeformPageContent, ctx: FreeformCtx): string {
+function services(c: FreeformPageContent, ctx: FreeformCtx, style: ServiceStyle = 'cards'): string {
   const profile = buildProfile(ctx)
   const list = (c.services?.length ? c.services : fallbackContent(ctx, { slug: 'x', title: 'x', purpose: '', sections: [] }).services || []).slice(0, 6)
-  return `<section class='section section-alt'><div class='wrap'><p class='eyebrow'>${esc(profile.servicePlural)}</p><h2>${esc(profile.servicesHeading)}</h2><p class='lead'>${esc(profile.servicesLead)}</p><div class='grid'>${list.map((s) => `<article class='card'><h3>${esc(s.title)}</h3><p>${esc(s.text)}</p>${s.detail ? `<p>${esc(s.detail)}</p>` : ''}</article>`).join('')}</div></div></section>`
+  const head = `<p class='eyebrow'>${esc(profile.servicePlural)}</p><h2>${esc(profile.servicesHeading)}</h2><p class='lead'>${esc(profile.servicesLead)}</p>`
+  if (style === 'rows') {
+    return `<section class='section section-alt'><div class='wrap'>${head}<div class='service-rows'>${list.map((s, i) => `<article><span class='num'>${String(i + 1).padStart(2, '0')}</span><h3>${esc(s.title)}</h3><div><p>${esc(s.text)}</p>${s.detail ? `<p>${esc(s.detail)}</p>` : ''}</div></article>`).join('')}</div></div></section>`
+  }
+  return `<section class='section section-alt'><div class='wrap'>${head}<div class='grid'>${list.map((s) => `<article class='card'><h3>${esc(s.title)}</h3><p>${esc(s.text)}</p>${s.detail ? `<p>${esc(s.detail)}</p>` : ''}</article>`).join('')}</div></div></section>`
 }
+function trustBand(ctx: FreeformCtx, c: FreeformPageContent): string {
+  const en = isEnglish(ctx)
+  const profile = buildProfile(ctx)
+  const business = decodeText(ctx.facts.business_name || ctx.nicheLabel || (en ? 'the business' : 'företaget'))
+  const items = profile.isBeauty
+    ? (en
+      ? [['Personal guidance', 'Every visit starts with a short conversation about what you actually want.'], ['A clear offer', `What ${business} offers is described without invented prices or promises.`], ['Easy contact', 'Call or email and get an answer about what fits best.']]
+      : [['Personlig rådgivning', 'Varje besök börjar med ett kort samtal om vad du faktiskt vill ha.'], ['Tydligt utbud', `Det ${business} erbjuder beskrivs utan påhittade priser eller löften.`], ['Enkel kontakt', 'Ring eller mejla så får du svar på vad som passar bäst.']])
+    : (en
+      ? [['Clear scope', 'What is included and what happens next is described before the work starts.'], ['Direct contact', `You reach ${business} without going through a form or a queue.`], ['No invented claims', 'Only information that comes from the business itself is presented here.']]
+      : [['Tydlig omfattning', 'Vad som ingår och vad som händer härnäst beskrivs innan arbetet börjar.'], ['Direkt kontakt', `Du når ${business} utan formulär eller kösystem.`], ['Inget påhittat', 'Här presenteras bara information som kommer från verksamheten själv.']])
+  return `<section class='section'><div class='wrap'><div class='trust-band'>${items.map(([t, x]) => `<div><h3>${esc(t)}</h3><p>${esc(x)}</p></div>`).join('')}</div></div></section>`
+}
+
 function sections(c: FreeformPageContent, processStyle = false, ctx: FreeformCtx): string {
   const list = (c.sections || []).slice(0, 4)
   if (!list.length) return ''
@@ -859,10 +914,18 @@ function sections(c: FreeformPageContent, processStyle = false, ctx: FreeformCtx
   }
   return `<section class='section'><div class='wrap stack'>${list.map((s) => `<article class='card'><p class='eyebrow'>${esc(s.eyebrow || (isEnglish(ctx) ? 'Detail' : 'Detalj'))}</p><h2>${esc(s.title)}</h2><p class='lead'>${esc(s.text)}</p>${s.bullets?.length ? `<div class='tag-row'>${s.bullets.slice(0, 5).map((b) => `<span>${esc(b)}</span>`).join('')}</div>` : ''}</article>`).join('')}</div></section>`
 }
-function gallery(ctx: FreeformCtx, imgs: string[]): string {
+function gallery(ctx: FreeformCtx, imgs: string[], style: GalleryStyle = 'mosaic'): string {
   const profile = buildProfile(ctx)
   if (imgs.length < 2) return ''
-  return `<section class='section'><div class='wrap split'><div><p class='eyebrow'>${profile.isBeauty ? (isEnglish(ctx) ? 'Atmosphere' : 'Känsla') : (isEnglish(ctx) ? 'Impression' : 'Intryck')}</p><h2>${profile.isClinic ? (isEnglish(ctx) ? 'A reassuring feeling before booking.' : 'En trygg känsla redan innan bokning.') : profile.isBeauty ? (isEnglish(ctx) ? 'A visual feeling that lifts the experience.' : 'En visuell känsla som lyfter upplevelsen.') : (isEnglish(ctx) ? 'A design that feels considered.' : 'En design som känns arbetad.')}</h2><p class='lead'>${isEnglish(ctx) ? 'Large image areas, clear rhythm and strong contrast create a more premium first impression and make the content easier to take in.' : 'Stora bildytor, tydlig rytm och bra kontrast ger ett mer exklusivt första intryck och gör innehållet lättare att ta in.'}</p></div><div class='gallery-grid'>${imgs.slice(0, 3).map((src) => `<img src='${attr(src)}' alt=''>`).join('')}</div></div></section>`
+  const en = isEnglish(ctx)
+  const eyebrow = profile.isBeauty ? (en ? 'Atmosphere' : 'Känsla') : (en ? 'Impression' : 'Intryck')
+  const heading = profile.isClinic ? (en ? 'A reassuring feeling before booking.' : 'En trygg känsla redan innan bokning.') : profile.isBeauty ? (en ? 'A visual feeling that lifts the experience.' : 'En visuell känsla som lyfter upplevelsen.') : (en ? 'A design that feels considered.' : 'En design som känns arbetad.')
+  const lead = en ? 'Large image areas, clear rhythm and strong contrast create a more premium first impression and make the content easier to take in.' : 'Stora bildytor, tydlig rytm och bra kontrast ger ett mer exklusivt första intryck och gör innehållet lättare att ta in.'
+  if (style === 'strip') {
+    return `<section class='section gallery-strip-section'><div class='wrap'><p class='eyebrow'>${esc(eyebrow)}</p><h2>${esc(heading)}</h2><p class='lead'>${esc(lead)}</p></div><div class='gallery-strip'>${imgs.slice(0, 4).map((src) => `<img src='${attr(src)}' alt=''>`).join('')}</div></section>`
+  }
+  return `<section class='section'><div class='wrap split'><div><p class='eyebrow'>${esc(eyebrow)}</p><h2>${esc(heading)}</h2><p class='lead'>${esc(lead)}</p></div><div class='gallery-grid'>${imgs.slice(0, 3).map((src) => `<img src='${attr(src)}' alt=''>`).join('')}</div></div></section>`
+
 }
 function faq(c: FreeformPageContent, fullPage = false, ctx: FreeformCtx): string {
   const groups = (c.faqGroups || []).filter((g) => g.title && g.items?.length).slice(0, 3)
@@ -940,9 +1003,50 @@ function buildCss(ctx: FreeformCtx, plan?: FreeformPlan): string {
 @media(max-width:960px){.wrap{width:min(100% - 32px,var(--wrap))}.nav-desktop{display:none!important}.nav-mobile{display:block!important}.brand{max-width:calc(100vw - 140px)}.split,.contact-grid,.footer-grid,.cta-band{grid-template-columns:1fr}.grid{grid-template-columns:1fr 1fr}.gallery-grid{grid-template-columns:1fr 1fr}.hero{min-height:auto;align-items:center}}
 @media(min-width:961px){.nav-mobile{display:none!important}.nav-desktop{display:flex!important}}
 @media(max-width:640px){body{font-size:15px}.wrap{width:calc(100% - 28px)}.nav-shell{min-height:68px}.brand{font-size:19px;max-width:calc(100vw - 122px)}.section{padding:58px 0}.hero{padding:72px 0 44px}.hero-card{padding:24px;border-radius:24px}h1{font-size:clamp(38px,13vw,58px);max-width:11ch}h2{font-size:clamp(29px,10vw,44px)}.lead{font-size:16px}.grid,.gallery-grid{grid-template-columns:1fr}.btn-row{display:grid}.btn{width:100%;min-height:52px}.media-card img,.gallery-grid img,.gallery-grid img:first-child{height:230px}.cta-band{border-radius:24px;padding:26px}}
+${LAYOUT_CSS}
 ${templateCss(template)}
+${variantCss(variantFor(ctx, plan))}
 `.trim()
 }
+
+/** Styles for the layout blocks the variant system can pick. */
+const LAYOUT_CSS = `
+.hero-split,.hero-calm,.hero-type,.page-hero-calm{background:linear-gradient(180deg,color-mix(in srgb,var(--surface) 70%,var(--background)),var(--background))}
+.hero-split{min-height:auto;align-items:center;padding:clamp(70px,8vw,120px) 0}
+.hero-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(260px,.95fr);gap:clamp(28px,5vw,72px);align-items:center}
+.hero-figure{margin:0;overflow:hidden;border-radius:var(--radius);box-shadow:0 30px 90px var(--shadow)}
+.hero-figure img{position:static;width:100%;height:clamp(320px,46vw,560px);object-fit:cover;filter:none}
+.hero-calm{min-height:auto;align-items:center;padding:clamp(84px,10vw,150px) 0;text-align:left}
+.hero-panel{display:flex;flex-wrap:wrap;gap:12px;margin-top:32px}
+.hero-panel span{padding:12px 18px;border:1px solid var(--border);border-radius:999px;background:color-mix(in srgb,var(--surface) 84%,transparent);font-weight:800;font-size:14px}
+.hero-industrial{align-items:end}
+.hero-industrial .hero-slab{max-width:820px;padding:clamp(28px,4vw,54px);border-left:6px solid var(--primary);background:color-mix(in srgb,var(--background) 84%,transparent);box-shadow:0 30px 90px var(--shadow)}
+.hero-type{min-height:auto;padding:clamp(96px,12vw,170px) 0 clamp(60px,8vw,110px);text-align:center}
+.hero-type .wrap{display:grid;justify-items:center}
+.hero-type h1{max-width:16ch;text-align:center}
+.hero-type .lead{text-align:center;max-width:58ch}
+.hero-type .rule{width:120px;height:2px;margin:26px 0;background:var(--primary)}
+.page-hero-calm{padding:clamp(90px,10vw,140px) 0 clamp(48px,6vw,80px)}
+.service-rows{display:grid;gap:0;margin-top:34px;border-top:1px solid var(--border)}
+.service-rows article{display:grid;grid-template-columns:78px minmax(0,.9fr) minmax(0,1.35fr);gap:24px;align-items:start;padding:clamp(22px,3vw,34px) 0;border-bottom:1px solid var(--border)}
+.service-rows .num{font-family:var(--display);font-size:20px;font-weight:900;color:var(--primary)}
+.service-rows p+p{margin-top:10px}
+.trust-band{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:clamp(20px,3vw,40px);padding:clamp(26px,4vw,46px);border:1px solid var(--border);border-radius:var(--radius);background:color-mix(in srgb,var(--surface) 76%,transparent)}
+.trust-band h3{margin-bottom:10px;font-size:clamp(18px,1.7vw,23px)}
+.gallery-strip-section{padding-bottom:0}
+.gallery-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:clamp(32px,5vw,56px)}
+.gallery-strip img{width:100%;height:clamp(220px,26vw,380px);object-fit:cover}
+@media(max-width:960px){.hero-grid,.trust-band{grid-template-columns:1fr}.service-rows article{grid-template-columns:52px 1fr}.service-rows article>div{grid-column:1/-1}.gallery-strip{grid-template-columns:1fr 1fr}}
+@media(max-width:640px){.service-rows article{grid-template-columns:1fr;gap:10px}.hero-figure img{height:260px}.gallery-strip{grid-template-columns:1fr}}
+`.trim()
+
+/** Small per-variant tweaks so two leads in the same family never match. */
+function variantCss(v: FamilyVariant): string {
+  if (v.id === 'b') return `body.variant-b{--radius:14px}\nbody.variant-b .btn{border-radius:10px}\nbody.variant-b .cta-band{border-radius:18px}\nbody.variant-b .card{box-shadow:none;border-width:1px}\nbody.variant-b .eyebrow:before{width:44px}`
+  if (v.id === 'c') return `body.variant-c{--radius:0px}\nbody.variant-c .btn{border-radius:0}\nbody.variant-c .cta-band{border-radius:0}\nbody.variant-c .section-alt{background:color-mix(in srgb,var(--primary) 7%,transparent)}\nbody.variant-c .eyebrow:before{display:none}\nbody.variant-c .eyebrow{letter-spacing:.3em}`
+  return `body.variant-a .card:nth-child(3n+2){background:color-mix(in srgb,var(--primary) 6%,var(--surface))}`
+}
+
 
 function templateCss(template: BlockTemplateFamilyKey): string {
   if (template === 'bistro_atmospheric_landing') return `
@@ -1007,8 +1111,18 @@ body.template-salon_editorial_luxury{--radius:34px}
 .template-salon_editorial_luxury .gallery-grid{grid-template-columns:1.05fr .75fr .9fr}
 .template-salon_editorial_luxury .gallery-grid img:first-child{height:410px}
 .template-salon_editorial_luxury .cta-band{border-radius:46px}
+.template-salon_editorial_luxury .brand,.template-salon_editorial_luxury h1,.template-salon_editorial_luxury h2,.template-salon_editorial_luxury h3{font-family:Georgia,"Times New Roman",serif;font-weight:400;letter-spacing:-.03em}
+.template-salon_editorial_luxury h1{font-size:clamp(46px,7.6vw,96px);max-width:13ch}
+.template-salon_editorial_luxury .eyebrow{letter-spacing:.3em;font-weight:800}
+.template-salon_editorial_luxury .section-alt{background:color-mix(in srgb,var(--accent) 16%,var(--background))}
+.template-salon_editorial_luxury .hero-figure{border-radius:220px 220px 24px 24px}
+.template-salon_editorial_luxury .hero-figure img{height:clamp(360px,50vw,620px)}
+.template-salon_editorial_luxury .service-rows article{border-bottom-color:color-mix(in srgb,var(--primary) 24%,transparent)}
+.template-salon_editorial_luxury .gallery-strip img{border-radius:200px 200px 18px 18px}
+.template-salon_editorial_luxury .trust-band{border-radius:44px;background:color-mix(in srgb,var(--accent) 22%,var(--surface))}
 @media(max-width:960px){.template-salon_editorial_luxury .grid{grid-template-columns:1fr 1fr}.template-salon_editorial_luxury .card:nth-child(2n){transform:none}}
-@media(max-width:640px){.template-salon_editorial_luxury .grid{grid-template-columns:1fr}.template-salon_editorial_luxury .media-card img,.template-salon_editorial_luxury .gallery-grid img:first-child{height:250px}}
+@media(max-width:640px){.template-salon_editorial_luxury .grid{grid-template-columns:1fr}.template-salon_editorial_luxury .media-card img,.template-salon_editorial_luxury .gallery-grid img:first-child{height:250px}.template-salon_editorial_luxury .hero-figure{border-radius:140px 140px 18px 18px}}
+
 `.trim()
 
   if (template === 'clinic_private_care') return `

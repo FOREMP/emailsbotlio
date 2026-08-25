@@ -312,6 +312,7 @@ export function blockTemplateFamilyCatalog(): Array<{
 }
 
 const RESTAURANT_RE = /(restaurang|restaurant|bistro|bar\b|pub\b|café|cafe|pizzeria|bageri|catering|mat|lunch|krog|diner|brasserie|trattoria)/i
+const STRONG_BEAUTY_RE = /(frisör|frisor|hairdress|hair salon|hair studio|barber|salong|salon\b|nagel|nail|frans|lash|bryn|brow|makeup|smink|hudvård|skin care|skönhet|beauty|spa\b|stylist)/i
 const CLINIC_PRIVATE_RE = /(klinik|clinic|tandläkare|dentist|dental|terapi|therapy|psykolog|counselling|counseling|fysioterap|physio|naprapat|kiropraktor|hälsa|halsa|wellbeing|wellness clinic|medical|medicinsk|vård|vard|rehab|rehabilitering)/i
 const EDITORIAL_SERVICE_RE = /(frisör|frisor|hair|barber|salong|skönhet|beauty|nagel|nail|frans|bryn|lash|brow|spa\b|massage|klinik|clinic|hudvård|skin|wellness|terapi|terapeut|kosmetisk|makeup|stylist|studio)/i
 const AUTOMOTIVE_RE = /(bilverkstad|mekaniker|auto|däck|bilservice|bilrekond|billack|bilglas|car repair|auto shop|tyre|motorverkstad)/i
@@ -334,6 +335,9 @@ export function selectBlockTemplateFamily(input: {
   // The uploaded category is the strongest signal. It is what Eric maps from the scraper.
   const primary = [category, niche, nicheLabel, businessName].filter(Boolean).join(' ')
   if (RESTAURANT_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.bistro_atmospheric_landing
+  // Beauty wins over the clinic family: a salon that mentions "terapi" or "hälsa"
+  // must not end up on the medical layout.
+  if (STRONG_BEAUTY_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.salon_editorial_luxury
   if (CLINIC_PRIVATE_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.clinic_private_care
   if (EDITORIAL_SERVICE_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.salon_editorial_luxury
   if (AUTOMOTIVE_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.mechanic_precision_workshop
