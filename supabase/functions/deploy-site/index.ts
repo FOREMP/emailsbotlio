@@ -21,6 +21,7 @@ type VercelAccessCheck = {
   status: number
   detail: string
 }
+type DeploymentMode = 'project' | 'direct'
 const MAX_PUBLIC_URL_CHECKS = 8
 const READY_STATES_FAILED = new Set(['ERROR', 'CANCELED'])
 
@@ -159,6 +160,20 @@ function buildVercelTokenHint(status: number, payload: unknown, teamId?: string 
   return ''
 }
 
+function shouldFallbackToDirectDeployment(status: number, payload: unknown) {
+  if (status !== 403) return false
+  const text = JSON.stringify(payload ?? {}).toLowerCase()
+  return text.includes("permission to create a project")
+    || text.includes('permission to create project')
+    || text.includes('forbidden')
+}
+
+function directDeploymentPublicUrl(payload: any): string | null {
+  const url = typeof payload?.url === 'string' ? payload.url.trim() : ''
+  if (!url) return null
+  return url.startsWith('http') ? url : `https://${url}`
+}
+
 async function validateVercelAccess(args: {
   vercelToken: string
   teamId?: string | null
@@ -258,8 +273,9 @@ async function resolvePublicDemoUrl(args: {
   deploymentId?: string | null
   deploymentUrl?: string | null
   aliasCandidates?: string[]
+  mode?: DeploymentMode
 }): Promise<VerifyResult> {
-  const { vercelToken, teamId, scopeSlug, projectName, deploymentId, deploymentUrl, aliasCandidates } = args
+  const { vercelToken, teamId, scopeSlug, projectName, deploymentId, deploymentUrl, aliasCandidates, mode = 'project' } = args
   const attempts = [0, 2000, 5000, 10000, 15000, 25000]
   let lastStatus: number | null = null
   let lastDetail = ''
@@ -300,7 +316,7 @@ async function resolvePublicDemoUrl(args: {
     const candidates = mergeAliasCandidates(
       liveAliasCandidates,
       collectedAliases,
-      stableProjectUrls(projectName, scopeSlug),
+      mode === 'project' ? stableProjectUrls(projectName, scopeSlug) : [],
       deploymentUrl ? [deploymentUrl] : [],
     )
 
@@ -406,6 +422,7 @@ Deno.serve(async (req) => {
     let aliasCandidates: string[] = mergeAliasCandidates(previousAliasCandidates)
     let readyState: string | null = typeof site.vercel_ready_state === 'string' ? site.vercel_ready_state : null
     const nextDeployCheckCount = previousCheckCount + 1
+    let deploymentMode: DeploymentMode = projectId ? 'project' : 'direct'
 
     const shouldCreateFreshDeployment =
       site.status !== 'deploying'
@@ -415,27 +432,54 @@ Deno.serve(async (req) => {
     if (shouldCreateFreshDeployment) {
       await supabase.from('generated_sites').update({ status: 'deploying', error_message: null }).eq('id', generated_site_id)
 
-      const { resp: deployResp, data: deployDataRaw } = await vercelJson('/v13/deployments', {
+      const projectDeployBody = {
+        name: projectName,
+        project: projectName,
+        target: 'production',
+        files: filesArray,
+        projectSettings: {
+          framework: null,
+          buildCommand: null,
+          outputDirectory: null,
+          installCommand: null,
+          devCommand: null,
+        },
+      }
+
+      let { resp: deployResp, data: deployDataRaw } = await vercelJson('/v13/deployments', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${vercelToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          name: projectName,
-          project: projectName,
-          target: 'production',
-          files: filesArray,
-          projectSettings: {
-            framework: null,
-            buildCommand: null,
-            outputDirectory: null,
-            installCommand: null,
-            devCommand: null,
-          },
-        }),
+        body: JSON.stringify(projectDeployBody),
       }, vercelTeamId)
       deployData = deployDataRaw
+
+      if (!deployResp.ok && shouldFallbackToDirectDeployment(deployResp.status, deployData)) {
+        console.warn('vercel project deployment denied; retrying as direct deployment', JSON.stringify({
+          site_id: generated_site_id,
+          project_name: projectName,
+          status: deployResp.status,
+          preview: JSON.stringify(deployData).slice(0, 240),
+        }))
+        deploymentMode = 'direct'
+        const directDeployBody = {
+          files: filesArray,
+        }
+        const directResult = await vercelJson('/v13/deployments', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${vercelToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(directDeployBody),
+        }, vercelTeamId)
+        deployResp = directResult.resp
+        deployData = directResult.data
+      } else {
+        deploymentMode = 'project'
+      }
 
       if (!deployResp.ok) {
         await supabase.from('generated_sites').update({
@@ -446,7 +490,7 @@ Deno.serve(async (req) => {
       }
 
       deploymentId = typeof deployData?.id === 'string' ? deployData.id : null
-      deploymentUrl = deployData?.url ? `https://${deployData.url}` : null
+      deploymentUrl = directDeploymentPublicUrl(deployData)
       projectId = deployData?.projectId ?? projectId
       readyState = typeof deployData?.readyState === 'string'
         ? deployData.readyState
@@ -473,6 +517,7 @@ Deno.serve(async (req) => {
         project_id: projectId,
         deployment_id: deploymentId,
         deployment_url: deploymentUrl,
+        deployment_mode: deploymentMode,
         ready_state: readyState,
         alias_candidates: aliasCandidates,
       }))
@@ -502,7 +547,9 @@ Deno.serve(async (req) => {
       }
     }
 
-    const effectiveScopeSlug = vercelScopeSlug || inferScopeSlug(projectName, deploymentUrl, aliasCandidates)
+    const effectiveScopeSlug = deploymentMode === 'project'
+      ? (vercelScopeSlug || inferScopeSlug(projectName, deploymentUrl, aliasCandidates))
+      : null
     const verify = await resolvePublicDemoUrl({
       vercelToken,
       teamId: vercelTeamId,
@@ -511,6 +558,7 @@ Deno.serve(async (req) => {
       deploymentId,
       deploymentUrl,
       aliasCandidates,
+      mode: deploymentMode,
     })
     readyState = verify.readyState ?? readyState
     aliasCandidates = mergeAliasCandidates(aliasCandidates, verify.aliases)
@@ -521,6 +569,7 @@ Deno.serve(async (req) => {
         site_id: generated_site_id,
         deployment_id: deploymentId,
         deployment_url: deploymentUrl,
+        deployment_mode: deploymentMode,
         ready_state: readyState,
         deploy_check_count: nextDeployCheckCount,
         alias_candidates: aliasCandidates,
@@ -565,6 +614,7 @@ Deno.serve(async (req) => {
       deployment_id: deploymentId,
       public_url: verify.publicUrl ?? deploymentUrl,
       deployment_url: deploymentUrl,
+      deployment_mode: deploymentMode,
       ready_state: readyState,
       deploy_check_count: nextDeployCheckCount,
     }))
