@@ -159,13 +159,12 @@ export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<st
   }
   if (progress.stage === 'render') {
     const content = cleanContentMap(progress.content)
-    if (plan.templateFamily && plan.templateFamily !== 'service_clarity_default') {
-      const genericFallbackUsed = (progress.fallbacksUsed || []).some((label) => /^(content|polish):index$/.test(label))
-      if (genericFallbackUsed) {
-        throw new Error(`modern-template-content retry required for ${plan.templateFamily}`)
-      }
+    for (const p of plan.pages) {
+      const labels = (progress.fallbacksUsed || []).filter((label) => label === `content:${p.slug}` || label === `polish:${p.slug}`)
+      const repaired = repairContent(ctx, content[p.slug] ?? fallbackContent(ctx, p))
+      const stable = stabilizeTemplateContent(ctx, plan, p, repaired, labels)
+      files[fileNameFor(p.slug)] = render(ctx, plan, p, stable)
     }
-    for (const p of plan.pages) files[fileNameFor(p.slug)] = render(ctx, plan, p, repairContent(ctx, content[p.slug] ?? fallbackContent(ctx, p)))
     return step(false, files, meta({ ...progress, stage: 'quality_check', rendered: plan.pages.map((p) => p.slug), built: plan.pages.map((p) => p.slug), lastStage: 'render' }), `v${VERSION} rendered ${plan.pages.length} pages`)
   }
   if (progress.stage === 'quality_check') {
@@ -1266,6 +1265,73 @@ function shouldRenderContact(plan: FreeformPlan, page: FreeformPageSpec): boolea
   if (plan.templateFamily === 'byggform_architectural_trust') return page.pageKind === 'landing' || page.pageKind === 'contact' || page.pageKind === 'faq'
   if (plan.templateFamily === 'service_company_modern') return page.pageKind === 'landing' || page.pageKind === 'contact'
   return page.pageKind !== 'contact'
+}
+
+function isModernTemplateFamily(template?: BlockTemplateFamilyKey): boolean {
+  return Boolean(template && template !== 'service_clarity_default')
+}
+
+function minimumServiceCount(template?: BlockTemplateFamilyKey): number {
+  if (template === 'salon_editorial_luxury') return 3
+  if (template === 'clinic_private_care') return 3
+  if (template === 'mechanic_precision_workshop') return 3
+  if (template === 'service_company_modern') return 3
+  if (template === 'byggform_architectural_trust') return 2
+  return 2
+}
+
+function looksInternalTemplateCopy(ctx: FreeformCtx, text: string): boolean {
+  if (!text) return false
+  return isEnglish(ctx)
+    ? /\b(website|page|demo|ai|generated|tailored for the company|customized for the company|the visitor gets)\b/i.test(text)
+    : /\b(sidan|webbplats|demo|AI|anpassad efter företaget|besökaren får)\b/i.test(text)
+}
+
+function modernTemplateIssues(ctx: FreeformCtx, plan: FreeformPlan, page: FreeformPageSpec, content: FreeformPageContent): string[] {
+  if (!isModernTemplateFamily(plan.templateFamily)) return []
+  const issues: string[] = []
+  if (!content.heroTitle || !content.heroLead) issues.push('missing-hero')
+  if (looksInternalTemplateCopy(ctx, `${content.heroTitle} ${content.heroLead} ${content.introText} ${content.closingText}`)) issues.push('internal-copy')
+  if (shouldRenderServices(plan, page) && (content.services || []).length < minimumServiceCount(plan.templateFamily)) issues.push('thin-services')
+  if (shouldRenderIntro(plan, page)) {
+    const sectionCount = (content.sections || []).filter((s) => s.title && s.text).length
+    if (!content.introTitle || !content.introText) issues.push('missing-intro')
+    if (sectionCount < 1 && page.pageKind === 'landing') issues.push('thin-sections')
+  }
+  if (page.pageKind === 'faq') {
+    const faqCount = (content.faqs || []).length + (content.faqGroups || []).reduce((sum, g) => sum + (g.items?.length || 0), 0)
+    if (faqCount < 2) issues.push('thin-faq')
+  }
+  return issues
+}
+
+function stabilizeTemplateContent(
+  ctx: FreeformCtx,
+  plan: FreeformPlan,
+  page: FreeformPageSpec,
+  content: FreeformPageContent,
+  fallbackLabels: string[],
+): FreeformPageContent {
+  if (!isModernTemplateFamily(plan.templateFamily)) return content
+  const issues = modernTemplateIssues(ctx, plan, page, content)
+  if (!issues.length && !fallbackLabels.length) return content
+
+  const fallback = repairContent(ctx, fallbackContent(ctx, page))
+  const merged: FreeformPageContent = {
+    ...fallback,
+    ...content,
+    services: (content.services || []).length >= minimumServiceCount(plan.templateFamily) ? content.services : fallback.services,
+    sections: (content.sections || []).filter((s) => s.title && s.text).length ? content.sections : fallback.sections,
+    faqs: (content.faqs || []).length >= 2 ? content.faqs : fallback.faqs,
+    faqGroups: (content.faqGroups || []).length ? content.faqGroups : fallback.faqGroups,
+  }
+  const mergedIssues = modernTemplateIssues(ctx, plan, page, merged)
+  if (!mergedIssues.length) return { ...merged, source: fallbackLabels.length ? 'fallback' : merged.source }
+
+  return {
+    ...fallback,
+    source: 'fallback',
+  }
 }
 
 function sourceFor(ctx: FreeformCtx, page: FreeformPageSpec): string {
