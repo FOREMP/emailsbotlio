@@ -67,9 +67,11 @@ export default function SiteApprovals() {
   const [page, setPage] = useState(1);
 
   const loadCounts = async () => {
-    const statusQueries = APPROVAL_STATUSES.map((status) =>
-      supabase.from("site_leads").select("id", { count: "exact", head: true }).eq("status", status)
-    );
+    const statusQueries = APPROVAL_STATUSES.map((status) => {
+      let q = supabase.from("site_leads").select("id", { count: "exact", head: true }).eq("status", status);
+      if (languageFilter !== "all") q = q.eq("language", languageFilter);
+      return q;
+    });
     const results = await Promise.all(statusQueries);
     const nextCounts: Record<string, number> = {};
     APPROVAL_STATUSES.forEach((status, idx) => {

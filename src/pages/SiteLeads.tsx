@@ -138,13 +138,26 @@ export default function SiteLeads() {
   // Which builder engine new jobs use
   const [genMode, setGenMode] = useState<"template" | "freeform">("template");
 
+  const applyCountFilters = (query: any, includeLanguage: boolean) => {
+    let next = query;
+    if (nicheFilter !== "all") next = next.eq("niche", nicheFilter);
+    if (includeLanguage && languageFilter !== "all") next = next.eq("language", languageFilter);
+    const q = search.trim();
+    if (q) {
+      const safe = q.replace(/[%]/g, "");
+      next = next.or(`company_name.ilike.%${safe}%,email.ilike.%${safe}%,website.ilike.%${safe}%,category.ilike.%${safe}%,address.ilike.%${safe}%`);
+    }
+    return next;
+  };
+
   const loadCounts = async () => {
-    const totalQuery = supabase.from("site_leads").select("id", { count: "exact", head: true });
     const statusQueries = STATUS_OPTIONS.map((status) =>
-      supabase.from("site_leads").select("id", { count: "exact", head: true }).eq("status", status)
+      applyCountFilters(
+        supabase.from("site_leads").select("id", { count: "exact", head: true }).eq("status", status),
+        true,
+      )
     );
-    const [totalRes, ...statusRes] = await Promise.all([totalQuery, ...statusQueries]);
-    setTotalCount(totalRes.count ?? 0);
+    const statusRes = await Promise.all(statusQueries);
     const nextCounts: Record<string, number> = {};
     STATUS_OPTIONS.forEach((status, idx) => {
       nextCounts[status] = statusRes[idx].count ?? 0;
