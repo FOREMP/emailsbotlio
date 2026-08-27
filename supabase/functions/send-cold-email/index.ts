@@ -474,6 +474,8 @@ Deno.serve(async (req) => {
         subject: finalSubject,
         message_id: messageId,
         throttle_node_id: throttle_node_id ?? null,
+        is_followup: !!is_followup,
+        budget_kind: is_followup ? 'followup' : 'first_touch',
       },
     })
   }

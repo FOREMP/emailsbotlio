@@ -157,6 +157,26 @@ function minutesLeftInWindow(now = new Date()): number {
   return Math.max(1, SEND_WINDOW_END * 60 - (p.hour * 60 + p.minute))
 }
 
+function senderBaseQuota(sender: any): number {
+  const daily = Number(sender?.daily_limit ?? 0)
+  const target = Number(sender?.warmup_target ?? daily)
+  if (!sender?.warmup_enabled || !sender?.warmup_started_at) return daily
+  const day = Math.max(1, Math.floor((Date.now() - new Date(sender.warmup_started_at).getTime()) / 86_400_000) + 1)
+  const ramp = day <= 6 ? day * 5 : 30 + (day - 6) * 10
+  return Math.min(daily, target, Math.max(5, ramp))
+}
+
+function senderFollowupQuota(sender: any): number {
+  const base = senderBaseQuota(sender)
+  const mult = Math.max(1, Number(sender?.followup_multiplier ?? 3))
+  if (!sender?.warmup_enabled || !sender?.warmup_started_at) return base * mult
+  // During warmup, follow-ups still get extra room, but we keep that room much
+  // tighter than steady-state so a warming domain doesn't suddenly jump to 4x
+  // its intended cold-mail volume.
+  const warmExtra = Math.max(3, Math.ceil(base * 0.5))
+  return Math.min(base * mult, warmExtra)
+}
+
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders })
@@ -232,8 +252,9 @@ Deno.serve(async (req) => {
   let failed = 0
   const errors: any[] = []
 
-  // Per-tick cache of domain usage (Stockholm-day approximated as UTC-day for query efficiency).
-  // We count today's sends grouped by sender domain to enforce PER_DOMAIN_DAILY_CAP.
+  // Per-tick cache of domain usage for the current Stockholm day.
+  // We count today's sends grouped by sender domain to enforce a domain-level
+  // ceiling that respects warmup instead of the full steady-state sender limit.
   const domainSentToday = new Map<string, number>()
   // Per-tick cache of each sender's last send time (ms epoch) for pacing.
   const senderLastSentAt = new Map<string, number>()
@@ -247,18 +268,18 @@ Deno.serve(async (req) => {
       // Fetch all sender ids for this domain (any user) — domain reputation is shared regardless of user
       const { data: dSenders } = await supabase
         .from('senders')
-        .select('id, from_email, daily_limit, followup_multiplier, is_active')
+        .select('id, from_email, daily_limit, followup_multiplier, warmup_enabled, warmup_started_at, warmup_target, is_active')
         .ilike('from_email', `%@${domain}`)
       const ids = (dSenders ?? []).map((s: any) => s.id)
-      // Dynamic cap: every active sender on this domain contributes its first-mail
-      // quota plus its follow-up quota (daily_limit * followup_multiplier).
+      // Dynamic cap: every active sender on this domain contributes its current
+      // first-mail warmup quota plus its current follow-up allowance.
       const dynCap = (dSenders ?? [])
         .filter((s: any) => s.is_active !== false)
-        .reduce((sum: number, s: any) => sum + (s.daily_limit ?? 0) * (1 + (s.followup_multiplier ?? 3)), 0)
-      domainCap.set(domain, Math.max(PER_DOMAIN_DAILY_CAP, dynCap))
+        .reduce((sum: number, s: any) => sum + senderBaseQuota(s) + senderFollowupQuota(s), 0)
+      domainCap.set(domain, Math.min(PER_DOMAIN_DAILY_CAP, Math.max(1, dynCap)))
       let used = 0
       if (ids.length > 0) {
-        const startOfDay = new Date(); startOfDay.setUTCHours(0, 0, 0, 0)
+        const startOfDay = startOfStockholmDayUtc()
         const { count } = await supabase
           .from('sent_emails')
           .select('id', { count: 'exact', head: true })
@@ -426,6 +447,27 @@ Deno.serve(async (req) => {
       // We tag email_sent activities with metadata.throttle_node_id when they pass
       // through a throttle, and count by that tag here.
       if (currentNode.node_type === 'throttle') {
+        if (enr.last_sent_at) {
+          const next = nextEdgeFrom(nodes ?? [], edges ?? [], currentNode.id)
+          if (!next) {
+            await supabase.from('enrollments').update({
+              status: 'completed',
+              current_step: Math.min(4, sentCount),
+              next_send_at: null,
+              deferred_at: null,
+            }).eq('id', enr.id)
+            continue
+          }
+          await supabase.from('enrollments').update({
+            current_node_id: next.target_node_id,
+            next_send_at: nowIso,
+            status: 'active',
+            last_error: `__pending_throttle:${currentNode.id}`,
+          }).eq('id', enr.id)
+          advanced++
+          continue
+        }
+
         const max = Number(cfg.max_per_day ?? 50)
         const startOfDay = startOfStockholmDayUtc()
         // Count only sends gated by THIS throttle today. send-cold-email stamps
@@ -438,6 +480,7 @@ Deno.serve(async (req) => {
           .eq('sequence_id', enr.sequence_id)
           .eq('activity_type', 'email_sent')
           .filter('metadata->>throttle_node_id', 'eq', currentNode.id)
+          .filter('metadata->>is_followup', 'eq', 'false')
           .gte('created_at', startOfDay.toISOString())
         // Cap counts NEW first-mail sends only. Follow-ups bypass this and always run.
         if ((count ?? 0) >= max) {
@@ -498,6 +541,7 @@ Deno.serve(async (req) => {
             .eq('sequence_id', enr.sequence_id)
             .eq('activity_type', 'email_sent')
             .not('metadata->>throttle_node_id', 'is', null)
+            .filter('metadata->>is_followup', 'eq', 'false')
             .gte('created_at', startOfDay.toISOString())
           if ((count ?? 0) >= cap) {
             const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)

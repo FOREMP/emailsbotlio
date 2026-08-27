@@ -190,6 +190,12 @@ const Senders = () => {
     const ramp = day <= 6 ? day * 5 : 30 + (day - 6) * 10;
     return Math.min(s.daily_limit, s.warmup_target, Math.max(5, ramp));
   };
+  const todayFollowupQuota = (s: Sender) => {
+    const base = todayQuota(s);
+    const mult = Math.max(1, s.followup_multiplier ?? 3);
+    if (!s.warmup_enabled || !s.warmup_started_at) return base * mult;
+    return Math.min(base * mult, Math.max(3, Math.ceil(base * 0.5)));
+  };
   const hasDomains = domains.length > 0;
   const allDefaultsPresent = useMemo(() => {
     if (!hasDomains) return true;
@@ -349,7 +355,10 @@ const Senders = () => {
                                 onChange={(e) => updateSender(s.id, { followup_multiplier: Number(e.target.value) })}
                               />
                               <p className="text-[10px] text-muted-foreground mt-1">
-                                {s.daily_limit} nya + {s.daily_limit * (s.followup_multiplier ?? 3)} uppföljningar per dag
+                                Steady state: {s.daily_limit} nya + {s.daily_limit * (s.followup_multiplier ?? 3)} uppföljningar / dag
+                              </p>
+                              <p className="text-[10px] text-muted-foreground">
+                                Idag: {todayQuota(s)} nya + {todayFollowupQuota(s)} uppföljningar {s.warmup_enabled ? "(warmup-säkrat)" : ""}
                               </p>
                             </div>
                             <div>
