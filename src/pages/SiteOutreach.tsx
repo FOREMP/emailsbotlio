@@ -13,7 +13,8 @@ import {
 } from "@/components/ui/dialog";
 import { Loader2, StopCircle, Mail, Save, Eye, Gauge, BarChart3 } from "lucide-react";
 import { VolumeTrendChart } from "@/components/analytics/VolumeTrendChart";
-import { computeDailySeries, computeKpis, type SentEmailRow } from "@/hooks/useAnalytics";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { annotateSteps, computeDailySeries, computeKpis, filterByStep, type StepFilter, type SentEmailRow } from "@/hooks/useAnalytics";
 
 type Seq = { id: string; contact_list_id: string | null };
 type Node = { id: string; node_type: string; position_y: number; config: any };
