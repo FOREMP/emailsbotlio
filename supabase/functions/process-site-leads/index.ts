@@ -29,7 +29,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
+const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 
 const AUDIT_PER_TICK = 3    // Firecrawl+Gemini per invocation — keep memory low
 const GEN_PER_TICK = 3      // how many new pipelines may START per tick
@@ -53,7 +53,7 @@ function isCanonicalDemoUrl(value?: string | null): boolean {
 }
 const STALE_PIPELINE_MINUTES = 30 // never let one dead scrape/generate/deploy block the whole queue
 const ORPHAN_GRACE_MINUTES = 10   // 'generating' with no generated_sites row = dead job
-const TEMPLATE_PICKER_MODEL = 'deepseek/deepseek-chat-v3.1'
+const TEMPLATE_PICKER_MODEL = 'gpt-4o-mini'
 const ACTIVE_GENERATED_SITE_STATUSES = ['pending', 'scraped', 'queued', 'processing', 'generated', 'deploying'] as const
 
 function startOfStockholmDayUtc(now = new Date()): Date {
@@ -565,12 +565,12 @@ async function auditOne(
   row: { id: string; website: string; company_name: string },
 ) {
   const fcKey = Deno.env.get('FIRECRAWL_API_KEY')
-  const lovableKey = Deno.env.get('LOVABLE_API_KEY')
-  if (!fcKey || !lovableKey) throw new Error('missing FIRECRAWL_API_KEY or LOVABLE_API_KEY')
+  const openrouterKey = Deno.env.get('OPENROUTER_API_KEY')
+  if (!fcKey || !openrouterKey) throw new Error('missing FIRECRAWL_API_KEY or OPENROUTER_API_KEY')
 
   await supabase.from('site_leads').update({ status: 'auditing' }).eq('id', row.id)
 
-  const result = await auditWebsite(row.website, row.company_name, fcKey, lovableKey)
+  const result = await auditWebsite(row.website, row.company_name, fcKey, openrouterKey)
   const score = Math.max(1, Math.min(10, Math.round(result.score)))
   // Only auto-park when the audit had enough confidence. Uncertain / blocked /
   // no-screenshot cases go to triage instead of being silently excluded.
@@ -642,17 +642,17 @@ async function chooseTemplateFamilyForLead(lead: any): Promise<{
     niche: lead?.niche ?? null,
     businessName: lead?.company_name ?? null,
   })
-  const lovableKey = Deno.env.get('LOVABLE_API_KEY')
-  if (!lovableKey) return { family: fallback, source: 'rules', reason: 'LOVABLE_API_KEY missing' }
+  const openaiKey = Deno.env.get('OPENAI_API_KEY')
+  if (!openaiKey) return { family: fallback, source: 'rules', reason: 'OPENAI_API_KEY missing' }
 
   const familyCatalog = blockTemplateFamilyCatalog()
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 12_000)
   try {
-    const resp = await fetch(`${AI_GATEWAY}/chat/completions`, {
+    const resp = await fetch(OPENAI_URL, {
       method: 'POST',
       signal: controller.signal,
-      headers: { 'Lovable-API-Key': lovableKey, 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: TEMPLATE_PICKER_MODEL,
         temperature: 0,

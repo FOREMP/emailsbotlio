@@ -68,8 +68,8 @@ Deno.serve(async (req) => {
 
     const fcKey = Deno.env.get('FIRECRAWL_API_KEY')
     if (!fcKey) return json({ error: 'FIRECRAWL_API_KEY not configured' }, 500)
-    const lovableKey = Deno.env.get('LOVABLE_API_KEY')
-    if (!lovableKey) return json({ error: 'LOVABLE_API_KEY missing' }, 500)
+    const openrouterKey = Deno.env.get('OPENROUTER_API_KEY')
+    if (!openrouterKey) return json({ error: 'OPENROUTER_API_KEY missing' }, 500)
 
     // Same screenshot-first rubric as the outreach pipeline.
     const { data: contactRow } = await supabase
@@ -84,7 +84,7 @@ Deno.serve(async (req) => {
 
     let result
     try {
-      result = await auditWebsite(targetUrl, companyName, fcKey, lovableKey)
+      result = await auditWebsite(targetUrl, companyName, fcKey, openrouterKey)
     } catch (e) {
       await supabase.from('generated_sites').update({
         status: 'failed',

@@ -8,7 +8,7 @@
 // secondary signal only.
 
 const FIRECRAWL_V2 = 'https://api.firecrawl.dev/v2'
-const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
 export interface AuditResult {
   score: number
@@ -122,7 +122,7 @@ export async function auditWebsite(
   rawUrl: string,
   companyName: string,
   fcKey: string,
-  lovableKey: string,
+  openrouterKey: string,
 ): Promise<AuditResult> {
   const url = normaliseUrl(rawUrl)
   const scraped = await scrapeForAudit(url, fcKey)
@@ -169,11 +169,16 @@ export async function auditWebsite(
     userContent.push({ type: 'image_url', image_url: { url: scraped.screenshot } })
   }
 
-  const aiResp = await fetch(`${AI_GATEWAY}/chat/completions`, {
+  const aiResp = await fetch(OPENROUTER_URL, {
     method: 'POST',
-    headers: { 'Lovable-API-Key': lovableKey, 'Content-Type': 'application/json' },
+    headers: {
+      Authorization: `Bearer ${openrouterKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://emailsbotlio.lovable.app',
+      'X-Title': 'Botlio Site Audit',
+    },
     body: JSON.stringify({
-      model: 'google/gemini-3-flash-preview',
+      model: 'google/gemini-2.5-flash',
       temperature: 0,
       top_p: 1,
       seed: 42,

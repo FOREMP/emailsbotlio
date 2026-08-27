@@ -21,17 +21,16 @@ const corsHeaders = {
 }
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
-const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
+const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 // Fast model for the content plan. DeepSeek V3.1 was frequently queued on
 // OpenRouter for 60s+, which is what killed most generations.
 const MODEL = 'openai/gpt-4o-mini'
-const POLISH_MODEL = 'openai/gpt-4o-mini'
-// When plan + polish use the same model we merge them into ONE call — the
-// second round-trip roughly doubled wall time for no measurable gain.
-const SKIP_POLISH = MODEL === POLISH_MODEL
+const POLISH_MODEL = 'gpt-4o-mini'
+// Plan generation stays on OpenRouter; copy polish now runs directly on OpenAI.
+const SKIP_POLISH = false
 const MAX_ATTEMPTS = 3
 const STUCK_MINUTES = 10
-const TEMPLATE_PICKER_MODEL = 'deepseek/deepseek-chat-v3.1'
+const TEMPLATE_PICKER_MODEL = 'gpt-4o-mini'
 
 const CURRENT_YEAR = new Date().getFullYear()
 
@@ -92,17 +91,17 @@ async function chooseTemplateFamilyForRegeneration(input: {
     niche: input?.niche ?? null,
     businessName: input?.company_name ?? null,
   })
-  const lovableKey = Deno.env.get('LOVABLE_API_KEY')
-  if (!lovableKey) return { family: fallback, source: 'rules' as const, reason: 'LOVABLE_API_KEY missing' }
+  const openaiKey = Deno.env.get('OPENAI_API_KEY')
+  if (!openaiKey) return { family: fallback, source: 'rules' as const, reason: 'OPENAI_API_KEY missing' }
 
   const familyCatalog = blockTemplateFamilyCatalog()
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 12_000)
   try {
-    const resp = await fetch(`${AI_GATEWAY}/chat/completions`, {
+    const resp = await fetch(OPENAI_URL, {
       method: 'POST',
       signal: controller.signal,
-      headers: { 'Lovable-API-Key': lovableKey, 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: TEMPLATE_PICKER_MODEL,
         temperature: 0,
@@ -776,6 +775,7 @@ Deno.serve(async (req) => {
   try {
     const openrouterKey = Deno.env.get('OPENROUTER_API_KEY')
     if (!openrouterKey) return json({ error: 'OPENROUTER_API_KEY missing' }, 500)
+    const openaiKey = Deno.env.get('OPENAI_API_KEY') ?? ''
 
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
@@ -1251,7 +1251,7 @@ Deno.serve(async (req) => {
           : await polishCopyWithClaude({
               plan: parsed,
               facts,
-              openrouterKey,
+              openaiKey,
               nc: ncFinal,
               language: siteLead?.language === 'en' ? 'en' : 'sv',
             }).catch((e) => {
@@ -1305,11 +1305,11 @@ Deno.serve(async (req) => {
 async function polishCopyWithClaude(args: {
   plan: SitePlan
   facts: Record<string, unknown>
-  openrouterKey: string
+  openaiKey: string
   nc: NicheConfig
   language?: 'sv' | 'en'
 }): Promise<SitePlan> {
-  const { plan, facts, openrouterKey, nc, language } = args
+  const { plan, facts, openaiKey, nc, language } = args
   const english = language === 'en'
 
   const user = `${english ? 'FACTS (do not invent information — stay inside these facts):' : 'FAKTA (påhittad information är förbjuden — håll dig till dessa):'}
@@ -1323,17 +1323,15 @@ ${english ? 'Return the same JSON with improved natural English copy.' : 'Return
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 45_000)
   try {
-    const resp = await fetch(OPENROUTER_URL, {
+    const resp = await fetch(OPENAI_URL, {
       method: 'POST',
       signal: controller.signal,
       headers: {
-        Authorization: `Bearer ${openrouterKey}`,
+        Authorization: `Bearer ${openaiKey}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://emailsbotlio.lovable.app',
-        'X-Title': 'Botlio Site Copy Polish',
       },
       body: JSON.stringify({
-        model: 'openai/gpt-4o-mini',
+        model: POLISH_MODEL,
         messages: [
           { role: 'system', content: english ? 'You are a senior English copy editor for premium small-business websites. Keep the JSON structure exactly, improve the language, and never invent facts.' : nc.polishSystemPrompt },
           { role: 'user', content: user },
