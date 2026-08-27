@@ -56,6 +56,7 @@ export default function SiteOutreach() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [savingLimit, setSavingLimit] = useState(false);
   const [allSentRows, setAllSentRows] = useState<SentEmailRow[]>([]);
+  const [stepFilter, setStepFilter] = useState<StepFilter>("all");
 
   const load = useCallback(async () => {
     setLoading(true);
