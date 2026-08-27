@@ -389,6 +389,12 @@ Deno.serve(async (req) => {
     }
   }
 
+  // Mail 1 (the cold first touch) goes out as plain text with no tracking pixel:
+  // a short text-only 1:1 mail almost never lands in Promotions, and mail 1 is
+  // the message that decides how the whole thread gets classified.
+  const isFirstTouch = !is_followup
+  const trackingEnabled = !isFirstTouch
+
   // Log pending
   await supabase.from('sent_emails').insert({
     id: messageId,
@@ -400,6 +406,7 @@ Deno.serve(async (req) => {
     subject: finalSubject,
     body: finalBody,
     status: 'queued',
+    tracking_enabled: trackingEnabled,
     message_id: messageId,
   })
 
@@ -410,10 +417,6 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: 'LOVABLE_API_KEY missing' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
   }
 
-  // Mail 1 (the cold first touch) goes out as plain text with no tracking pixel:
-  // a short text-only 1:1 mail almost never lands in Promotions, and mail 1 is
-  // the message that decides how the whole thread gets classified.
-  const isFirstTouch = !is_followup
   const basePayload: Record<string, any> = {
     message_id: messageId,
     to: contact.email,

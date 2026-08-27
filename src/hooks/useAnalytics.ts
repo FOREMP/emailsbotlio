@@ -32,6 +32,7 @@ export type SentEmailRow = {
   sender_id: string | null;
   enrollment_id: string | null;
   subject: string | null;
+  tracking_enabled?: boolean | null;
 };
 
 export const useSentEmails = (filters: AnalyticsFilters) => {
@@ -42,7 +43,7 @@ export const useSentEmails = (filters: AnalyticsFilters) => {
     queryFn: async () => {
       let q = supabase
         .from("sent_emails")
-        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject")
+        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject, tracking_enabled")
         .order("sent_at", { ascending: false })
         .limit(2000);
       const since = rangeToSince(filters.range);
@@ -176,17 +177,25 @@ export const computeKpis = (rows: SentEmailRow[]) => {
     r.status === "sent" || r.status === "bounced" || r.status === "complained" || r.status === "unsubscribed"
   ).length;
   const delivered = Math.max(0, sent - bounced);
-  const opened = rows.filter((r) => r.opened_at).length;
+  const trackableRows = rows.filter((r) =>
+    !!r.tracking_enabled &&
+    (r.status === "sent" || r.status === "bounced" || r.status === "complained" || r.status === "unsubscribed")
+  );
+  const trackableDelivered = trackableRows.filter((r) => r.status !== "bounced").length;
+  const untracked = Math.max(0, delivered - trackableDelivered);
+  const opened = trackableRows.filter((r) => r.opened_at).length;
   const replied = rows.filter((r) => r.replied_at).length;
   return {
     sent,
     delivered,
     failed,
+    trackable: trackableDelivered,
+    untracked,
     opened,
     replied,
     bounced,
     complained,
-    openRate: delivered ? opened / delivered : 0,
+    openRate: trackableDelivered ? opened / trackableDelivered : 0,
     replyRate: delivered ? replied / delivered : 0,
     bounceRate: sent ? bounced / sent : 0,
     failRate: (sent + failed) ? failed / (sent + failed) : 0,

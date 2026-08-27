@@ -784,12 +784,13 @@ Deno.serve(async (req) => {
         // email SDK doesn't expose In-Reply-To headers, so subject-based
         // threading is the best-effort fallback.)
         let subjectOverride: string | null = null
-        let isFollowup = false
-        if (enr.last_sent_at) {
-          // Pick the most recent ORIGINAL (non-"Re:") subject for this
-          // enrollment, ignoring stale subjects from prior test runs by only
-          // considering sends at/after the enrollment was (re)activated.
-          const sinceIso = enr.updated_at ?? enr.created_at ?? new Date(0).toISOString()
+        const isFollowup = !!enr.last_sent_at
+        if (isFollowup) {
+          // last_sent_at is the durable signal that this enrollment has already
+          // produced a successful send. Do not use updated_at here: enrollment
+          // updates (throttling, pacing, status changes) constantly refresh it
+          // and make every follow-up look like a first-touch send.
+          const sinceIso = enr.created_at ?? new Date(0).toISOString()
           const { data: priors } = await supabase
             .from('sent_emails')
             .select('subject, sent_at')
@@ -801,7 +802,6 @@ Deno.serve(async (req) => {
           const original = (priors ?? []).find((p: any) => p.subject && !/^re:\s*/i.test(p.subject))
           if (original?.subject) {
             subjectOverride = original.subject
-            isFollowup = true
           }
         }
 

@@ -5,6 +5,8 @@ interface Props {
     sent: number;
     delivered: number;
     failed: number;
+    trackable: number;
+    untracked: number;
     opened: number;
     replied: number;
     bounced: number;
@@ -26,12 +28,13 @@ export const KpiCards = ({ kpis, unsubscribed }: Props) => {
     { label: "Failed", value: kpis.failed.toLocaleString(), icon: XCircle, sub: fmtPct(kpis.failRate), hint: "Rejected before sending (invalid address, no sender, etc.)" },
     { label: "Bounced", value: kpis.bounced.toLocaleString(), icon: AlertTriangle, sub: fmtPct(kpis.bounceRate), hint: "Receiving server rejected after delivery attempt" },
     { label: "Complaints", value: kpis.complained.toLocaleString(), icon: Flag, sub: null, hint: "Marked as spam by the recipient" },
-    { label: "Opened", value: kpis.opened.toLocaleString(), icon: MailOpen, sub: fmtPct(kpis.openRate), hint: "Unique opens via tracking pixel (delivered base)" },
+    { label: "Opened", value: kpis.opened.toLocaleString(), icon: MailOpen, sub: `${fmtPct(kpis.openRate)} · ${kpis.trackable.toLocaleString()} tracked`, hint: "Unique opens via tracking pixel (tracked delivered mail base)" },
+    { label: "Untracked", value: kpis.untracked.toLocaleString(), icon: MailOpen, sub: null, hint: "Delivered mails without a tracking pixel, usually first-touch outreach" },
     { label: "Replied", value: kpis.replied.toLocaleString(), icon: Reply, sub: "tracking off", hint: "Replies go to your inbox; webhook tracking disabled" },
     { label: "Unsubscribed", value: unsubscribed.toLocaleString(), icon: UserMinus, sub: null, hint: null },
   ];
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
       {items.map((i) => (
         <div key={i.label} className="rounded-xl border border-border bg-card p-4 shadow-card" title={i.hint ?? undefined}>
           <div className="flex items-center gap-2 text-muted-foreground text-xs mb-2">

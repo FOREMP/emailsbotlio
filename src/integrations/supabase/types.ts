@@ -790,6 +790,7 @@ export type Database = {
           status: string
           step_id: string | null
           subject: string | null
+          tracking_enabled: boolean
           user_id: string
         }
         Insert: {
@@ -812,6 +813,7 @@ export type Database = {
           status?: string
           step_id?: string | null
           subject?: string | null
+          tracking_enabled?: boolean
           user_id: string
         }
         Update: {
@@ -834,6 +836,7 @@ export type Database = {
           status?: string
           step_id?: string | null
           subject?: string | null
+          tracking_enabled?: boolean
           user_id?: string
         }
         Relationships: [

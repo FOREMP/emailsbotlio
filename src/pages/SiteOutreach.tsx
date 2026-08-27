@@ -31,7 +31,7 @@ type EnrollRow = {
 type SentRow = {
   id: string; sent_at: string; subject: string | null; body: string | null;
   recipient_email: string; status: string; open_count: number; opened_at: string | null;
-  contact_id: string | null; enrollment_id?: string | null;
+  contact_id: string | null; enrollment_id?: string | null; tracking_enabled?: boolean | null;
 };
 
 const STATUS_COLOR: Record<string, string> = {
@@ -114,7 +114,7 @@ export default function SiteOutreach() {
       const chunk = allEnrIds.slice(i, i + 200);
       const { data } = await supabase
         .from("sent_emails")
-        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject, body, open_count, contact_id")
+        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject, body, open_count, contact_id, tracking_enabled")
         .in("enrollment_id", chunk)
         .order("sent_at", { ascending: false })
         .limit(5000);
@@ -285,17 +285,20 @@ export default function SiteOutreach() {
   const steppedStats = useMemo(() => annotateSteps(statsRows), [statsRows]);
   const filteredStats = useMemo(() => filterByStep(steppedStats, stepFilter), [steppedStats, stepFilter]);
   const stepBreakdown = useMemo(() => {
-    const map = new Map<number, { step: number; sent: number; opened: number; replied: number }>();
-    for (const r of steppedStats) {
+    const map = new Map<number, { step: number; sent: number; trackable: number; opened: number; replied: number }>();
+    for (const r of filteredStats) {
       const step = Math.min(r.stepIndex, 4);
-      const entry = map.get(step) ?? { step, sent: 0, opened: 0, replied: 0 };
+      const entry = map.get(step) ?? { step, sent: 0, trackable: 0, opened: 0, replied: 0 };
       entry.sent += 1;
-      if (r.opened_at || (r as any).open_count > 0) entry.opened += 1;
+      if ((r as any).tracking_enabled) {
+        entry.trackable += 1;
+        if (r.opened_at || (r as any).open_count > 0) entry.opened += 1;
+      }
       if ((r as any).replied_at) entry.replied += 1;
       map.set(step, entry);
     }
     return Array.from(map.values()).sort((a, b) => a.step - b.step);
-  }, [steppedStats]);
+  }, [filteredStats]);
 
   const contactById = (id: string | null) => enrollments.find((e) => e.contact?.id === id)?.contact ?? null;
 
@@ -395,6 +398,8 @@ export default function SiteOutreach() {
                 <div className="flex gap-4 text-xs">
                   <div><div className="text-muted-foreground">Skickade</div><div className="text-base font-semibold">{k.sent}</div></div>
                   <div><div className="text-muted-foreground">Öppnade</div><div className="text-base font-semibold">{k.opened} ({Math.round(k.openRate * 100)}%)</div></div>
+                  <div><div className="text-muted-foreground">Spårbara</div><div className="text-base font-semibold">{k.trackable}</div></div>
+                  <div><div className="text-muted-foreground">Ospårade</div><div className="text-base font-semibold">{k.untracked}</div></div>
                   <div><div className="text-muted-foreground">Besvarade</div><div className="text-base font-semibold">{k.replied}</div></div>
                   <div><div className="text-muted-foreground">Bounces</div><div className="text-base font-semibold">{k.bounced}</div></div>
                 </div>
@@ -409,6 +414,7 @@ export default function SiteOutreach() {
               <tr>
                 <th className="py-2 pr-3">Steg</th>
                 <th className="py-2 pr-3">Skickade</th>
+                <th className="py-2 pr-3">Spårbara</th>
                 <th className="py-2 pr-3">Öppnade</th>
                 <th className="py-2 pr-3">Öppningsgrad</th>
                 <th className="py-2 pr-3">Svar</th>
@@ -419,13 +425,14 @@ export default function SiteOutreach() {
                 <tr key={s.step} className="border-b border-border/60">
                   <td className="py-2 pr-3 font-medium">Mail {s.step}</td>
                   <td className="py-2 pr-3">{s.sent}</td>
+                  <td className="py-2 pr-3">{s.trackable}</td>
                   <td className="py-2 pr-3">{s.opened}</td>
-                  <td className="py-2 pr-3">{s.sent ? Math.round((s.opened / s.sent) * 100) : 0}%</td>
+                  <td className="py-2 pr-3">{s.trackable ? Math.round((s.opened / s.trackable) * 100) : 0}%</td>
                   <td className="py-2 pr-3">{s.replied}</td>
                 </tr>
               ))}
               {stepBreakdown.length === 0 && (
-                <tr><td colSpan={5} className="py-4 text-center text-muted-foreground text-xs">Ingen data ännu.</td></tr>
+                <tr><td colSpan={6} className="py-4 text-center text-muted-foreground text-xs">Ingen data ännu.</td></tr>
               )}
             </tbody>
           </table>
@@ -509,6 +516,7 @@ export default function SiteOutreach() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Badge variant={r.status === "sent" ? "default" : "destructive"}>{r.status}</Badge>
+                    {r.tracking_enabled ? <Badge variant="outline">spårbar</Badge> : <Badge variant="secondary">ospårad</Badge>}
                     {r.open_count > 0 && <Badge variant="outline">{r.open_count} öppning{r.open_count > 1 ? "ar" : ""}</Badge>}
                     <Button size="sm" variant="ghost" onClick={() => setPreview(r)}><Eye className="h-4 w-4" /></Button>
                   </div>

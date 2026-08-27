@@ -23,14 +23,15 @@ export const SenderTable = ({ senders, rows }: Props) => {
     const sent = senderRows.length;
     const bounced = senderRows.filter((r) => r.status === "bounced").length;
     const delivered = sent - bounced;
-    const opened = senderRows.filter((r) => r.opened_at).length;
+    const trackableDelivered = senderRows.filter((r) => !!r.tracking_enabled && r.status !== "bounced").length;
+    const opened = senderRows.filter((r) => !!r.tracking_enabled && !!r.opened_at).length;
     const replied = senderRows.filter((r) => r.replied_at).length;
     const sentToday = senderRows.filter((r) => new Date(r.sent_at) >= todayStart).length;
     return {
       ...s,
       sent,
       sentToday,
-      openRate: delivered ? opened / delivered : 0,
+      openRate: trackableDelivered ? opened / trackableDelivered : 0,
       replyRate: delivered ? replied / delivered : 0,
       bounceRate: sent ? bounced / sent : 0,
     };

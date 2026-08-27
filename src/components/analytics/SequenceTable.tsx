@@ -32,13 +32,14 @@ export const SequenceTable = ({ sequences, enrollments, rows }: Props) => {
       const sent = seqRows.length;
       const bounced = seqRows.filter((r) => r.status === "bounced").length;
       const delivered = sent - bounced;
-      const opened = seqRows.filter((r) => r.opened_at).length;
+      const trackableDelivered = seqRows.filter((r) => !!r.tracking_enabled && r.status !== "bounced").length;
+      const opened = seqRows.filter((r) => !!r.tracking_enabled && !!r.opened_at).length;
       const replied = seqRows.filter((r) => r.replied_at).length;
       const active = enrollments.filter((e) => e.sequence_id === seq.id && e.status === "active").length;
       return {
         ...seq,
         sent,
-        openRate: delivered ? opened / delivered : 0,
+        openRate: trackableDelivered ? opened / trackableDelivered : 0,
         replyRate: delivered ? replied / delivered : 0,
         bounceRate: sent ? bounced / sent : 0,
         active,
