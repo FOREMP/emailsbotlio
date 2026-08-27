@@ -282,6 +282,21 @@ export default function SiteOutreach() {
     setDirty((d) => ({ ...d, [nodeId]: { ...(d[nodeId] ?? {}), [key]: value } }));
   };
 
+  const steppedStats = useMemo(() => annotateSteps(statsRows), [statsRows]);
+  const filteredStats = useMemo(() => filterByStep(steppedStats, stepFilter), [steppedStats, stepFilter]);
+  const stepBreakdown = useMemo(() => {
+    const map = new Map<number, { step: number; sent: number; opened: number; replied: number }>();
+    for (const r of steppedStats) {
+      const step = Math.min(r.stepIndex, 4);
+      const entry = map.get(step) ?? { step, sent: 0, opened: 0, replied: 0 };
+      entry.sent += 1;
+      if (r.opened_at || (r as any).open_count > 0) entry.opened += 1;
+      if ((r as any).replied_at) entry.replied += 1;
+      map.set(step, entry);
+    }
+    return Array.from(map.values()).sort((a, b) => a.step - b.step);
+  }, [steppedStats]);
+
   const contactById = (id: string | null) => enrollments.find((e) => e.contact?.id === id)?.contact ?? null;
 
   if (loading) return <div className="text-sm text-muted-foreground">Laddar…</div>;
