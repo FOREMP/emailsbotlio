@@ -13,7 +13,8 @@ import {
 } from "@/components/ui/dialog";
 import { Loader2, StopCircle, Mail, Save, Eye, Gauge, BarChart3 } from "lucide-react";
 import { VolumeTrendChart } from "@/components/analytics/VolumeTrendChart";
-import { computeDailySeries, computeKpis, type SentEmailRow } from "@/hooks/useAnalytics";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { annotateSteps, computeDailySeries, computeKpis, filterByStep, type StepFilter, type SentEmailRow } from "@/hooks/useAnalytics";
 
 type Seq = { id: string; contact_list_id: string | null };
 type Node = { id: string; node_type: string; position_y: number; config: any };
@@ -55,6 +56,7 @@ export default function SiteOutreach() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [savingLimit, setSavingLimit] = useState(false);
   const [allSentRows, setAllSentRows] = useState<SentEmailRow[]>([]);
+  const [stepFilter, setStepFilter] = useState<StepFilter>("all");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -280,6 +282,21 @@ export default function SiteOutreach() {
     setDirty((d) => ({ ...d, [nodeId]: { ...(d[nodeId] ?? {}), [key]: value } }));
   };
 
+  const steppedStats = useMemo(() => annotateSteps(statsRows), [statsRows]);
+  const filteredStats = useMemo(() => filterByStep(steppedStats, stepFilter), [steppedStats, stepFilter]);
+  const stepBreakdown = useMemo(() => {
+    const map = new Map<number, { step: number; sent: number; opened: number; replied: number }>();
+    for (const r of steppedStats) {
+      const step = Math.min(r.stepIndex, 4);
+      const entry = map.get(step) ?? { step, sent: 0, opened: 0, replied: 0 };
+      entry.sent += 1;
+      if (r.opened_at || (r as any).open_count > 0) entry.opened += 1;
+      if ((r as any).replied_at) entry.replied += 1;
+      map.set(step, entry);
+    }
+    return Array.from(map.values()).sort((a, b) => a.step - b.step);
+  }, [steppedStats]);
+
   const contactById = (id: string | null) => enrollments.find((e) => e.contact?.id === id)?.contact ?? null;
 
   if (loading) return <div className="text-sm text-muted-foreground">Laddar…</div>;
@@ -360,19 +377,59 @@ export default function SiteOutreach() {
             <p className="text-xs text-muted-foreground">Skickade, öppnade och besvarade mail per dag för Site Demo Outreach.</p>
             <p className="text-xs text-muted-foreground">Visar nu: {language === "en" ? "English / foremp.eu" : "Svenska / foremp.email"}.</p>
           </div>
-          {(() => {
-            const k = computeKpis(statsRows);
-            return (
-              <div className="flex gap-4 text-xs">
-                <div><div className="text-muted-foreground">Skickade</div><div className="text-base font-semibold">{k.sent}</div></div>
-                <div><div className="text-muted-foreground">Öppnade</div><div className="text-base font-semibold">{k.opened} ({Math.round(k.openRate * 100)}%)</div></div>
-                <div><div className="text-muted-foreground">Besvarade</div><div className="text-base font-semibold">{k.replied}</div></div>
-                <div><div className="text-muted-foreground">Bounces</div><div className="text-base font-semibold">{k.bounced}</div></div>
-              </div>
-            );
-          })()}
+          <div className="flex items-center gap-3 flex-wrap">
+            <Select value={stepFilter} onValueChange={(v) => setStepFilter(v as StepFilter)}>
+              <SelectTrigger className="w-[220px]"><SelectValue placeholder="Steg" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Alla utskick</SelectItem>
+                <SelectItem value="first">Endast första mailet</SelectItem>
+                <SelectItem value="followups">Endast uppföljningar</SelectItem>
+                <SelectItem value="step-2">Mail 2 (första uppföljningen)</SelectItem>
+                <SelectItem value="step-3">Mail 3</SelectItem>
+                <SelectItem value="step-4">Mail 4</SelectItem>
+              </SelectContent>
+            </Select>
+            {(() => {
+              const k = computeKpis(filteredStats);
+              return (
+                <div className="flex gap-4 text-xs">
+                  <div><div className="text-muted-foreground">Skickade</div><div className="text-base font-semibold">{k.sent}</div></div>
+                  <div><div className="text-muted-foreground">Öppnade</div><div className="text-base font-semibold">{k.opened} ({Math.round(k.openRate * 100)}%)</div></div>
+                  <div><div className="text-muted-foreground">Besvarade</div><div className="text-base font-semibold">{k.replied}</div></div>
+                  <div><div className="text-muted-foreground">Bounces</div><div className="text-base font-semibold">{k.bounced}</div></div>
+                </div>
+              );
+            })()}
+          </div>
         </div>
-        <VolumeTrendChart data={computeDailySeries(statsRows, 30)} />
+        <VolumeTrendChart data={computeDailySeries(filteredStats, 30)} />
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-xs text-muted-foreground text-left border-b">
+              <tr>
+                <th className="py-2 pr-3">Steg</th>
+                <th className="py-2 pr-3">Skickade</th>
+                <th className="py-2 pr-3">Öppnade</th>
+                <th className="py-2 pr-3">Öppningsgrad</th>
+                <th className="py-2 pr-3">Svar</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stepBreakdown.map((s) => (
+                <tr key={s.step} className="border-b border-border/60">
+                  <td className="py-2 pr-3 font-medium">Mail {s.step}</td>
+                  <td className="py-2 pr-3">{s.sent}</td>
+                  <td className="py-2 pr-3">{s.opened}</td>
+                  <td className="py-2 pr-3">{s.sent ? Math.round((s.opened / s.sent) * 100) : 0}%</td>
+                  <td className="py-2 pr-3">{s.replied}</td>
+                </tr>
+              ))}
+              {stepBreakdown.length === 0 && (
+                <tr><td colSpan={5} className="py-4 text-center text-muted-foreground text-xs">Ingen data ännu.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </Card>
 
 
