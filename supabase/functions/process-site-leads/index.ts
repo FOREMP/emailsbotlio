@@ -99,6 +99,7 @@ Deno.serve(async (req) => {
   let overrideIds: string[] = []
   let auditLeadIds: string[] = []
   let reAuditAutoGoodEnough = false
+  let reAuditTouchedGoodEnough = false
   if (req.method === 'POST') {
     try {
       const body = await req.json()
@@ -109,13 +110,16 @@ Deno.serve(async (req) => {
         auditLeadIds = body.audit_lead_ids.filter((v: unknown) => typeof v === 'string').slice(0, 50)
       }
       reAuditAutoGoodEnough = body?.re_audit_auto_good_enough === true
+      reAuditTouchedGoodEnough = body?.re_audit_touched_good_enough === true
     } catch { /* no body — normal cron tick */ }
   }
 
   try {
     if (reAuditAutoGoodEnough) {
-      const queued = await queueAutoGoodEnoughForReaudit(supabase)
-      report.errors.push(`queued ${queued} system-marked site_good_enough leads for re-audit`)
+      const queued = await queueOldGoodEnoughForReaudit(supabase, {
+        includeTouched: reAuditTouchedGoodEnough,
+      })
+      report.errors.push(`queued ${queued} old-audit site_good_enough leads for re-audit`)
     }
 
     if (auditLeadIds.length > 0) {
@@ -594,9 +598,11 @@ async function auditOne(
   }).eq('id', row.id)
 }
 
-async function queueAutoGoodEnoughForReaudit(
+async function queueOldGoodEnoughForReaudit(
   supabase: ReturnType<typeof createClient>,
+  options?: { includeTouched?: boolean },
 ): Promise<number> {
+  const includeTouched = options?.includeTouched === true
   const { data: rows, error } = await supabase
     .from('site_leads')
     .select('id, audit_details, triaged_at, generated_site_id, website')
@@ -608,7 +614,13 @@ async function queueAutoGoodEnoughForReaudit(
   if (error) throw new Error(`re-audit queue read: ${error.message}`)
 
   const ids = (rows ?? [])
-    .filter((row: any) => (row.audit_details?.audit_source ?? null) !== 'screenshot_first_v2')
+    .filter((row: any) => {
+      const isOldAudit = (row.audit_details?.audit_source ?? null) !== 'screenshot_first_v2'
+      const isTouched = !!row.triaged_at
+      if (!isOldAudit) return false
+      if (!includeTouched && isTouched) return false
+      return true
+    })
     .map((row: any) => row.id)
   if (!ids.length) return 0
 
