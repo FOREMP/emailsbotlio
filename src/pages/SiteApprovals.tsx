@@ -311,7 +311,7 @@ export default function SiteApprovals() {
     setBusyId(row.id);
     const { error } = await supabase
       .from("site_leads")
-      .update({ status: "site_good_enough" })
+      .update({ status: "site_good_enough", triaged_at: new Date().toISOString() })
       .eq("id", row.id);
     setBusyId(null);
     if (error) return toast({ title: "Fel", description: error.message, variant: "destructive" });

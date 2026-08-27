@@ -15,6 +15,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { classifyNiche, type NicheKey } from '../_shared/niche.ts'
 import { approveLeadForOutreach } from '../_shared/approve-lead.ts'
+import { auditWebsite } from '../_shared/site-audit.ts'
 import {
   blockTemplateFamilyCatalog,
   BLOCK_TEMPLATE_FAMILIES,
@@ -28,7 +29,6 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const FIRECRAWL_V2 = 'https://api.firecrawl.dev/v2'
 const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
 
 const AUDIT_PER_TICK = 3    // Firecrawl+Gemini per invocation — keep memory low
@@ -97,16 +97,44 @@ Deno.serve(async (req) => {
   // Manual override from the Site Leads UI: build these leads right now,
   // ignoring the automation switch and the daily cap.
   let overrideIds: string[] = []
+  let auditLeadIds: string[] = []
+  let reAuditAutoGoodEnough = false
   if (req.method === 'POST') {
     try {
       const body = await req.json()
       if (body?.force && Array.isArray(body?.lead_ids)) {
         overrideIds = body.lead_ids.filter((v: unknown) => typeof v === 'string').slice(0, 20)
       }
+      if (Array.isArray(body?.audit_lead_ids)) {
+        auditLeadIds = body.audit_lead_ids.filter((v: unknown) => typeof v === 'string').slice(0, 50)
+      }
+      reAuditAutoGoodEnough = body?.re_audit_auto_good_enough === true
     } catch { /* no body — normal cron tick */ }
   }
 
   try {
+    if (reAuditAutoGoodEnough) {
+      const queued = await queueAutoGoodEnoughForReaudit(supabase)
+      report.errors.push(`queued ${queued} system-marked site_good_enough leads for re-audit`)
+    }
+
+    if (auditLeadIds.length > 0) {
+      const { data: auditRows } = await supabase
+        .from('site_leads')
+        .select('id, website, company_name, language')
+        .in('id', auditLeadIds)
+        .not('website', 'is', null)
+      for (const row of auditRows ?? []) {
+        try {
+          await auditOne(supabase, row as any)
+          report.audited++
+        } catch (e) {
+          report.errors.push(`audit ${row.id}: ${(e as Error).message}`)
+        }
+      }
+      return json({ ok: true, forced_audit: true, ...report })
+    }
+
     if (overrideIds.length > 0) {
       const { data: forced } = await supabase
         .from('site_leads')
@@ -524,8 +552,9 @@ async function reconcile(
 }
 
 // ---------------------------------------------------------------------------
-// AUDIT — Firecrawl (markdown only) + Gemini (deterministic scoring).
-// Also asks for 2-3 concrete weaknesses to reuse in outreach emails later.
+// AUDIT — screenshot-first website audit shared with the dedicated audit-site
+// function. This replaces the older markdown-only rating path that repeatedly
+// underrated modern sites with short, polished copy.
 // ---------------------------------------------------------------------------
 async function auditOne(
   supabase: ReturnType<typeof createClient>,
@@ -537,93 +566,58 @@ async function auditOne(
 
   await supabase.from('site_leads').update({ status: 'auditing' }).eq('id', row.id)
 
-  const url = normaliseUrl(row.website)
-  let markdown = ''
-  let title = ''
-  let unreachable = false
-
-  try {
-    const fcResp = await fetch(`${FIRECRAWL_V2}/scrape`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: true }),
-    })
-    const fcData = await fcResp.json()
-    if (!fcResp.ok) {
-      unreachable = true
-    } else {
-      markdown = fcData.data?.markdown ?? fcData.markdown ?? ''
-      title = fcData.data?.metadata?.title ?? fcData.metadata?.title ?? ''
-    }
-  } catch (_) {
-    unreachable = true
-  }
-
-  if (unreachable || !markdown) {
-    await supabase.from('site_leads').update({
-      status: 'needs_triage',
-      audit_score: 1,
-      audit_reason: unreachable ? 'Could not reach existing website.' : 'Site returned empty content.',
-      audit_details: { weaknesses: ['Ingen nåbar eller läsbar hemsida idag.'] },
-    }).eq('id', row.id)
-    return
-  }
-
-  const aiResp = await fetch(`${AI_GATEWAY}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Lovable-API-Key': lovableKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'google/gemini-3-flash-preview',
-      temperature: 0,
-      top_p: 1,
-      seed: 42,
-      messages: [
-        {
-          role: 'system',
-          content: [
-            'Du auditerar små företags hemsidor och betygsätter dem 1-10 för hur moderna, förtroendeingivande och konverterande de ser ut.',
-            'Var STRIKT, KONSEKVENT och DETERMINISTISK — samma input MÅSTE ge samma svar.',
-            '',
-            'Rubrik för poäng:',
-            '  1  = trasig, tom, parkerad domän',
-            '  2-3 = extremt föråldrad (pre-2010), ingen mobil, tunt innehåll',
-            '  4  = daterad men fungerande, ful typografi/layout',
-            '  5  = genomsnittlig småföretagssajt, generisk, tunn hero',
-            '  6  = hyfsad modern-ish, tydliga tjänster + kontakt',
-            '  7  = klart modern, responsiv, tydlig hierarki, tydliga CTA',
-            '  8  = polerad, on-brand, trust signals',
-            '  9-10 = förstklassig, inget meningsfullt att förbättra',
-            '',
-            'Om innehållet är väldigt tunt (<300 tecken riktig copy) — cap 4.',
-            '',
-            'Svara ENDAST med strikt JSON:',
-            '{"score": <heltal 1-10>, "reason": "<max 200 tecken, konkret evidens>", "weaknesses": ["<konkret svaghet 1>", "<konkret svaghet 2>", "<konkret svaghet 3>"]}',
-            'Svagheterna ska vara på svenska, konkreta (t.ex. "generisk stock-hero", "ingen mobil-nav", "saknar priser", "gammal design 2015-typ"), och användbara i ett kallmail som argument för varför de behöver ny hemsida.',
-          ].join('\n'),
-        },
-        {
-          role: 'user',
-          content: `URL: ${url}\nFöretag: ${row.company_name}\nTitel: ${title}\n\nInnehåll:\n${markdown.slice(0, 3000)}`,
-        },
-      ],
-      response_format: { type: 'json_object' },
-    }),
-  })
-  const aiData = await aiResp.json()
-  if (!aiResp.ok) throw new Error(`AI audit ${aiResp.status}: ${JSON.stringify(aiData).slice(0, 200)}`)
-
-  let parsed: { score: number; reason: string; weaknesses?: string[] } = { score: 5, reason: 'unparsed' }
-  try { parsed = JSON.parse(aiData.choices?.[0]?.message?.content ?? '{}') } catch (_) { /* keep default */ }
-  const score = Math.max(1, Math.min(10, Math.round(parsed.score)))
-  // Below the quality bar → the user triages it (build+send directly, build+review, or park).
-  const nextStatus = score >= 7 ? 'site_good_enough' : 'needs_triage'
+  const result = await auditWebsite(row.website, row.company_name, fcKey, lovableKey)
+  const score = Math.max(1, Math.min(10, Math.round(result.score)))
+  // Only auto-park when the audit had enough confidence. Uncertain / blocked /
+  // no-screenshot cases go to triage instead of being silently excluded.
+  const nextStatus = (!result.uncertain && !result.unreadable && score >= 7)
+    ? 'site_good_enough'
+    : 'needs_triage'
+  const reason = result.uncertain
+    ? `${result.reason} Osäker audit utan full visuell signal — kontrollera manuellt.`.slice(0, 500)
+    : result.reason.slice(0, 500)
 
   await supabase.from('site_leads').update({
     status: nextStatus,
     audit_score: score,
-    audit_reason: (parsed.reason ?? '').slice(0, 500),
-    audit_details: { weaknesses: (parsed.weaknesses ?? []).slice(0, 5) },
+    audit_reason: reason,
+    audit_details: {
+      weaknesses: result.weaknesses.slice(0, 5),
+      uncertain: result.uncertain,
+      unreadable: result.unreadable,
+      audit_source: 'screenshot_first_v2',
+      screenshot_present: !!result.screenshot,
+      title: result.title,
+      audited_url: result.url,
+      audited_at: new Date().toISOString(),
+    },
   }).eq('id', row.id)
+}
+
+async function queueAutoGoodEnoughForReaudit(
+  supabase: ReturnType<typeof createClient>,
+): Promise<number> {
+  const { data: rows, error } = await supabase
+    .from('site_leads')
+    .select('id, audit_details, triaged_at, generated_site_id, website')
+    .eq('status', 'site_good_enough')
+    .is('triaged_at', null)
+    .is('generated_site_id', null)
+    .not('website', 'is', null)
+    .limit(2000)
+  if (error) throw new Error(`re-audit queue read: ${error.message}`)
+
+  const ids = (rows ?? [])
+    .filter((row: any) => (row.audit_details?.audit_source ?? null) !== 'screenshot_first_v2')
+    .map((row: any) => row.id)
+  if (!ids.length) return 0
+
+  const { error: updateErr } = await supabase
+    .from('site_leads')
+    .update({ status: 'pending_audit' })
+    .in('id', ids)
+  if (updateErr) throw new Error(`re-audit queue update: ${updateErr.message}`)
+  return ids.length
 }
 
 async function chooseTemplateFamilyForLead(lead: any): Promise<{

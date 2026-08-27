@@ -723,7 +723,7 @@ export default function SiteLeads() {
             Kör audit igen
           </Button>
           <Button size="sm" variant="outline" disabled={bulkBusy}
-            onClick={() => bulkSet({ status: "site_good_enough", auto_send: false }, "Uteslutna från bygget")}>
+            onClick={() => bulkSet({ status: "site_good_enough", auto_send: false, triaged_at: new Date().toISOString() }, "Uteslutna från bygget")}>
             Ta bort från byggkön
           </Button>
           <Select disabled={bulkBusy} onValueChange={(v) => bulkSet({ niche: v }, "Bransch uppdaterad")}>
