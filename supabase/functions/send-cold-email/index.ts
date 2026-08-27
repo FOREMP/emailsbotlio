@@ -75,18 +75,17 @@ function deriveCompany(domain: string, brandFromDb?: string | null): string {
 
 const CONTACT_PHONE = '076 190 5353'
 
-// Account-agnostic: our canonical demo URLs are always https://demo-<slug>-<id8>.vercel.app,
-// oavsett vilket Vercel-konto/team som äger projektet.
-const CANONICAL_DEMO_HOST = /^demo-[a-z0-9-]+\.vercel\.app$/
+// Accept both the current short public demo hosts and older working demo hosts.
+// The important rule for outreach is that the URL is a public HTTPS demo hosted
+// on vercel.app, not which historical suffix format it uses.
+const PUBLIC_DEMO_HOST = /^demo-[a-z0-9-]+\.vercel\.app$/
 
 function isCanonicalDemoUrl(value?: string | null): boolean {
   if (!value) return false
   try {
     const url = new URL(value)
     if (url.protocol !== 'https:') return false
-    if (!CANONICAL_DEMO_HOST.test(url.hostname)) return false
-    // legacy team-scopade preview-hostar är aldrig publika
-    if (/-(foremp|[a-z0-9]+s-projects)\.vercel\.app$/.test(url.hostname)) return false
+    if (!PUBLIC_DEMO_HOST.test(url.hostname)) return false
     return true
   } catch {
     return false

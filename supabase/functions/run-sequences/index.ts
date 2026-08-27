@@ -861,14 +861,18 @@ Deno.serve(async (req) => {
           }
 
           if (skipped === 'invalid_demo_url') {
+            const deferredTo = nextSendWindowStartUtc()
+            const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
             await supabase.from('enrollments').update({
-              status: 'failed',
+              current_node_id: upstreamSched ?? enr.current_node_id,
+              next_send_at: deferredTo.toISOString(),
+              deferred_at: nowIso,
+              status: 'active',
               attempt_count: 0,
-              last_error: 'Blocked send: contact does not have a stable public demo URL yet. Rebuild or redeploy the demo before retrying.',
+              last_error: 'Demo URL was not ready at send time. Deferred automatically and will retry.',
               error_at: nowIso,
             }).eq('id', enr.id)
-            console.warn(`[enr ${enr.id}] send skipped: invalid_demo_url → failed`)
-            failed++
+            console.warn(`[enr ${enr.id}] send skipped: invalid_demo_url → deferred`)
             continue
           }
         }

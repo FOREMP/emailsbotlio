@@ -45,8 +45,7 @@ function isCanonicalDemoUrl(value?: string | null): boolean {
   try {
     const url = new URL(value)
     if (url.protocol !== 'https:') return false
-    if (!url.hostname.endsWith('.vercel.app')) return false
-    if (url.hostname.endsWith('-foremp.vercel.app')) return false
+    if (!/^demo-[a-z0-9-]+\.vercel\.app$/.test(url.hostname)) return false
     return true
   } catch {
     return false
