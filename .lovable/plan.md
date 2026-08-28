@@ -1,33 +1,28 @@
-# Varför du får AI-notisen — och hur vi byter ut det
+# Öppningsspårningen är död — orsak och fix
 
-## Kort svar
-Systemet använder faktiskt Lovables inbyggda AI-gateway på flera ställen, inte bara OpenRouter/OpenAI. Det är därför notisen kommer. Firecrawl har inget med det att göra — den ligger på din egen nyckel.
+## Vad jag mätte
 
-## Vad som körs var idag (verifierat i koden)
+- Öppningar per dag i databasen: 17–18 aug fungerade (11 och 15 öppningar). Från **19 aug till 27 aug har inte ett enda mail haft spårning påslagen** (`tracking_enabled = false` på alla 334 mail) — det var följdbuggen som gjorde att varje mail såg ut som ett första mail (första mail skickas medvetet utan pixel).
+- I dag: 49 mail har spårning påslagen — men **0 öppningar**.
+- Orsaken till dagens nollor: spårningsvärdarna finns inte i DNS. Jag slog upp dem:
+  - `t.botlio.email` → NXDOMAIN
+  - `t.foremp.email`, `t.foremp.eu`, `t.foremp.one`, `t.botlio.eu` → ingen A/CNAME-post
+  - HTTP-anrop mot alla fem → ingen anslutning alls
+- Supabase-fallbacken fungerar däremot: `.../track-open/o/<id>.gif` svarar `200 image/gif`.
 
-Lovable AI-gateway (`ai.gateway.lovable.dev`, nyckel `LOVABLE_API_KEY`) — dessa drar Lovable-credits:
-- `_shared/site-audit.ts` — bildbaserad hemsidesbedömning (Gemini 3 Flash Preview). Anropas av `audit-site` och `process-site-leads`.
-- `process-site-leads/index.ts` — AI-klassificering av bransch/nisch.
-- `process-site-jobs/index.ts` — mallväljare (`gpt-4o-mini`) samt ytterligare ett `gpt-4o-mini`-anrop.
+Så pixeln pekar sedan i dag på `https://t.<domän>/o/<id>.gif`, en adress som inte finns. Mailklienten kan aldrig hämta bilden, och ingen öppning registreras. UI:t visar "Verified" eftersom det bara frågar Vercel om domänen är tillagd i projektet — det kontrollerar aldrig att CNAME faktiskt finns i DNS eller att pixeln svarar.
 
-Egna nycklar (inga Lovable-credits):
-- `OPENROUTER_API_KEY` — själva sajtbygget (`process-site-jobs/freeform.ts`, `import-site-leads`).
-- `OPENAI_API_KEY` — `generate-email`.
-- `FIRECRAWL_API_KEY` — all scraping/screenshots (`scrape-lead-data`, `site-audit`).
+## Fix
 
-Separat sak: `LOVABLE_API_KEY` används också för **utskick av mail** (`send-cold-email`) och webhooks (`handle-email-suppression`, `auth-email-hook`). Det är e-postleveransen, inte AI, och den ska inte röras.
+1. **Återställ spårningen direkt:** nolla `tracking_host` på de fem domänerna så pixeln faller tillbaka till Supabase-URL:en som bevisligen svarar. Öppningar börjar registreras vid nästa utskick.
+2. **Gör värden hälsokontrollerad, inte bara "tillagd i Vercel":** lägg till `tracking_host_verified_at` på `sending_domains`. `setup-tracking-proxy` gör ett riktigt HTTP-anrop mot `https://t.<domän>/o/<test-id>.gif` och stämplar tiden bara om svaret är `200` med `image/gif`. Misslyckas det visas "DNS saknas" i UI:t i stället för "Verified".
+3. **Säker pixelväljare i `send-cold-email`:** använd `tracking_host` endast när `tracking_host_verified_at` är satt och nyare än 7 dygn — annars Supabase-URL:en. Då kan en trasig DNS-post aldrig igen tysta all spårning.
+4. **Automatisk återkontroll:** låt `setup-tracking-proxy` kunna köras av cron en gång per dygn och uppdatera stämpeln, så en värd som slutar svara plockas ned automatiskt.
+5. **DNS-instruktioner i Domains-vyn per domän:** `foremp.email`, `botlio.email` och `botlio.eu` ligger på Cloudflare (lägg CNAME `t` → `cname.vercel-dns.com`, DNS only / grå molnikon). `foremp.eu` och `foremp.one` ligger på one.com. Vyn visar i dag samma text för alla och säger "Verified" utan täckning.
+6. **Analysen:** i statistiken räknas öppningsgrad bara på mail där `tracking_enabled = true`, så perioden 19–27 aug ska visas som "ej spårad" i stället för 0 % öppet.
 
-## Firecrawl-nyckeln
-Ja — den läses vid varje anrop via `Deno.env.get('FIRECRAWL_API_KEY')`. Byter du värdet i Supabase → Edge Functions → Secrets används den nya nyckeln direkt vid nästa körning. Ingen kodändring behövs.
+## Efter fixen
+Spårningen fungerar omedelbart via Supabase-värden. Vill du ha egen värd på `t.<domän>` (bättre för leveransen, eftersom bildvärden matchar avsändardomänen) lägger du in CNAME-posterna och kör "Set up tracking host automatically" igen — då stämplas de som verifierade först när pixeln faktiskt svarar, och systemet byter över av sig självt.
 
-## Förslag: flytta de fyra AI-anropen till OpenRouter
-1. `_shared/site-audit.ts`: byt endpoint till OpenRouter, nyckel `OPENROUTER_API_KEY`, modell med bildstöd (t.ex. `google/gemini-2.5-flash`). Prompt, betygsskala och JSON-format oförändrade.
-2. `process-site-leads`: klassificeringsanropet flyttas till OpenRouter med en billig textmodell.
-3. `process-site-jobs`: mallväljaren och det andra `gpt-4o-mini`-anropet flyttas till OpenRouter (`openai/gpt-4o-mini` finns där).
-4. Behåll `LOVABLE_API_KEY` för mailutskick och webhooks — rör inte den koden.
-5. Deploya berörda funktioner och kör ett riktigt audit + en riktig sajtgenerering för att verifiera svar och betyg.
-
-Resultat: noll AI-credits mot Lovable, all AI på din OpenRouter-faktura, mailutskicken fungerar som förut.
-
-## Alternativ
-Vill du hellre behålla Lovable-gatewayen för bildbedömningen (den är enkel och billig) kan vi flytta bara punkt 2 och 3. Säg till vilket du vill.
+## Verifiering
+Efter ändringen: skicka ett uppföljningsmail, hämta pixel-URL:en från `sent_emails.body`, anropa den och kontrollera att `opened_at` och `open_count` sätts på raden.
