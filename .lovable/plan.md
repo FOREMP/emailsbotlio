@@ -1,33 +1,29 @@
-# Varför du får AI-notisen — och hur vi byter ut det
+# Dagsgränsen för nya mail följs inte — orsak och fix
 
-## Kort svar
-Systemet använder faktiskt Lovables inbyggda AI-gateway på flera ställen, inte bara OpenRouter/OpenAI. Det är därför notisen kommer. Firecrawl har inget med det att göra — den ligger på din egen nyckel.
+UI:t har rätt. Jag räknade i databasen: i dag (Stockholm-tid) har den engelska demo-sekvensen skickat **16 första mail** trots gränsen 10, och den svenska har skickat **1 första mail** trots gränsen 24 (27 kontakter står och väntar). Det är alltså backend, inte statistiken.
 
-## Vad som körs var idag (verifierat i koden)
+## Vad som faktiskt är fel
 
-Lovable AI-gateway (`ai.gateway.lovable.dev`, nyckel `LOVABLE_API_KEY`) — dessa drar Lovable-credits:
-- `_shared/site-audit.ts` — bildbaserad hemsidesbedömning (Gemini 3 Flash Preview). Anropas av `audit-site` och `process-site-leads`.
-- `process-site-leads/index.ts` — AI-klassificering av bransch/nisch.
-- `process-site-jobs/index.ts` — mallväljare (`gpt-4o-mini`) samt ytterligare ett `gpt-4o-mini`-anrop.
+**1. Throttle-räknaren matchar noll rader — taket slår aldrig till.**
+`run-sequences` räknar dagens första mail i `contact_activity` med filtret `metadata->>is_followup = 'false'`. Kontroll av verkliga rader: **inget** `email_sent`-event har fältet `is_followup` alls (bara `sender_id`, `from`, `subject`, `message_id`, `throttle_node_id`). Filtret ger därför alltid 0 av 10, och sekvensgränsen blockerar aldrig. Det som i praktiken styr volymen är i stället summan av sendernas `daily_limit`: 5+5+3+3 = 16 — exakt de 16 mail som gick ut.
 
-Egna nycklar (inga Lovable-credits):
-- `OPENROUTER_API_KEY` — själva sajtbygget (`process-site-jobs/freeform.ts`, `import-site-leads`).
-- `OPENAI_API_KEY` — `generate-email`.
-- `FIRECRAWL_API_KEY` — all scraping/screenshots (`scrape-lead-data`, `site-audit`).
+**2. `throttle_node_id` sätts nästan aldrig.**
+Av dagens 107 send-events har **ett enda** ett `throttle_node_id`. Id:t skickas vidare via `enrollments.last_error` med prefixet `__pending_throttle:`, men samma fält skrivs över av pacing- och statusmeddelanden ("paced: waiting 12 min…") innan mailet går. Även om punkt 1 fixas skulle räkningen fortsätta missa nästan allt.
 
-Separat sak: `LOVABLE_API_KEY` används också för **utskick av mail** (`send-cold-email`) och webhooks (`handle-email-suppression`, `auth-email-hook`). Det är e-postleveransen, inte AI, och den ska inte röras.
+**3. Svenska sidan svälts av pacing.**
+Alla 27 svenska förstamail står med `last_error: "paced: waiting 10–16 min before next send from this sender"`. Pacing använder **en gemensam klocka per sender** för både förstamail och uppföljningar. Med 42 uppföljningar i dag nollställs klockan hela tiden, så förstamailen får aldrig sin lucka — därav 1 av 24.
 
-## Firecrawl-nyckeln
-Ja — den läses vid varje anrop via `Deno.env.get('FIRECRAWL_API_KEY')`. Byter du värdet i Supabase → Edge Functions → Secrets används den nya nyckeln direkt vid nästa körning. Ingen kodändring behövs.
+**4. Spara-knappen för dagsgränsen träffar fel senders.**
+`saveDailyLimit` i `SiteOutreach.tsx` skriver ut gränsen på *alla* aktiva senders med samma språk. Botlio-sendrarna (US Website Offer) är också `language = 'en'`, så en ändring av den engelska demo-gränsen skriver om US-sekvensens senders.
 
-## Förslag: flytta de fyra AI-anropen till OpenRouter
-1. `_shared/site-audit.ts`: byt endpoint till OpenRouter, nyckel `OPENROUTER_API_KEY`, modell med bildstöd (t.ex. `google/gemini-2.5-flash`). Prompt, betygsskala och JSON-format oförändrade.
-2. `process-site-leads`: klassificeringsanropet flyttas till OpenRouter med en billig textmodell.
-3. `process-site-jobs`: mallväljaren och det andra `gpt-4o-mini`-anropet flyttas till OpenRouter (`openai/gpt-4o-mini` finns där).
-4. Behåll `LOVABLE_API_KEY` för mailutskick och webhooks — rör inte den koden.
-5. Deploya berörda funktioner och kör ett riktigt audit + en riktig sajtgenerering för att verifiera svar och betyg.
+## Fix
 
-Resultat: noll AI-credits mot Lovable, all AI på din OpenRouter-faktura, mailutskicken fungerar som förut.
+1. Räkna dagens förstamail från `sent_emails` i stället för `contact_activity`-metadata: mail i dag (Stockholm) kopplade till enrollments i sekvensen, där enrollmentet inte har någon tidigare send. Det är samma logik som `sender_capacity_remaining` redan använder och är oberoende av metadata som kanske saknas.
+2. Ta bort beroendet av `metadata.is_followup` / `throttle_node_id` i både throttle-noden och den globala sekvensgränsen i `run-sequences`. Sluta använda `last_error` som bärare av throttle-id.
+3. Fortsätt ändå stämpla `is_followup` och `budget_kind` i `send-cold-email` för statistik, men låt inget tak vara beroende av det.
+4. Dela pacing-klockan per sender **och** typ (förstamail vs uppföljning), så uppföljningar inte äter förstamailens luckor. Räkna även spacing mot rätt kvot för respektive typ.
+5. Justera `saveDailyLimit` så den bara uppdaterar senders som ingår i den aktuella sekvensens rotation (foremp.email för svenska, foremp.eu/foremp.one för engelska) — aldrig botlio-sendrarna.
+6. Låt UI:t räkna dygnet i Stockholm-tid i stället för webbläsarens lokala midnatt, så siffran matchar backend exakt.
 
-## Alternativ
-Vill du hellre behålla Lovable-gatewayen för bildbedömningen (den är enkel och billig) kan vi flytta bara punkt 2 och 3. Säg till vilket du vill.
+## Verifiering
+Kör `run-sequences` efter fixen och kontrollera i databasen att antalet förstamail per sekvens i dag stannar på taket (10 EN / 24 SV), att svenska förstamail börjar gå ut igen, och att uppföljningarna fortsätter ovanpå gränsen.
