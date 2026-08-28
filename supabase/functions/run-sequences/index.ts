@@ -104,57 +104,53 @@ function nextStockholmMidnightUtc(now = new Date()): Date {
   return stockholmWallToUTC(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate(), 0, 0)
 }
 
-// --- Human-looking sending pattern -------------------------------------------
-// Sends only on weekdays, only between SEND_WINDOW_START and SEND_WINDOW_END
-// Stockholm time, and paced so a sender's daily quota is spread evenly across
-// the window instead of firing as one burst when the cron ticks.
-const SEND_WINDOW_START = 9   // 09:00 Stockholm
-const SEND_WINDOW_END = 16    // 16:00 Stockholm
+// Sends stay inside a predictable weekday window and are spread across it.
+const SEND_WINDOW_START = 9
+const SEND_WINDOW_END = 16
+const COUNTED_SEND_STATUSES = ['queued', 'sent', 'bounced', 'complained', 'unsubscribed']
 
 function stockholmParts(now = new Date()) {
-  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
     timeZone: STOCKHOLM_TZ, hour12: false,
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', weekday: 'short',
-  }).formatToParts(now).map((x) => [x.type, x.value])) as any
+  }).formatToParts(now).map((part) => [part.type, part.value])) as any
   return {
-    year: Number(p.year), month: Number(p.month), day: Number(p.day),
-    hour: Number(p.hour), minute: Number(p.minute), weekday: String(p.weekday),
+    year: Number(parts.year), month: Number(parts.month), day: Number(parts.day),
+    hour: Number(parts.hour), minute: Number(parts.minute), weekday: String(parts.weekday),
   }
 }
 
-// Next weekday window opening (with a few minutes of jitter so every deferred
-// enrollment doesn't wake up at the exact same second).
 function nextSendWindowStartUtc(now = new Date()): Date {
-  const p = stockholmParts(now)
-  const nowMins = p.hour * 60 + p.minute
+  const parts = stockholmParts(now)
+  const nowMinutes = parts.hour * 60 + parts.minute
   const jitter = Math.floor(Math.random() * 25)
-  let y = p.year, mo = p.month, d = p.day
-  let dayName = p.weekday
-  const isWeekend = (n: string) => n === 'Sat' || n === 'Sun'
-  const startToday = nowMins < SEND_WINDOW_START * 60 && !isWeekend(dayName)
-  if (!startToday) {
-    for (let i = 1; i <= 4; i++) {
-      const nd = new Date(Date.UTC(y, mo - 1, d + i))
-      dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][nd.getUTCDay()]
-      if (!isWeekend(dayName)) {
-        return stockholmWallToUTC(nd.getUTCFullYear(), nd.getUTCMonth() + 1, nd.getUTCDate(), SEND_WINDOW_START, jitter)
-      }
+  const isWeekend = (day: string) => day === 'Sat' || day === 'Sun'
+  if (nowMinutes < SEND_WINDOW_START * 60 && !isWeekend(parts.weekday)) {
+    return stockholmWallToUTC(parts.year, parts.month, parts.day, SEND_WINDOW_START, jitter)
+  }
+  for (let offset = 1; offset <= 7; offset++) {
+    const next = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + offset))
+    const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][next.getUTCDay()]
+    if (!isWeekend(weekday)) {
+      return stockholmWallToUTC(
+        next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate(), SEND_WINDOW_START, jitter,
+      )
     }
   }
-  return stockholmWallToUTC(y, mo, d, SEND_WINDOW_START, jitter)
+  return new Date(now.getTime() + 24 * 60 * 60_000)
 }
 
 function insideSendWindow(now = new Date()): boolean {
-  const p = stockholmParts(now)
-  if (p.weekday === 'Sat' || p.weekday === 'Sun') return false
-  const mins = p.hour * 60 + p.minute
-  return mins >= SEND_WINDOW_START * 60 && mins < SEND_WINDOW_END * 60
+  const parts = stockholmParts(now)
+  if (parts.weekday === 'Sat' || parts.weekday === 'Sun') return false
+  const minutes = parts.hour * 60 + parts.minute
+  return minutes >= SEND_WINDOW_START * 60 && minutes < SEND_WINDOW_END * 60
 }
 
 function minutesLeftInWindow(now = new Date()): number {
-  const p = stockholmParts(now)
-  return Math.max(1, SEND_WINDOW_END * 60 - (p.hour * 60 + p.minute))
+  const parts = stockholmParts(now)
+  return Math.max(1, SEND_WINDOW_END * 60 - (parts.hour * 60 + parts.minute))
 }
 
 function senderBaseQuota(sender: any): number {
@@ -168,15 +164,79 @@ function senderBaseQuota(sender: any): number {
 
 function senderFollowupQuota(sender: any): number {
   const base = senderBaseQuota(sender)
-  const mult = Math.max(1, Number(sender?.followup_multiplier ?? 3))
-  if (!sender?.warmup_enabled || !sender?.warmup_started_at) return base * mult
-  // During warmup, follow-ups still get extra room, but we keep that room much
-  // tighter than steady-state so a warming domain doesn't suddenly jump to 4x
-  // its intended cold-mail volume.
+  const multiplier = Math.max(1, Number(sender?.followup_multiplier ?? 3))
+  if (!sender?.warmup_enabled || !sender?.warmup_started_at) return base * multiplier
   const warmExtra = Math.max(3, Math.ceil(base * 0.5))
-  return Math.min(base * mult, warmExtra)
+  return Math.min(base * multiplier, warmExtra)
 }
 
+async function countSequenceFirstTouchesToday(
+  supabase: ReturnType<typeof createClient>,
+  sequenceId: string,
+  cache: Map<string, number>,
+): Promise<number> {
+  const cached = cache.get(sequenceId)
+  if (cached !== undefined) return cached
+
+  const dayStartIso = startOfStockholmDayUtc().toISOString()
+  const enrollmentIds: string[] = []
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase
+      .from('enrollments')
+      .select('id')
+      .eq('sequence_id', sequenceId)
+      .order('id', { ascending: true })
+      .range(from, from + 999)
+    if (error) throw new Error(`sequence enrollment read failed: ${error.message}`)
+    const page = data ?? []
+    enrollmentIds.push(...page.map((row: any) => row.id as string))
+    if (page.length < 1000) break
+  }
+  if (!enrollmentIds.length) {
+    cache.set(sequenceId, 0)
+    return 0
+  }
+
+  const touchedToday = new Set<string>()
+  for (let i = 0; i < enrollmentIds.length; i += 200) {
+    const chunk = enrollmentIds.slice(i, i + 200)
+    const { data, error } = await supabase
+      .from('sent_emails')
+      .select('enrollment_id')
+      .in('enrollment_id', chunk)
+      .in('status', COUNTED_SEND_STATUSES)
+      .gte('sent_at', dayStartIso)
+    if (error) throw new Error(`today sequence sends read failed: ${error.message}`)
+    for (const row of data ?? []) {
+      if (row.enrollment_id) touchedToday.add(row.enrollment_id as string)
+    }
+  }
+
+  if (!touchedToday.size) {
+    cache.set(sequenceId, 0)
+    return 0
+  }
+
+  const hadEarlierSend = new Set<string>()
+  const todayIds = Array.from(touchedToday)
+  for (let i = 0; i < todayIds.length; i += 200) {
+    const chunk = todayIds.slice(i, i + 200)
+    const { data, error } = await supabase
+      .from('sent_emails')
+      .select('enrollment_id')
+      .in('enrollment_id', chunk)
+      .in('status', COUNTED_SEND_STATUSES)
+      .lt('sent_at', dayStartIso)
+    if (error) throw new Error(`historical send read failed: ${error.message}`)
+    for (const row of data ?? []) {
+      if (row.enrollment_id) hadEarlierSend.add(row.enrollment_id as string)
+    }
+  }
+
+  const count = todayIds.filter((id) => !hadEarlierSend.has(id)).length
+  cache.set(sequenceId, count)
+  return count
+}
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders })
@@ -251,14 +311,13 @@ Deno.serve(async (req) => {
   let sent = 0
   let failed = 0
   const errors: any[] = []
+  const firstTouchCountCache = new Map<string, number>()
 
   // Per-tick cache of domain usage for the current Stockholm day.
-  // We count today's sends grouped by sender domain to enforce a domain-level
-  // ceiling that respects warmup instead of the full steady-state sender limit.
   const domainSentToday = new Map<string, number>()
-  // Per-tick cache of each sender's last send time (ms epoch) for pacing.
+  // First touches and follow-ups use separate clocks so a follow-up backlog
+  // cannot continually postpone new outreach from the same sender.
   const senderLastSentAt = new Map<string, number>()
-
   const domainCounted = new Set<string>() // domains we've already initialised from DB
 
   const domainCap = new Map<string, number>()
@@ -271,11 +330,9 @@ Deno.serve(async (req) => {
         .select('id, from_email, daily_limit, followup_multiplier, warmup_enabled, warmup_started_at, warmup_target, is_active')
         .ilike('from_email', `%@${domain}`)
       const ids = (dSenders ?? []).map((s: any) => s.id)
-      // Dynamic cap: every active sender on this domain contributes its current
-      // first-mail warmup quota plus its current follow-up allowance.
       const dynCap = (dSenders ?? [])
         .filter((s: any) => s.is_active !== false)
-        .reduce((sum: number, s: any) => sum + senderBaseQuota(s) + senderFollowupQuota(s), 0)
+        .reduce((sum: number, sender: any) => sum + senderBaseQuota(sender) + senderFollowupQuota(sender), 0)
       domainCap.set(domain, Math.min(PER_DOMAIN_DAILY_CAP, Math.max(1, dynCap)))
       let used = 0
       if (ids.length > 0) {
@@ -284,7 +341,7 @@ Deno.serve(async (req) => {
           .from('sent_emails')
           .select('id', { count: 'exact', head: true })
           .in('sender_id', ids)
-          .in('status', ['sent', 'queued'])
+          .in('status', COUNTED_SEND_STATUSES)
           .gte('sent_at', startOfDay.toISOString())
         used = count ?? 0
       }
@@ -319,7 +376,7 @@ Deno.serve(async (req) => {
       .from('sent_emails')
       .select('id', { count: 'exact', head: true })
       .eq('enrollment_id', enrollmentId)
-      .in('status', ['sent', 'queued'])
+      .in('status', COUNTED_SEND_STATUSES)
     return count ?? 0
   }
 
@@ -441,12 +498,11 @@ Deno.serve(async (req) => {
       const cfg = currentNode.config ?? {}
       console.log(`[enr ${enr.id}] processing ${currentNode.node_type}(${currentNode.id})`)
 
-      // Daily-limit (throttle) node: count *actual sends gated by THIS throttle*
-      // today. Each throttle node is independent — a throttle in front of the first
-      // email does not consume the budget of a throttle on a follow-up branch.
-      // We tag email_sent activities with metadata.throttle_node_id when they pass
-      // through a throttle, and count by that tag here.
+      // Daily-limit (throttle) node: count real first-touch sends from sent_emails.
+      // This must not depend on contact_activity metadata being present.
       if (currentNode.node_type === 'throttle') {
+        // The sequence throttle is a first-touch budget. Existing conversations
+        // must continue through the graph even when today's acquisition cap is full.
         if (enr.last_sent_at) {
           const next = nextEdgeFrom(nodes ?? [], edges ?? [], currentNode.id)
           if (!next) {
@@ -469,21 +525,9 @@ Deno.serve(async (req) => {
         }
 
         const max = Number(cfg.max_per_day ?? 50)
-        const startOfDay = startOfStockholmDayUtc()
-        // Count only sends gated by THIS throttle today. send-cold-email stamps
-        // metadata.throttle_node_id on the activity when the send passed through
-        // a throttle. (Previously filtered on non-existent step_number column,
-        // which errored and effectively disabled the cap.)
-        const { count } = await supabase
-          .from('contact_activity')
-          .select('id', { count: 'exact', head: true })
-          .eq('sequence_id', enr.sequence_id)
-          .eq('activity_type', 'email_sent')
-          .filter('metadata->>throttle_node_id', 'eq', currentNode.id)
-          .filter('metadata->>is_followup', 'eq', 'false')
-          .gte('created_at', startOfDay.toISOString())
+        const count = await countSequenceFirstTouchesToday(supabase, enr.sequence_id, firstTouchCountCache)
         // Cap counts NEW first-mail sends only. Follow-ups bypass this and always run.
-        if ((count ?? 0) >= max) {
+        if (count >= max) {
           const tomorrow = nextStockholmMidnightUtc()
           await supabase.from('enrollments').update({
             next_send_at: tomorrow.toISOString(),
@@ -533,17 +577,8 @@ Deno.serve(async (req) => {
         // Follow-ups bypass the cap so long threads always finish.
         const cap = sequenceDailyCap(nodes ?? [])
         if (cap && !enr.last_sent_at) {
-          const startOfDay = startOfStockholmDayUtc()
-          // Count sends that already passed through ANY throttle in this sequence today.
-          const { count } = await supabase
-            .from('contact_activity')
-            .select('id', { count: 'exact', head: true })
-            .eq('sequence_id', enr.sequence_id)
-            .eq('activity_type', 'email_sent')
-            .not('metadata->>throttle_node_id', 'is', null)
-            .filter('metadata->>is_followup', 'eq', 'false')
-            .gte('created_at', startOfDay.toISOString())
-          if ((count ?? 0) >= cap) {
+          const count = await countSequenceFirstTouchesToday(supabase, enr.sequence_id, firstTouchCountCache)
+          if (count >= cap) {
             const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
             const tomorrow = nextStockholmMidnightUtc()
             await supabase.from('enrollments').update({
@@ -568,7 +603,7 @@ Deno.serve(async (req) => {
             .select('id')
             .eq('contact_id', enr.contact_id)
             .eq('user_id', enr.user_id)
-            .in('status', ['sent', 'queued'])
+            .in('status', COUNTED_SEND_STATUSES)
             .gte('sent_at', startOfDay.toISOString())
             .limit(1)
           if (alreadyToday && alreadyToday.length > 0) {
@@ -619,10 +654,9 @@ Deno.serve(async (req) => {
         // (daily_limit for first mails, daily_limit * followup_multiplier for follow-ups).
         const isFollowupEnr = !!enr.last_sent_at
 
-        // sender_domain may be a single domain or a comma-separated list of domains.
         const allowedDomains: string[] = String(cfg.sender_domain ?? '')
           .split(',')
-          .map((d: string) => d.trim().toLowerCase())
+          .map((domain: string) => domain.trim().toLowerCase())
           .filter(Boolean)
         const domainLabel = allowedDomains.join(' / ')
 
@@ -633,8 +667,9 @@ Deno.serve(async (req) => {
           const match = verifiedActive.find((s: any) => s.id === sid)
           if (!match) return { ok: false, reason: 'sender no longer active or domain unverified' }
           const dom = (match.from_email as string).split('@')[1]
-          if (allowedDomains.length > 0 && !allowedDomains.includes(dom)) return { ok: false, reason: `assigned sender is not on ${domainLabel}` }
-
+          if (allowedDomains.length > 0 && !allowedDomains.includes(dom)) {
+            return { ok: false, reason: `assigned sender is not on ${domainLabel}` }
+          }
           const { data: rem } = await supabase.rpc('sender_capacity_remaining', { _sender_id: sid, _is_followup: isFollowupEnr })
           if ((rem ?? 0) <= 0) return { ok: false, reason: isFollowupEnr ? 'assigned sender at follow-up daily cap' : 'assigned sender at daily cap' }
           const domRem = await getDomainRemaining(dom)
@@ -697,7 +732,6 @@ Deno.serve(async (req) => {
                 failed++; continue
               }
             }
-
             if (cfg.sender_strategy === 'brand' && cfg.brand) {
               const filtered = candidates.filter((s: any) => {
                 const dom = (s.from_email as string).split('@')[1] ?? ''
@@ -758,8 +792,6 @@ Deno.serve(async (req) => {
           }
         }
 
-        // --- Human sending pattern gate -------------------------------------
-        // 1) Weekends and evenings/nights never send: defer to the next window.
         if (!insideSendWindow()) {
           const resumeAt = nextSendWindowStartUtc()
           await supabase.from('enrollments').update({
@@ -772,49 +804,48 @@ Deno.serve(async (req) => {
           continue
         }
 
-        // 2) Pace each sender: spread its remaining quota across the remaining
-        // minutes of the window, with jitter, so the daily curve is flat and
-        // gaps between messages look human instead of machine-gun bursts.
+        const pacingKind = isFollowupEnr ? 'followup' : 'first_touch'
+        const pacingKey = `${preSenderId}:${pacingKind}`
         {
-          const { data: remQuota } = await supabase.rpc('sender_capacity_remaining', {
-            _sender_id: preSenderId, _is_followup: isFollowupEnr,
+          const { data: remainingQuota } = await supabase.rpc('sender_capacity_remaining', {
+            _sender_id: preSenderId,
+            _is_followup: isFollowupEnr,
           })
-          const left = minutesLeftInWindow()
-          const spacing = Math.max(3, Math.min(25, Math.round(left / Math.max(1, Number(remQuota ?? 1)))))
-          const gapMin = spacing + Math.floor(Math.random() * 5)
+          const minutesLeft = minutesLeftInWindow()
+          const spacing = Math.max(3, Math.min(25, Math.round(minutesLeft / Math.max(1, Number(remainingQuota ?? 1)))))
+          const gapMinutes = spacing + Math.floor(Math.random() * 5)
 
-          let lastAt = senderLastSentAt.get(preSenderId)
+          let lastAt = senderLastSentAt.get(pacingKey)
           if (lastAt === undefined) {
             const { data: lastRow } = await supabase
               .from('sent_emails')
               .select('sent_at')
               .eq('sender_id', preSenderId)
-              .in('status', ['sent', 'queued'])
+              .eq('tracking_enabled', isFollowupEnr)
+              .in('status', COUNTED_SEND_STATUSES)
               .order('sent_at', { ascending: false })
               .limit(1)
               .maybeSingle()
             lastAt = lastRow?.sent_at ? new Date(lastRow.sent_at).getTime() : 0
-            senderLastSentAt.set(preSenderId, lastAt)
+            senderLastSentAt.set(pacingKey, lastAt)
           }
 
-          const sinceMin = (Date.now() - lastAt) / 60_000
-          if (sinceMin < gapMin) {
-            const waitMs = Math.ceil((gapMin - sinceMin) * 60_000)
+          const minutesSinceLast = (Date.now() - lastAt) / 60_000
+          if (minutesSinceLast < gapMinutes) {
+            const waitMs = Math.ceil((gapMinutes - minutesSinceLast) * 60_000)
             await supabase.from('enrollments').update({
               next_send_at: new Date(Date.now() + waitMs).toISOString(),
               status: 'active',
-              last_error: `paced: waiting ${Math.round(gapMin - sinceMin)} min before next send from this sender`,
+              last_error: `paced ${pacingKind}: waiting ${Math.round(gapMinutes - minutesSinceLast)} min before next send from this sender`,
               error_at: nowIso,
             }).eq('id', enr.id)
-            console.log(`[enr ${enr.id}] paced → wait ${Math.round(gapMin - sinceMin)} min (sender ${preSenderId})`)
+            console.log(`[enr ${enr.id}] paced ${pacingKind} → wait ${Math.round(gapMinutes - minutesSinceLast)} min (sender ${preSenderId})`)
             continue
           }
         }
 
-
-        // If the previous tick advanced through a throttle, it stamped the throttle id
-        // into last_error as `__pending_throttle:<id>`. Forward it so send-cold-email
-        // tags the email_sent activity for accurate throttle accounting.
+        // Keep forwarding the throttle id for analytics/debugging, but the cap
+        // itself is enforced from sent_emails and no longer depends on this metadata.
         let pendingThrottleId: string | null = null
         if (typeof enr.last_error === 'string' && enr.last_error.startsWith('__pending_throttle:')) {
           pendingThrottleId = enr.last_error.slice('__pending_throttle:'.length) || null
@@ -827,13 +858,11 @@ Deno.serve(async (req) => {
         // visually thread the follow-up with the first message. (The Lovable
         // email SDK doesn't expose In-Reply-To headers, so subject-based
         // threading is the best-effort fallback.)
-        let subjectOverride: string | null = null
         const isFollowup = !!enr.last_sent_at
+        let subjectOverride: string | null = null
         if (isFollowup) {
-          // last_sent_at is the durable signal that this enrollment has already
-          // produced a successful send. Do not use updated_at here: enrollment
-          // updates (throttling, pacing, status changes) constantly refresh it
-          // and make every follow-up look like a first-touch send.
+          // updated_at is rewritten by housekeeping changes (throttle/status),
+          // so it is not a safe marker for whether an earlier send existed.
           const sinceIso = enr.created_at ?? new Date(0).toISOString()
           const { data: priors } = await supabase
             .from('sent_emails')
@@ -916,7 +945,7 @@ Deno.serve(async (req) => {
               last_error: 'Demo URL was not ready at send time. Deferred automatically and will retry.',
               error_at: nowIso,
             }).eq('id', enr.id)
-            console.warn(`[enr ${enr.id}] send skipped: invalid_demo_url → deferred`)
+            console.warn(`[enr ${enr.id}] send skipped: invalid_demo_url → deferred until ${deferredTo.toISOString()}`)
             continue
           }
         }
@@ -946,14 +975,19 @@ Deno.serve(async (req) => {
           continue
         }
         sent++
-        senderLastSentAt.set(preSenderId, Date.now())
-
+        senderLastSentAt.set(pacingKey, Date.now())
         // Bump per-domain in-memory counter so subsequent enrollments in this same
         // tick respect PER_DOMAIN_DAILY_CAP without re-querying the DB.
         {
           const senderRow = (anyActive ?? []).find((s: any) => s.id === preSenderId)
           const dom = senderRow ? (senderRow.from_email as string).split('@')[1] : null
           if (dom) bumpDomain(dom)
+        }
+        if (!isFollowup) {
+          firstTouchCountCache.set(
+            enr.sequence_id,
+            (firstTouchCountCache.get(enr.sequence_id) ?? 0) + 1,
+          )
         }
         console.log(`[enr ${enr.id}] email sent (sender=${preSenderId})`)
 

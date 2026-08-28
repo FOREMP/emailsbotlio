@@ -11,6 +11,7 @@ const PIXEL = Uint8Array.from([
 const pixelHeaders = {
   'Content-Type': 'image/gif',
   'Content-Length': String(PIXEL.byteLength),
+  'X-Botlio-Tracking-Endpoint': 'track-open',
   // Normal-looking image caching. Aggressive no-store/Pragma/Expires headers on
   // a 1x1 GIF are a tracker fingerprint; private + must-revalidate still gives
   // us the open event through Gmail's image proxy.
@@ -38,26 +39,16 @@ Deno.serve(async (req) => {
         Deno.env.get('SUPABASE_URL')!,
         Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
       )
-      // Look up the email
-      const { data: row } = await supabase
-        .from('sent_emails')
-        .select('id, user_id, contact_id, enrollment_id, opened_at, open_count')
-        .eq('message_id', messageId)
-        .maybeSingle()
+      // Atomically record the open. The RPC prevents simultaneous image-proxy
+      // requests from overwriting each other's open_count increments.
+      const { data, error } = await supabase.rpc('record_email_open', {
+        p_message_id: messageId,
+      })
+      if (error) console.error('[track-open] record_email_open failed', error.message)
+      const row = Array.isArray(data) ? data[0] : null
 
       if (row) {
-        const isFirst = !row.opened_at
-        const now = new Date().toISOString()
-        await supabase
-          .from('sent_emails')
-          .update({
-            opened_at: row.opened_at ?? now,
-            last_opened_at: now,
-            open_count: (row.open_count ?? 0) + 1,
-          })
-          .eq('id', row.id)
-
-        if (isFirst && row.user_id && row.contact_id) {
+        if (row.is_first && row.user_id && row.contact_id) {
           // Best-effort activity log; ignore failures
           await supabase.from('contact_activity').insert({
             user_id: row.user_id,
@@ -72,8 +63,9 @@ Deno.serve(async (req) => {
         }
       }
     }
-  } catch (_e) {
+  } catch (error) {
     // Swallow — pixel must always render
+    console.error('[track-open] unexpected failure', error instanceof Error ? error.message : String(error))
   }
   return new Response(PIXEL, { status: 200, headers: pixelHeaders })
 })

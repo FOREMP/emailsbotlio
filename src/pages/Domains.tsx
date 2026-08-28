@@ -4,9 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { CheckCircle2, XCircle, Info, Save } from "lucide-react";
+import { CheckCircle2, XCircle, Info } from "lucide-react";
 
 
 interface Domain {
@@ -19,14 +18,26 @@ interface Domain {
   is_verified: boolean;
   postal_address: string | null;
   tracking_host: string | null;
+  tracking_host_verified_at: string | null;
+  tracking_host_last_checked_at: string | null;
+  tracking_host_last_error: string | null;
 }
 
+const formatCheckedAt = (value: string | null) => {
+  if (!value) return "Never checked";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Unknown" : date.toLocaleString();
+};
+
+const hasFreshCustomTracking = (domain: Domain) => {
+  if (!domain.tracking_host || !domain.tracking_host_verified_at) return false;
+  const verifiedAt = new Date(domain.tracking_host_verified_at).getTime();
+  return Number.isFinite(verifiedAt) && verifiedAt >= Date.now() - 36 * 60 * 60 * 1000;
+};
 
 const Domains = () => {
   const [domains, setDomains] = useState<Domain[]>([]);
   const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [setupRunning, setSetupRunning] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [setupResults, setSetupResults] = useState<any[]>([]);
@@ -63,29 +74,6 @@ const Domains = () => {
     setDomains((data ?? []) as Domain[]);
     setLoading(false);
   };
-
-  const saveTrackingHost = async (id: string) => {
-    const host = editing[id]?.trim() || null;
-    setSaving((s) => ({ ...s, [id]: true }));
-    const { error } = await supabase
-      .from("sending_domains")
-      .update({ tracking_host: host })
-      .eq("id", id);
-    setSaving((s) => ({ ...s, [id]: false }));
-    if (error) {
-      console.error("Failed to update tracking_host", error);
-      return;
-    }
-    setDomains((prev) =>
-      prev.map((d) => (d.id === id ? { ...d, tracking_host: host } : d))
-    );
-    setEditing((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-  };
-
 
   const unverified = domains.filter((d) => !d.is_verified);
   const missingPostal = domains.filter((d) => d.is_verified && d.is_active && !d.postal_address?.trim());
@@ -137,35 +125,28 @@ const Domains = () => {
                         )}
                       </TableCell>
                       <TableCell className="text-xs min-w-[200px]">
-                        {editing[d.id] !== undefined ? (
-                          <div className="flex items-center gap-2">
-                            <Input
-                              value={editing[d.id]}
-                              onChange={(e) => setEditing((prev) => ({ ...prev, [d.id]: e.target.value }))}
-                              placeholder="t.foremp.email"
-                              className="h-7 text-xs"
-                            />
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="h-7 w-7"
-                              disabled={saving[d.id]}
-                              onClick={() => saveTrackingHost(d.id)}
-                            >
-                              <Save className="h-3 w-3" />
-                            </Button>
+                        {hasFreshCustomTracking(d) ? (
+                          <div className="space-y-1">
+                            <Badge className="gap-1">
+                              <CheckCircle2 className="h-3 w-3" /> Custom tracking healthy
+                            </Badge>
+                            <div className="font-mono text-xs">{d.tracking_host}</div>
+                            <div className="text-muted-foreground">
+                              Checked {formatCheckedAt(d.tracking_host_last_checked_at)}
+                            </div>
                           </div>
                         ) : (
-                          <button
-                            onClick={() => setEditing((prev) => ({ ...prev, [d.id]: d.tracking_host ?? "" }))}
-                            className="text-left hover:underline text-muted-foreground"
-                          >
-                            {d.tracking_host?.trim() ? (
-                              <span className="font-mono text-foreground">{d.tracking_host}</span>
-                            ) : (
-                              <span>Not set (Supabase fallback)</span>
+                          <div className="space-y-1">
+                            <Badge variant="outline">Supabase fallback active</Badge>
+                            <div className="text-muted-foreground">
+                              Checked {formatCheckedAt(d.tracking_host_last_checked_at)}
+                            </div>
+                            {d.tracking_host_last_error && (
+                              <div className="max-w-[280px] text-amber-700 dark:text-amber-300">
+                                {d.tracking_host_last_error}
+                              </div>
                             )}
-                          </button>
+                          </div>
                         )}
                       </TableCell>
                       <TableCell>
@@ -201,7 +182,8 @@ const Domains = () => {
           <p className="text-sm text-muted-foreground">
             Sets up a Vercel proxy that serves the open-tracking pixel from{" "}
             <span className="font-mono">t.&lt;your domain&gt;</span> so the image host matches the
-            From domain. Add the CNAME below at your DNS provider, then run it again to finish.
+            From domain. A custom host is activated only after a real pixel request succeeds.
+            Until then, tracking automatically uses the working Supabase endpoint.
           </p>
           <Button onClick={runSetup} disabled={setupRunning}>
             {setupRunning ? "Setting up…" : "Set up tracking host automatically"}
@@ -234,10 +216,13 @@ const Domains = () => {
                     <TableCell>
                       {r.verified ? (
                         <Badge className="gap-1">
-                          <CheckCircle2 className="h-3 w-3" /> Verified
+                          <CheckCircle2 className="h-3 w-3" /> Healthy and active
                         </Badge>
                       ) : (
-                        <Badge variant="outline">Waiting for DNS</Badge>
+                        <div className="space-y-1">
+                          <Badge variant="outline">Supabase fallback active</Badge>
+                          {r.detail && <div className="text-xs text-muted-foreground">{r.detail}</div>}
+                        </div>
                       )}
                     </TableCell>
                   </TableRow>

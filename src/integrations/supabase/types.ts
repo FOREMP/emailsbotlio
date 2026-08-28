@@ -739,6 +739,9 @@ export type Database = {
           reply_to_email: string
           sender_subdomain: string
           tracking_host: string | null
+          tracking_host_last_checked_at: string | null
+          tracking_host_last_error: string | null
+          tracking_host_verified_at: string | null
           updated_at: string
         }
         Insert: {
@@ -752,6 +755,9 @@ export type Database = {
           reply_to_email: string
           sender_subdomain?: string
           tracking_host?: string | null
+          tracking_host_last_checked_at?: string | null
+          tracking_host_last_error?: string | null
+          tracking_host_verified_at?: string | null
           updated_at?: string
         }
         Update: {
@@ -765,6 +771,9 @@ export type Database = {
           reply_to_email?: string
           sender_subdomain?: string
           tracking_host?: string | null
+          tracking_host_last_checked_at?: string | null
+          tracking_host_last_error?: string | null
+          tracking_host_verified_at?: string | null
           updated_at?: string
         }
         Relationships: []
@@ -791,6 +800,8 @@ export type Database = {
           step_id: string | null
           subject: string | null
           tracking_enabled: boolean
+          tracking_route: string
+          tracking_url: string | null
           user_id: string
         }
         Insert: {
@@ -814,6 +825,8 @@ export type Database = {
           step_id?: string | null
           subject?: string | null
           tracking_enabled?: boolean
+          tracking_route?: string
+          tracking_url?: string | null
           user_id: string
         }
         Update: {
@@ -837,6 +850,8 @@ export type Database = {
           step_id?: string | null
           subject?: string | null
           tracking_enabled?: boolean
+          tracking_route?: string
+          tracking_url?: string | null
           user_id?: string
         }
         Relationships: [

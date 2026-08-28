@@ -1,5 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { sendLovableEmail, EmailAPIError } from 'npm:@lovable.dev/email-js@0.0.4'
+import { isFreshTrackingHost } from '../_shared/tracking-health.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -47,16 +48,24 @@ function plainToHtml(s: string, trackingPixelUrl?: string): string {
   return `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.55">${escaped}${pixel}</div>`
 }
 
-// Tracking pixel URL. Prefer a host stored on the sending domain (e.g.
-// https://t.foremp.email) so the image host matches the From domain — a remote
-// image from an unrelated *.supabase.co host is one of the strongest "bulk mail"
-// signals Gmail looks at. Falls back to TRACKING_BASE_URL, then the Supabase
-// function URL when nothing else is configured.
-function trackingPixelUrl(domainRow: any, supabaseUrl: string, messageId: string): string {
-  const domainHost = (domainRow?.tracking_host ?? '').trim().replace(/\/+$/, '')
-  const globalHost = (Deno.env.get('TRACKING_BASE_URL') ?? '').trim().replace(/\/+$/, '')
-  const base = domainHost || globalHost || `${supabaseUrl.replace(/\/+$/, '')}/functions/v1/track-open`
-  return `${base}/o/${encodeURIComponent(messageId)}.gif`
+type TrackingRoute = 'none' | 'custom' | 'supabase'
+
+function trackingPixel(
+  domainRow: any,
+  supabaseUrl: string,
+  messageId: string,
+): { url: string; route: Exclude<TrackingRoute, 'none'> } {
+  // A custom host is used only after a recent real HTTP GIF check. Vercel's
+  // domain attachment flag alone does not prove that public DNS or the rewrite
+  // works. The direct Supabase endpoint is the dependable final fallback.
+  const useCustom = isFreshTrackingHost(domainRow)
+  const base = useCustom
+    ? String(domainRow.tracking_host).trim().replace(/\/+$/, '')
+    : `${supabaseUrl.replace(/\/+$/, '')}/functions/v1/track-open`
+  return {
+    url: `${base}/o/${encodeURIComponent(messageId)}.gif`,
+    route: useCustom ? 'custom' : 'supabase',
+  }
 }
 
 
@@ -394,9 +403,10 @@ Deno.serve(async (req) => {
   // the message that decides how the whole thread gets classified.
   const isFirstTouch = !is_followup
   const trackingEnabled = !isFirstTouch
+  const tracking = trackingEnabled ? trackingPixel(domainRow, url, messageId) : null
 
   // Log pending
-  await supabase.from('sent_emails').insert({
+  const { error: insertError } = await supabase.from('sent_emails').insert({
     id: messageId,
     user_id,
     sender_id: chosenSender.id,
@@ -407,8 +417,16 @@ Deno.serve(async (req) => {
     body: finalBody,
     status: 'queued',
     tracking_enabled: trackingEnabled,
+    tracking_url: tracking?.url ?? null,
+    tracking_route: tracking?.route ?? 'none',
     message_id: messageId,
   })
+  if (insertError) {
+    return new Response(JSON.stringify({ error: 'could not log queued email', detail: insertError.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    })
+  }
 
   // Send directly via the Lovable email API (no queue dependency)
   const apiKey = Deno.env.get('LOVABLE_API_KEY')
@@ -447,7 +465,7 @@ Deno.serve(async (req) => {
       }
     } else {
       await sendLovableEmail(
-        { ...basePayload, html: plainToHtml(finalBody, trackingPixelUrl(domainRow, url, messageId)) } as any,
+        { ...basePayload, html: plainToHtml(finalBody, tracking!.url) } as any,
         { apiKey, idempotencyKey: messageId },
       )
     }
@@ -486,5 +504,6 @@ Deno.serve(async (req) => {
     sender: { id: chosenSender.id, from: fromEmail, name: chosenSender.from_name },
     reply_to: replyTo,
     sender_domain: senderDomain,
+    tracking_route: tracking?.route ?? 'none',
   }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
 })

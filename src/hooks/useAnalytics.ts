@@ -9,6 +9,19 @@ export interface AnalyticsFilters {
   senderId: string | "all";
 }
 
+const STOCKHOLM_TZ = "Europe/Stockholm";
+
+const stockholmDateKey = (value: string | Date): string | null => {
+  const date = typeof value === "string" ? new Date(value) : value;
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: STOCKHOLM_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+};
+
 export const rangeToSince = (range: DateRangeKey): Date | null => {
   const now = Date.now();
   const map: Record<DateRangeKey, number | null> = {
@@ -33,6 +46,8 @@ export type SentEmailRow = {
   enrollment_id: string | null;
   subject: string | null;
   tracking_enabled?: boolean | null;
+  tracking_route?: "none" | "custom" | "supabase" | null;
+  tracking_url?: string | null;
 };
 
 export const useSentEmails = (filters: AnalyticsFilters) => {
@@ -43,7 +58,7 @@ export const useSentEmails = (filters: AnalyticsFilters) => {
     queryFn: async () => {
       let q = supabase
         .from("sent_emails")
-        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject, tracking_enabled")
+        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject, tracking_enabled, tracking_route, tracking_url")
         .order("sent_at", { ascending: false })
         .limit(2000);
       const since = rangeToSince(filters.range);
@@ -137,9 +152,11 @@ export const useRecentActivity = (filters: AnalyticsFilters) =>
 // step number is derived from the send order within each enrollment.
 export type StepFilter = "all" | "first" | `step-${number}` | "followups";
 
+const COUNTED_SEND_STATUSES = new Set(["queued", "sent", "bounced", "complained", "unsubscribed"]);
+
 export const annotateSteps = (rows: SentEmailRow[]): (SentEmailRow & { stepIndex: number })[] => {
   const byEnrollment = new Map<string, SentEmailRow[]>();
-  rows.forEach((r) => {
+  rows.filter((row) => COUNTED_SEND_STATUSES.has(row.status)).forEach((r) => {
     const key = r.enrollment_id ?? `solo-${r.id}`;
     const arr = byEnrollment.get(key) ?? [];
     arr.push(r);
@@ -163,7 +180,7 @@ export const filterByStep = (
   if (filter === "first") return rows.filter((r) => r.stepIndex === 1);
   if (filter === "followups") return rows.filter((r) => r.stepIndex > 1);
   const n = Number(filter.replace("step-", ""));
-  return rows.filter((r) => r.stepIndex <= n);
+  return rows.filter((r) => r.stepIndex === n);
 };
 
 // Aggregations
@@ -204,15 +221,20 @@ export const computeKpis = (rows: SentEmailRow[]) => {
 
 export const computeDailySeries = (rows: SentEmailRow[], days = 30) => {
   const buckets = new Map<string, { date: string; sent: number; opened: number; replied: number }>();
-  const today = new Date();
+  const todayKey = stockholmDateKey(new Date());
+  if (!todayKey) return [];
+  const [year, month, day] = todayKey.split("-").map(Number);
   for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    const key = d.toISOString().slice(0, 10);
+    // Noon UTC remains on the intended Stockholm calendar date across DST changes.
+    const d = new Date(Date.UTC(year, month - 1, day - i, 12));
+    const key = stockholmDateKey(d);
+    if (!key) continue;
     buckets.set(key, { date: key, sent: 0, opened: 0, replied: 0 });
   }
   rows.forEach((r) => {
-    const key = r.sent_at.slice(0, 10);
+    if (!COUNTED_SEND_STATUSES.has(r.status)) return;
+    const key = stockholmDateKey(r.sent_at);
+    if (!key) return;
     const b = buckets.get(key);
     if (!b) return;
     b.sent++;

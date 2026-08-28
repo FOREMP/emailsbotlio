@@ -2,6 +2,7 @@
 // tracking pixel from t.<sending domain>, so the pixel host matches the From
 // domain. Idempotent — safe to call repeatedly.
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { checkTrackingHost, trackingHostForDomain } from '../_shared/tracking-health.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -158,20 +159,44 @@ Deno.serve(async (req) => {
       }
     }
 
-    const trackingHost = `https://${host}`
-    if (verified && row.tracking_host !== trackingHost) {
-      await supabase
-        .from('sending_domains')
-        .update({ tracking_host: trackingHost })
-        .eq('id', row.id)
-    }
+    const trackingHost = trackingHostForDomain(row.domain)
+    const checkedAt = new Date().toISOString()
+    const health = verified && trackingHost
+      ? await checkTrackingHost(trackingHost)
+      : {
+          healthy: false,
+          status: null,
+          contentType: '',
+          error: verified ? 'Invalid domain name' : 'Vercel domain is not DNS-verified',
+        }
+
+    const domainPatch = health.healthy
+      ? {
+          tracking_host: trackingHost,
+          tracking_host_verified_at: checkedAt,
+          tracking_host_last_checked_at: checkedAt,
+          tracking_host_last_error: null,
+        }
+      : {
+          tracking_host: null,
+          tracking_host_verified_at: null,
+          tracking_host_last_checked_at: checkedAt,
+          tracking_host_last_error: health.error,
+        }
+    const { error: saveError } = await supabase
+      .from('sending_domains')
+      .update(domainPatch)
+      .eq('id', row.id)
 
     results.push({
       domain: row.domain,
       tracking_host: trackingHost,
-      verified,
-      saved: verified,
-      detail,
+      verified: health.healthy,
+      vercel_verified: verified,
+      healthy: health.healthy,
+      http_status: health.status,
+      saved: health.healthy && !saveError,
+      detail: saveError?.message ?? health.error ?? detail,
       dns: { type: 'CNAME', name: 't', value: CNAME_TARGET },
     })
   }

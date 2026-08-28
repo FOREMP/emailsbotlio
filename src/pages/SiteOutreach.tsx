@@ -14,7 +14,14 @@ import {
 import { Loader2, StopCircle, Mail, Save, Eye, Gauge, BarChart3 } from "lucide-react";
 import { VolumeTrendChart } from "@/components/analytics/VolumeTrendChart";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { annotateSteps, computeDailySeries, computeKpis, filterByStep, type StepFilter, type SentEmailRow } from "@/hooks/useAnalytics";
+import {
+  annotateSteps,
+  computeDailySeries,
+  computeKpis,
+  filterByStep,
+  type StepFilter,
+  type SentEmailRow,
+} from "@/hooks/useAnalytics";
 
 type Seq = { id: string; contact_list_id: string | null };
 type Node = { id: string; node_type: string; position_y: number; config: any };
@@ -29,9 +36,19 @@ type EnrollRow = {
   contact: { id: string; email: string | null; first_name: string | null; custom_fields: any } | null;
 };
 type SentRow = {
-  id: string; sent_at: string; subject: string | null; body: string | null;
-  recipient_email: string; status: string; open_count: number; opened_at: string | null;
-  contact_id: string | null; enrollment_id?: string | null; tracking_enabled?: boolean | null;
+  id: string;
+  sent_at: string;
+  subject: string | null;
+  body: string | null;
+  recipient_email: string;
+  status: string;
+  open_count: number;
+  opened_at: string | null;
+  contact_id: string | null;
+  enrollment_id?: string | null;
+  tracking_enabled?: boolean | null;
+  tracking_route?: "none" | "custom" | "supabase" | null;
+  tracking_url?: string | null;
 };
 
 const STATUS_COLOR: Record<string, string> = {
@@ -43,6 +60,20 @@ const STATUS_COLOR: Record<string, string> = {
   failed: "bg-red-600",
 };
 
+const STOCKHOLM_TZ = "Europe/Stockholm";
+const COUNTED_SEND_STATUSES = new Set(["queued", "sent", "bounced", "complained", "unsubscribed"]);
+
+const stockholmDateKey = (value: string | Date): string | null => {
+  const date = typeof value === "string" ? new Date(value) : value;
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: STOCKHOLM_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+};
+
 export default function SiteOutreach() {
   const [language, setLanguage] = useState<"sv" | "en">("sv");
   const [seq, setSeq] = useState<Seq | null>(null);
@@ -50,12 +81,12 @@ export default function SiteOutreach() {
   const [enrollments, setEnrollments] = useState<EnrollRow[]>([]);
   const [recent, setRecent] = useState<SentRow[]>([]);
   const [statsRows, setStatsRows] = useState<SentEmailRow[]>([]);
+  const [allSentRows, setAllSentRows] = useState<SentEmailRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [preview, setPreview] = useState<SentRow | null>(null);
   const [dirty, setDirty] = useState<Record<string, any>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
   const [savingLimit, setSavingLimit] = useState(false);
-  const [allSentRows, setAllSentRows] = useState<SentEmailRow[]>([]);
   const [stepFilter, setStepFilter] = useState<StepFilter>("all");
 
   const load = useCallback(async () => {
@@ -67,13 +98,14 @@ export default function SiteOutreach() {
     setStatsRows([]);
     setAllSentRows([]);
     setDirty({});
+
     const sequenceName = language === "en" ? "Site Demo Outreach EN" : "Site Demo Outreach";
-    // Internal tool — sequence is shared across all logged-in operators.
     const { data: s, error: seqError } = await supabase
       .from("sequences")
       .select("id, contact_list_id")
       .eq("name", sequenceName)
       .maybeSingle();
+
     if (seqError) {
       toast({ title: "Kunde inte ladda outreach", description: seqError.message, variant: "destructive" });
       setLoading(false);
@@ -94,6 +126,7 @@ export default function SiteOutreach() {
         .order("updated_at", { ascending: false })
         .limit(200),
     ]);
+
     const enrs = enrsRaw ?? [];
     const contactIds = Array.from(new Set(enrs.map((e: any) => e.contact_id).filter(Boolean)));
     const { data: contactRows } = contactIds.length
@@ -102,32 +135,68 @@ export default function SiteOutreach() {
     const contactMap = new Map((contactRows ?? []).map((c: any) => [c.id, c]));
     const enrsWithContact = enrs.map((e: any) => ({ ...e, contact: contactMap.get(e.contact_id) ?? null }));
 
-    const enrIds = enrs.map((e: any) => e.id);
-    // Hämta ALLA sent_emails för sekvensen så att UI:n kan visa korrekt nästa steg
-    // och rätt antal skickade per kontakt. Separat 30-dagarsfilter görs för graf/KPI.
-    const { data: allEnrIdsRaw } = await supabase
-      .from("enrollments").select("id").eq("sequence_id", s.id);
-    const allEnrIds = (allEnrIdsRaw ?? []).map((r: any) => r.id);
     const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    const allSent: SentEmailRow[] = [];
+    const visibleEnrollmentIds = enrs.map((row: any) => row.id as string);
+    const visibleSent: SentEmailRow[] = [];
+    for (let i = 0; i < visibleEnrollmentIds.length; i += 200) {
+      const chunk = visibleEnrollmentIds.slice(i, i + 200);
+      const { data, error } = await supabase
+        .from("sent_emails")
+        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject, body, open_count, contact_id, tracking_enabled, tracking_route, tracking_url")
+        .in("enrollment_id", chunk)
+        .order("sent_at", { ascending: false });
+      if (error) {
+        toast({ title: "Kunde inte ladda mailhistorik", description: error.message, variant: "destructive" });
+      } else if (data) {
+        visibleSent.push(...(data as SentEmailRow[]));
+      }
+    }
+
+    // Supabase REST responses are capped, so page through every enrollment id.
+    const allEnrIds: string[] = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabase
+        .from("enrollments")
+        .select("id")
+        .eq("sequence_id", s.id)
+        .order("id", { ascending: true })
+        .range(from, from + 999);
+      if (error) {
+        toast({ title: "Kunde inte ladda sekvensstatistik", description: error.message, variant: "destructive" });
+        break;
+      }
+      const page = data ?? [];
+      allEnrIds.push(...page.map((row: any) => row.id as string));
+      if (page.length < 1000) break;
+    }
+
+    const stats: SentEmailRow[] = [];
     for (let i = 0; i < allEnrIds.length; i += 200) {
       const chunk = allEnrIds.slice(i, i + 200);
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("sent_emails")
-        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject, body, open_count, contact_id, tracking_enabled")
+        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject, body, open_count, contact_id, tracking_enabled, tracking_route, tracking_url")
         .in("enrollment_id", chunk)
+        .gte("sent_at", since30)
         .order("sent_at", { ascending: false })
         .limit(5000);
-      if (data) allSent.push(...(data as SentEmailRow[]));
+      if (error) {
+        toast({ title: "Kunde inte ladda 30-dagarsstatistik", description: error.message, variant: "destructive" });
+      } else if (data) {
+        stats.push(...(data as SentEmailRow[]));
+      }
     }
-    const stats = allSent.filter((r) => new Date(r.sent_at).toISOString() >= since30);
-    const sent = allSent.slice().sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime()).slice(0, 5) as unknown as SentRow[];
+
+    const sent = stats
+      .slice()
+      .sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime())
+      .slice(0, 5) as SentRow[];
 
     setNodes((ns ?? []) as Node[]);
     setEnrollments(enrsWithContact as any);
-    setRecent((sent ?? []) as SentRow[]);
+    setRecent(sent);
     setStatsRows(stats);
-    setAllSentRows(allSent);
+    setAllSentRows(visibleSent);
     setLoading(false);
   }, [language]);
 
@@ -145,20 +214,21 @@ export default function SiteOutreach() {
     () => nodes.filter((n) => n.node_type === "wait").sort((a, b) => a.position_y - b.position_y),
     [nodes],
   );
-  const cfgVal = (node: Node, key: string) => (dirty[node.id]?.[key] ?? node.config?.[key] ?? "");
   const throttleNodes = useMemo(
     () => nodes.filter((n) => n.node_type === "throttle").sort((a, b) => a.position_y - b.position_y),
     [nodes],
   );
+
+  const cfgVal = (node: Node, key: string) => (dirty[node.id]?.[key] ?? node.config?.[key] ?? "");
   const dailyLimitNode = throttleNodes[0] ?? null;
   const dailyLimit = Number(dailyLimitNode ? cfgVal(dailyLimitNode, "max_per_day") : 16) || 16;
 
   const sentCountByEnrollment = useMemo(() => {
     const map = new Map<string, number>();
     for (const row of allSentRows) {
-      const eid = (row as any).enrollment_id as string | null;
+      const eid = row.enrollment_id as string | null;
       if (!eid) continue;
-      if (row.status !== "sent" && row.status !== "queued") continue;
+      if (!COUNTED_SEND_STATUSES.has(row.status)) continue;
       map.set(eid, (map.get(eid) ?? 0) + 1);
     }
     return map;
@@ -174,7 +244,7 @@ export default function SiteOutreach() {
   }, [sentCountByEnrollment]);
 
   const counts = useMemo(() => {
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const todayKey = stockholmDateKey(new Date());
     const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
     const queuedRows = enrollments.filter((e) => e.status === "active" || e.status === "waiting_capacity");
     const active = queuedRows.length;
@@ -185,31 +255,27 @@ export default function SiteOutreach() {
     const stopped = enrollments.filter((e) => e.status === "stopped" || e.status === "unsubscribed").length;
     const newLast24h = enrollments.filter((e) => e.created_at && new Date(e.created_at).getTime() >= dayAgo).length;
 
-    // Dagens utskick uppdelat på förstamail och uppföljningar.
-    const firstSendAt = new Map<string, number>();
-    for (const r of statsRows) {
-      const eid = (r as any).enrollment_id as string | null;
-      if (!eid) continue;
-      const t = new Date(r.sent_at).getTime();
-      const prev = firstSendAt.get(eid);
-      if (prev === undefined || t < prev) firstSendAt.set(eid, t);
-    }
     let sentFirstToday = 0;
     let sentFollowupToday = 0;
-    for (const r of statsRows) {
-      const t = new Date(r.sent_at).getTime();
-      if (t < today.getTime()) continue;
-      const eid = (r as any).enrollment_id as string | null;
-      const isFollowup = !!eid && (firstSendAt.get(eid) ?? t) < t;
-      if (isFollowup) sentFollowupToday++; else sentFirstToday++;
+    for (const r of annotateSteps(statsRows)) {
+      if (stockholmDateKey(r.sent_at) !== todayKey) continue;
+      if (r.tracking_enabled || r.stepIndex > 1) sentFollowupToday += 1;
+      else sentFirstToday += 1;
     }
+
     return {
-      active, waiting, waitingFirst, waitingFollowup, completed, stopped,
-      newLast24h, sentFirstToday, sentFollowupToday,
+      active,
+      waiting,
+      waitingFirst,
+      waitingFollowup,
+      completed,
+      stopped,
+      newLast24h,
+      sentFirstToday,
+      sentFollowupToday,
       sentToday: sentFirstToday + sentFollowupToday,
     };
-  }, [enrollments, statsRows, sentCountByEnrollment]);
-
+  }, [enrollments, sentCountByEnrollment, statsRows]);
 
   const stopEnrollment = async (id: string, reason: string) => {
     if (!confirm(`Stoppa denna kontakt från fler mail? (${reason})`)) return;
@@ -232,7 +298,11 @@ export default function SiteOutreach() {
     const { error } = await supabase.from("sequence_nodes").update({ config: nextConfig }).eq("id", nodeId);
     setSavingId(null);
     if (error) return toast({ title: "Kunde inte spara", description: error.message, variant: "destructive" });
-    setDirty((d) => { const c = { ...d }; delete c[nodeId]; return c; });
+    setDirty((d) => {
+      const c = { ...d };
+      delete c[nodeId];
+      return c;
+    });
     toast({ title: "Sparat" });
     load();
   };
@@ -251,15 +321,30 @@ export default function SiteOutreach() {
       const { data: userData } = await supabase.auth.getUser();
       const uid = userData?.user?.id;
       if (uid) {
+        const allowedDomains = new Set(
+          sendNodes
+            .flatMap((node) => String(node.config?.sender_domain ?? "")
+              .split(",")
+              .map((value: string) => value.trim().toLowerCase())
+              .filter(Boolean)),
+        );
+        const fallbackDomains = language === "en" ? ["foremp.eu", "foremp.one"] : ["foremp.email"];
+        fallbackDomains.forEach((domain) => allowedDomains.add(domain));
+
         const { data: forempSenders } = await supabase
           .from("senders")
-          .select("id")
+          .select("id, from_email")
           .eq("user_id", uid)
-          .eq("is_active", true)
-          .eq("language", language);
-        const perSender = Math.max(1, Math.ceil(nextLimit / Math.max((forempSenders ?? []).length, 1)));
-        for (const s of forempSenders ?? []) {
-          const { error } = await supabase.from("senders").update({ daily_limit: perSender }).eq("id", s.id);
+          .eq("is_active", true);
+
+        const scopedSenders = (forempSenders ?? []).filter((sender: any) => {
+          const domain = String(sender.from_email ?? "").split("@")[1]?.toLowerCase() ?? "";
+          return allowedDomains.has(domain);
+        });
+
+        const perSender = Math.max(1, Math.ceil(nextLimit / Math.max(scopedSenders.length, 1)));
+        for (const sender of scopedSenders) {
+          const { error } = await supabase.from("senders").update({ daily_limit: perSender }).eq("id", sender.id);
           if (error) throw error;
         }
       }
@@ -269,7 +354,10 @@ export default function SiteOutreach() {
         for (const n of throttleNodes) delete c[n.id];
         return c;
       });
-      toast({ title: "Daglig gräns sparad", description: `${nextLimit} nya första mail/dag. Follow-ups skickas utanför den gränsen.` });
+      toast({
+        title: "Daglig gräns sparad",
+        description: `${nextLimit} nya första mail/dag. Follow-ups ligger utanför den gränsen.`,
+      });
       load();
     } catch (e) {
       toast({ title: "Kunde inte spara gräns", description: (e as Error).message, variant: "destructive" });
@@ -286,15 +374,15 @@ export default function SiteOutreach() {
   const filteredStats = useMemo(() => filterByStep(steppedStats, stepFilter), [steppedStats, stepFilter]);
   const stepBreakdown = useMemo(() => {
     const map = new Map<number, { step: number; sent: number; trackable: number; opened: number; replied: number }>();
-    for (const r of filteredStats) {
-      const step = Math.min(r.stepIndex, 4);
+    for (const row of filteredStats) {
+      const step = Math.min(row.stepIndex, 4);
       const entry = map.get(step) ?? { step, sent: 0, trackable: 0, opened: 0, replied: 0 };
       entry.sent += 1;
-      if ((r as any).tracking_enabled) {
+      if (row.tracking_enabled) {
         entry.trackable += 1;
-        if (r.opened_at || (r as any).open_count > 0) entry.opened += 1;
+        if (row.opened_at) entry.opened += 1;
       }
-      if ((r as any).replied_at) entry.replied += 1;
+      if (row.replied_at) entry.replied += 1;
       map.set(step, entry);
     }
     return Array.from(map.values()).sort((a, b) => a.step - b.step);
@@ -337,8 +425,8 @@ export default function SiteOutreach() {
           <p className="text-xs text-muted-foreground">
             Räknar endast <strong>nya första mail</strong> per dag. Follow-ups skickas alltid ovanpå detta.
             {language === "en"
-              ? " Totalen delas mellan aktiva English-senders."
-              : " Totalen delas jämnt mellan aktiva Swedish-senders."}
+              ? " Totalen delas mellan aktiva @foremp.eu/@foremp.one-senders."
+              : " Totalen delas jämnt mellan aktiva @foremp.email-senders."}
           </p>
         </div>
         <div className="flex items-end gap-2">
@@ -359,20 +447,17 @@ export default function SiteOutreach() {
         </div>
       </Card>
 
-      {/* KPI cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard label="Aktiva" value={counts.active} />
         <StatCard label="Väntar på första mail" value={counts.waitingFirst} />
         <StatCard label="Väntar på uppföljning" value={counts.waitingFollowup} />
         <StatCard label="Nya i kön (24h)" value={counts.newLast24h} />
         <StatCard label={`Nya mail i dag (av ${dailyLimit})`} value={counts.sentFirstToday} />
-        <StatCard label={`Uppföljningar i dag (av ${dailyLimit * 3})`} value={counts.sentFollowupToday} />
+        <StatCard label="Uppföljningar i dag" value={counts.sentFollowupToday} />
         <StatCard label="Klara" value={counts.completed} />
         <StatCard label="Stoppade" value={counts.stopped} />
-
       </div>
 
-      {/* Statistik — samma graf som Analytics, men filtrerad på denna sekvens */}
       <Card className="p-4 space-y-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
@@ -381,7 +466,7 @@ export default function SiteOutreach() {
             <p className="text-xs text-muted-foreground">Visar nu: {language === "en" ? "English / foremp.eu" : "Svenska / foremp.email"}.</p>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
-            <Select value={stepFilter} onValueChange={(v) => setStepFilter(v as StepFilter)}>
+            <Select value={stepFilter} onValueChange={(value) => setStepFilter(value as StepFilter)}>
               <SelectTrigger className="w-[220px]"><SelectValue placeholder="Steg" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Alla utskick</SelectItem>
@@ -421,14 +506,14 @@ export default function SiteOutreach() {
               </tr>
             </thead>
             <tbody>
-              {stepBreakdown.map((s) => (
-                <tr key={s.step} className="border-b border-border/60">
-                  <td className="py-2 pr-3 font-medium">Mail {s.step}</td>
-                  <td className="py-2 pr-3">{s.sent}</td>
-                  <td className="py-2 pr-3">{s.trackable}</td>
-                  <td className="py-2 pr-3">{s.opened}</td>
-                  <td className="py-2 pr-3">{s.trackable ? Math.round((s.opened / s.trackable) * 100) : 0}%</td>
-                  <td className="py-2 pr-3">{s.replied}</td>
+              {stepBreakdown.map((row) => (
+                <tr key={row.step} className="border-b border-border/60">
+                  <td className="py-2 pr-3 font-medium">Mail {row.step}</td>
+                  <td className="py-2 pr-3">{row.sent}</td>
+                  <td className="py-2 pr-3">{row.trackable}</td>
+                  <td className="py-2 pr-3">{row.opened}</td>
+                  <td className="py-2 pr-3">{row.trackable ? Math.round((row.opened / row.trackable) * 100) : 0}%</td>
+                  <td className="py-2 pr-3">{row.replied}</td>
                 </tr>
               ))}
               {stepBreakdown.length === 0 && (
@@ -439,8 +524,6 @@ export default function SiteOutreach() {
         </div>
       </Card>
 
-
-      {/* Enrollment queue */}
       <Card className="p-4">
         <h2 className="text-lg font-semibold mb-3">Kö</h2>
         {enrollments.length === 0 ? (
@@ -471,9 +554,7 @@ export default function SiteOutreach() {
                       <td className="py-2 pr-3">
                         <Badge className={STATUS_COLOR[e.status] ?? "bg-slate-500"}>{e.status}</Badge>
                       </td>
-                      <td className="py-2 pr-3 text-xs text-muted-foreground">
-                        {Math.min(sentCountByEnrollment.get(e.id) ?? 0, 4)}/4
-                      </td>
+                      <td className="py-2 pr-3 text-xs text-muted-foreground">{Math.min(sentCountByEnrollment.get(e.id) ?? 0, 4)}/4</td>
                       <td className="py-2 pr-3 text-xs text-muted-foreground">
                         {e.next_send_at ? new Date(e.next_send_at).toLocaleString("sv-SE") : "—"}
                       </td>
@@ -496,7 +577,6 @@ export default function SiteOutreach() {
         )}
       </Card>
 
-      {/* Recent 5 sent mails */}
       <Card className="p-4">
         <h2 className="text-lg font-semibold mb-3 flex items-center gap-2"><Mail className="h-4 w-4" /> Senaste 5 skickade mail</h2>
         {recent.length === 0 ? (
@@ -516,7 +596,15 @@ export default function SiteOutreach() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Badge variant={r.status === "sent" ? "default" : "destructive"}>{r.status}</Badge>
-                    {r.tracking_enabled ? <Badge variant="outline">spårbar</Badge> : <Badge variant="secondary">ospårad</Badge>}
+                    <Badge variant="outline">
+                      {!r.tracking_enabled
+                        ? "ospårad"
+                        : r.tracking_route === "custom"
+                          ? "spårbar · egen domän"
+                          : r.tracking_route === "supabase"
+                            ? "spårbar · säker reserv"
+                            : "spårbar · äldre okänd väg"}
+                    </Badge>
                     {r.open_count > 0 && <Badge variant="outline">{r.open_count} öppning{r.open_count > 1 ? "ar" : ""}</Badge>}
                     <Button size="sm" variant="ghost" onClick={() => setPreview(r)}><Eye className="h-4 w-4" /></Button>
                   </div>
@@ -527,7 +615,6 @@ export default function SiteOutreach() {
         )}
       </Card>
 
-      {/* Prompt editor */}
       <Card className="p-4 space-y-4">
         <div>
           <h2 className="text-lg font-semibold">Prompts per steg</h2>
@@ -541,7 +628,7 @@ export default function SiteOutreach() {
           </p>
         </div>
         {sendNodes.map((n, i) => {
-          const wait = waitNodes[i]; // wait AFTER this send (if any)
+          const wait = waitNodes[i];
           const isDirty = !!dirty[n.id];
           return (
             <div key={n.id} className="border rounded-md p-4 space-y-3">
@@ -587,7 +674,7 @@ export default function SiteOutreach() {
             </DialogDescription>
           </DialogHeader>
           <pre className="whitespace-pre-wrap text-sm bg-muted/50 rounded-md p-4 max-h-[60vh] overflow-auto">
-{preview?.body ?? "(ingen body)"}
+            {preview?.body ?? "(ingen body)"}
           </pre>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPreview(null)}>Stäng</Button>
