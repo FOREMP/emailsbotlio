@@ -1,29 +1,28 @@
-# Dagsgränsen för nya mail följs inte — orsak och fix
+# Öppningsspårningen är död — orsak och fix
 
-UI:t har rätt. Jag räknade i databasen: i dag (Stockholm-tid) har den engelska demo-sekvensen skickat **16 första mail** trots gränsen 10, och den svenska har skickat **1 första mail** trots gränsen 24 (27 kontakter står och väntar). Det är alltså backend, inte statistiken.
+## Vad jag mätte
 
-## Vad som faktiskt är fel
+- Öppningar per dag i databasen: 17–18 aug fungerade (11 och 15 öppningar). Från **19 aug till 27 aug har inte ett enda mail haft spårning påslagen** (`tracking_enabled = false` på alla 334 mail) — det var följdbuggen som gjorde att varje mail såg ut som ett första mail (första mail skickas medvetet utan pixel).
+- I dag: 49 mail har spårning påslagen — men **0 öppningar**.
+- Orsaken till dagens nollor: spårningsvärdarna finns inte i DNS. Jag slog upp dem:
+  - `t.botlio.email` → NXDOMAIN
+  - `t.foremp.email`, `t.foremp.eu`, `t.foremp.one`, `t.botlio.eu` → ingen A/CNAME-post
+  - HTTP-anrop mot alla fem → ingen anslutning alls
+- Supabase-fallbacken fungerar däremot: `.../track-open/o/<id>.gif` svarar `200 image/gif`.
 
-**1. Throttle-räknaren matchar noll rader — taket slår aldrig till.**
-`run-sequences` räknar dagens första mail i `contact_activity` med filtret `metadata->>is_followup = 'false'`. Kontroll av verkliga rader: **inget** `email_sent`-event har fältet `is_followup` alls (bara `sender_id`, `from`, `subject`, `message_id`, `throttle_node_id`). Filtret ger därför alltid 0 av 10, och sekvensgränsen blockerar aldrig. Det som i praktiken styr volymen är i stället summan av sendernas `daily_limit`: 5+5+3+3 = 16 — exakt de 16 mail som gick ut.
-
-**2. `throttle_node_id` sätts nästan aldrig.**
-Av dagens 107 send-events har **ett enda** ett `throttle_node_id`. Id:t skickas vidare via `enrollments.last_error` med prefixet `__pending_throttle:`, men samma fält skrivs över av pacing- och statusmeddelanden ("paced: waiting 12 min…") innan mailet går. Även om punkt 1 fixas skulle räkningen fortsätta missa nästan allt.
-
-**3. Svenska sidan svälts av pacing.**
-Alla 27 svenska förstamail står med `last_error: "paced: waiting 10–16 min before next send from this sender"`. Pacing använder **en gemensam klocka per sender** för både förstamail och uppföljningar. Med 42 uppföljningar i dag nollställs klockan hela tiden, så förstamailen får aldrig sin lucka — därav 1 av 24.
-
-**4. Spara-knappen för dagsgränsen träffar fel senders.**
-`saveDailyLimit` i `SiteOutreach.tsx` skriver ut gränsen på *alla* aktiva senders med samma språk. Botlio-sendrarna (US Website Offer) är också `language = 'en'`, så en ändring av den engelska demo-gränsen skriver om US-sekvensens senders.
+Så pixeln pekar sedan i dag på `https://t.<domän>/o/<id>.gif`, en adress som inte finns. Mailklienten kan aldrig hämta bilden, och ingen öppning registreras. UI:t visar "Verified" eftersom det bara frågar Vercel om domänen är tillagd i projektet — det kontrollerar aldrig att CNAME faktiskt finns i DNS eller att pixeln svarar.
 
 ## Fix
 
-1. Räkna dagens förstamail från `sent_emails` i stället för `contact_activity`-metadata: mail i dag (Stockholm) kopplade till enrollments i sekvensen, där enrollmentet inte har någon tidigare send. Det är samma logik som `sender_capacity_remaining` redan använder och är oberoende av metadata som kanske saknas.
-2. Ta bort beroendet av `metadata.is_followup` / `throttle_node_id` i både throttle-noden och den globala sekvensgränsen i `run-sequences`. Sluta använda `last_error` som bärare av throttle-id.
-3. Fortsätt ändå stämpla `is_followup` och `budget_kind` i `send-cold-email` för statistik, men låt inget tak vara beroende av det.
-4. Dela pacing-klockan per sender **och** typ (förstamail vs uppföljning), så uppföljningar inte äter förstamailens luckor. Räkna även spacing mot rätt kvot för respektive typ.
-5. Justera `saveDailyLimit` så den bara uppdaterar senders som ingår i den aktuella sekvensens rotation (foremp.email för svenska, foremp.eu/foremp.one för engelska) — aldrig botlio-sendrarna.
-6. Låt UI:t räkna dygnet i Stockholm-tid i stället för webbläsarens lokala midnatt, så siffran matchar backend exakt.
+1. **Återställ spårningen direkt:** nolla `tracking_host` på de fem domänerna så pixeln faller tillbaka till Supabase-URL:en som bevisligen svarar. Öppningar börjar registreras vid nästa utskick.
+2. **Gör värden hälsokontrollerad, inte bara "tillagd i Vercel":** lägg till `tracking_host_verified_at` på `sending_domains`. `setup-tracking-proxy` gör ett riktigt HTTP-anrop mot `https://t.<domän>/o/<test-id>.gif` och stämplar tiden bara om svaret är `200` med `image/gif`. Misslyckas det visas "DNS saknas" i UI:t i stället för "Verified".
+3. **Säker pixelväljare i `send-cold-email`:** använd `tracking_host` endast när `tracking_host_verified_at` är satt och nyare än 7 dygn — annars Supabase-URL:en. Då kan en trasig DNS-post aldrig igen tysta all spårning.
+4. **Automatisk återkontroll:** låt `setup-tracking-proxy` kunna köras av cron en gång per dygn och uppdatera stämpeln, så en värd som slutar svara plockas ned automatiskt.
+5. **DNS-instruktioner i Domains-vyn per domän:** `foremp.email`, `botlio.email` och `botlio.eu` ligger på Cloudflare (lägg CNAME `t` → `cname.vercel-dns.com`, DNS only / grå molnikon). `foremp.eu` och `foremp.one` ligger på one.com. Vyn visar i dag samma text för alla och säger "Verified" utan täckning.
+6. **Analysen:** i statistiken räknas öppningsgrad bara på mail där `tracking_enabled = true`, så perioden 19–27 aug ska visas som "ej spårad" i stället för 0 % öppet.
+
+## Efter fixen
+Spårningen fungerar omedelbart via Supabase-värden. Vill du ha egen värd på `t.<domän>` (bättre för leveransen, eftersom bildvärden matchar avsändardomänen) lägger du in CNAME-posterna och kör "Set up tracking host automatically" igen — då stämplas de som verifierade först när pixeln faktiskt svarar, och systemet byter över av sig självt.
 
 ## Verifiering
-Kör `run-sequences` efter fixen och kontrollera i databasen att antalet förstamail per sekvens i dag stannar på taket (10 EN / 24 SV), att svenska förstamail börjar gå ut igen, och att uppföljningarna fortsätter ovanpå gränsen.
+Efter ändringen: skicka ett uppföljningsmail, hämta pixel-URL:en från `sent_emails.body`, anropa den och kontrollera att `opened_at` och `open_count` sätts på raden.
