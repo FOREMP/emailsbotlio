@@ -1174,6 +1174,16 @@ export type Database = {
         Args: { base_at?: string; config: Json }
         Returns: string
       }
+      record_email_open: {
+        Args: { p_message_id: string }
+        Returns: {
+          contact_id: string
+          enrollment_id: string
+          id: string
+          is_first: boolean
+          user_id: string
+        }[]
+      }
       seed_default_senders: { Args: never; Returns: number }
       sender_capacity_remaining: {
         Args: { _is_followup: boolean; _sender_id: string }
