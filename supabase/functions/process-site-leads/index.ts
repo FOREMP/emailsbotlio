@@ -94,7 +94,7 @@ Deno.serve(async (req) => {
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   const supabase = createClient(supabaseUrl, serviceKey)
 
-  const report = { reconciled: 0, recovered: 0, audited: 0, generated: 0, capacity: 0, errors: [] as string[] }
+  const report = { reconciled: 0, recovered: 0, audits_recovered: 0, audited: 0, generated: 0, capacity: 0, errors: [] as string[] }
 
   // Manual override from the Site Leads UI: build these leads right now,
   // ignoring the automation switch and the daily cap.
@@ -160,6 +160,7 @@ Deno.serve(async (req) => {
     // ---------------- 1. RECONCILE ----------------
     report.reconciled = await reconcile(supabase, supabaseUrl, serviceKey, report)
     report.recovered = await recoverStuckGenerations(supabase, supabaseUrl, serviceKey, report)
+    report.audits_recovered = await recoverStuckAudits(supabase, report)
 
 
     // Operator on/off switch (Igång / Pausad / Stoppad) from /site-leads.
