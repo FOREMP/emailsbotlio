@@ -1,28 +1,34 @@
-# Öppningsspårningen är död — orsak och fix
+# Rensa 90 leads som fastnat i "auditing"
 
-## Vad jag mätte
+## Läget
+90 leads står i status `auditing` och rör sig inte:
 
-- Öppningar per dag i databasen: 17–18 aug fungerade (11 och 15 öppningar). Från **19 aug till 27 aug har inte ett enda mail haft spårning påslagen** (`tracking_enabled = false` på alla 334 mail) — det var följdbuggen som gjorde att varje mail såg ut som ett första mail (första mail skickas medvetet utan pixel).
-- I dag: 49 mail har spårning påslagen — men **0 öppningar**.
-- Orsaken till dagens nollor: spårningsvärdarna finns inte i DNS. Jag slog upp dem:
-  - `t.botlio.email` → NXDOMAIN
-  - `t.foremp.email`, `t.foremp.eu`, `t.foremp.one`, `t.botlio.eu` → ingen A/CNAME-post
-  - HTTP-anrop mot alla fem → ingen anslutning alls
-- Supabase-fallbacken fungerar däremot: `.../track-open/o/<id>.gif` svarar `200 image/gif`.
+- 58 svenska, äldsta sedan 2 augusti
+- 32 engelska, alla från 27 augusti
+- Alla 90 har en `website` — de går alltså att auditera, de har bara aldrig blivit klara
 
-Så pixeln pekar sedan i dag på `https://t.<domän>/o/<id>.gif`, en adress som inte finns. Mailklienten kan aldrig hämta bilden, och ingen öppning registreras. UI:t visar "Verified" eftersom det bara frågar Vercel om domänen är tillagd i projektet — det kontrollerar aldrig att CNAME faktiskt finns i DNS eller att pixeln svarar.
+Samtidigt finns **noll** leads i `pending_audit`, `needs_site` eller `needs_triage`. Pipelinen har inget att jobba med, och de här 90 är det enda som finns kvar innan du skrapar nytt.
 
-## Fix
+Orsaken är att `auditOne` sätter status till `auditing` innan Firecrawl/AI-anropet. Om anropet timar ut eller funktionen slår i sin resursgräns skrivs status aldrig vidare, och inget i pipelinen plockar upp rader som blivit hängande — `process-site-leads` letar bara efter `pending_audit`.
 
-1. **Återställ spårningen direkt:** nolla `tracking_host` på de fem domänerna så pixeln faller tillbaka till Supabase-URL:en som bevisligen svarar. Öppningar börjar registreras vid nästa utskick.
-2. **Gör värden hälsokontrollerad, inte bara "tillagd i Vercel":** lägg till `tracking_host_verified_at` på `sending_domains`. `setup-tracking-proxy` gör ett riktigt HTTP-anrop mot `https://t.<domän>/o/<test-id>.gif` och stämplar tiden bara om svaret är `200` med `image/gif`. Misslyckas det visas "DNS saknas" i UI:t i stället för "Verified".
-3. **Säker pixelväljare i `send-cold-email`:** använd `tracking_host` endast när `tracking_host_verified_at` är satt och nyare än 7 dygn — annars Supabase-URL:en. Då kan en trasig DNS-post aldrig igen tysta all spårning.
-4. **Automatisk återkontroll:** låt `setup-tracking-proxy` kunna köras av cron en gång per dygn och uppdatera stämpeln, så en värd som slutar svara plockas ned automatiskt.
-5. **DNS-instruktioner i Domains-vyn per domän:** `foremp.email`, `botlio.email` och `botlio.eu` ligger på Cloudflare (lägg CNAME `t` → `cname.vercel-dns.com`, DNS only / grå molnikon). `foremp.eu` och `foremp.one` ligger på one.com. Vyn visar i dag samma text för alla och säger "Verified" utan täckning.
-6. **Analysen:** i statistiken räknas öppningsgrad bara på mail där `tracking_enabled = true`, så perioden 19–27 aug ska visas som "ej spårad" i stället för 0 % öppet.
+## Vad som görs
 
-## Efter fixen
-Spårningen fungerar omedelbart via Supabase-värden. Vill du ha egen värd på `t.<domän>` (bättre för leveransen, eftersom bildvärden matchar avsändardomänen) lägger du in CNAME-posterna och kör "Set up tracking host automatically" igen — då stämplas de som verifierade först när pixeln faktiskt svarar, och systemet byter över av sig självt.
+**1. Återställ de fastnade raderna**
+Engångsuppdatering: alla leads med status `auditing` som inte rörts på över 30 minuter sätts tillbaka till `pending_audit`. De hamnar då sist i audit-kön och plockas upp av nästa tick (3 per tick, var 10:e minut).
 
-## Verifiering
-Efter ändringen: skicka ett uppföljningsmail, hämta pixel-URL:en från `sent_emails.body`, anropa den och kontrollera att `opened_at` och `open_count` sätts på raden.
+**2. Gör det självläkande**
+Lägg till en återställning i reconcile-fasen i `process-site-leads`, samma ställe som redan städar döda bygg-jobb: varje tick sätts `auditing`-rader äldre än `STALE_AUDIT_MINUTES` (30 min) tillbaka till `pending_audit`. Då kan det aldrig byggas upp en hög igen.
+
+**3. Räkna försök så inget loopar för evigt**
+Om samma lead återställs upprepade gånger utan att bli klar markeras den `failed` efter tredje försöket, så en trasig sajt inte äter audit-kapacitet varje tick. Räknaren sparas i `audit_details`.
+
+**4. Snabbare tömning av kön**
+90 leads i 3 per tick tar ~5 timmar. Under upprensningen höjs `AUDIT_PER_TICK` från 3 till 6 — audits är billigare än bygg och detta ligger i en egen fas före generering, så bygg-budgeten påverkas inte.
+
+## Teknisk detalj
+- Engångs-SQL mot `site_leads` (status + `updated_at`-filter), ingen schemaändring
+- `supabase/functions/process-site-leads/index.ts`: ny `recoverStuckAudits()` som anropas från reconcile-blocket, `STALE_AUDIT_MINUTES = 30`, `AUDIT_PER_TICK` 3 → 6, samt en försöksräknare i `audit_details.audit_attempts`
+- Rapportobjektet får ett `audits_recovered`-fält så du ser i pipeline-svaret hur många som återställdes
+
+## Inte med här
+Lead-lagerpanel i UI, importfilter för rader utan e-post och ny nisch — separata plan när du vill ha dem. Notera att du fortfarande behöver skrapa nya leads: efter den här upprensningen är 90 stycken allt du har.
