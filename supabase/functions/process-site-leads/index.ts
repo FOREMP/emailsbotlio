@@ -31,7 +31,7 @@ const corsHeaders = {
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 
-const AUDIT_PER_TICK = 3    // Firecrawl+Gemini per invocation — keep memory low
+const AUDIT_PER_TICK = 6    // Firecrawl+Gemini per invocation — keep memory low
 const GEN_PER_TICK = 3      // how many new pipelines may START per tick
 const MAX_CONCURRENT_GEN_PER_LANGUAGE = 3 // how many leads per language may be mid-pipeline at once
 const BUILD_BUDGET_MULTIPLIER = 2
@@ -52,6 +52,8 @@ function isCanonicalDemoUrl(value?: string | null): boolean {
   }
 }
 const STALE_PIPELINE_MINUTES = 30 // never let one dead scrape/generate/deploy block the whole queue
+const STALE_AUDIT_MINUTES = 30    // 'auditing' older than this = dead audit call
+const MAX_AUDIT_ATTEMPTS = 3      // after this many recoveries the lead is marked failed
 const ORPHAN_GRACE_MINUTES = 10   // 'generating' with no generated_sites row = dead job
 const TEMPLATE_PICKER_MODEL = 'gpt-4o-mini'
 const ACTIVE_GENERATED_SITE_STATUSES = ['pending', 'scraped', 'queued', 'processing', 'generated', 'deploying'] as const
