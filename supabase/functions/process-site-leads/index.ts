@@ -31,7 +31,7 @@ const corsHeaders = {
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 
-const AUDIT_PER_TICK = 3    // Firecrawl+Gemini per invocation — keep memory low
+const AUDIT_PER_TICK = 6    // Firecrawl+Gemini per invocation — keep memory low
 const GEN_PER_TICK = 3      // how many new pipelines may START per tick
 const MAX_CONCURRENT_GEN_PER_LANGUAGE = 3 // how many leads per language may be mid-pipeline at once
 const BUILD_BUDGET_MULTIPLIER = 2
@@ -52,6 +52,8 @@ function isCanonicalDemoUrl(value?: string | null): boolean {
   }
 }
 const STALE_PIPELINE_MINUTES = 30 // never let one dead scrape/generate/deploy block the whole queue
+const STALE_AUDIT_MINUTES = 30    // 'auditing' older than this = dead audit call
+const MAX_AUDIT_ATTEMPTS = 3      // after this many recoveries the lead is marked failed
 const ORPHAN_GRACE_MINUTES = 10   // 'generating' with no generated_sites row = dead job
 const TEMPLATE_PICKER_MODEL = 'gpt-4o-mini'
 const ACTIVE_GENERATED_SITE_STATUSES = ['pending', 'scraped', 'queued', 'processing', 'generated', 'deploying'] as const
@@ -92,7 +94,7 @@ Deno.serve(async (req) => {
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   const supabase = createClient(supabaseUrl, serviceKey)
 
-  const report = { reconciled: 0, recovered: 0, audited: 0, generated: 0, capacity: 0, errors: [] as string[] }
+  const report = { reconciled: 0, recovered: 0, audits_recovered: 0, audited: 0, generated: 0, capacity: 0, errors: [] as string[] }
 
   // Manual override from the Site Leads UI: build these leads right now,
   // ignoring the automation switch and the daily cap.
@@ -158,6 +160,7 @@ Deno.serve(async (req) => {
     // ---------------- 1. RECONCILE ----------------
     report.reconciled = await reconcile(supabase, supabaseUrl, serviceKey, report)
     report.recovered = await recoverStuckGenerations(supabase, supabaseUrl, serviceKey, report)
+    report.audits_recovered = await recoverStuckAudits(supabase, report)
 
 
     // Operator on/off switch (Igång / Pausad / Stoppad) from /site-leads.
@@ -597,6 +600,54 @@ async function auditOne(
     },
   }).eq('id', row.id)
 }
+
+// Leads get status 'auditing' before the Firecrawl/AI call. If that call times
+// out or the worker hits its resource limit the row is never advanced, and the
+// audit phase (which only looks for pending_audit) never touches it again.
+// Every tick we push those back into the queue, and give up after
+// MAX_AUDIT_ATTEMPTS so a permanently broken site cannot eat audit capacity.
+async function recoverStuckAudits(
+  supabase: ReturnType<typeof createClient>,
+  report: { errors: string[] },
+): Promise<number> {
+  const cutoff = new Date(Date.now() - STALE_AUDIT_MINUTES * 60_000).toISOString()
+  const { data: stuck, error } = await supabase
+    .from('site_leads')
+    .select('id, audit_details, updated_at')
+    .eq('status', 'auditing')
+    .lt('updated_at', cutoff)
+    .limit(200)
+  if (error) {
+    report.errors.push(`recoverStuckAudits: ${error.message}`)
+    return 0
+  }
+
+  let recovered = 0
+  for (const row of stuck ?? []) {
+    const details = ((row as any).audit_details ?? {}) as Record<string, unknown>
+    const attempts = Number(details.audit_attempts ?? 0) + 1
+    const giveUp = attempts >= MAX_AUDIT_ATTEMPTS
+    const { error: upErr } = await supabase
+      .from('site_leads')
+      .update({
+        status: giveUp ? 'failed' : 'pending_audit',
+        audit_details: { ...details, audit_attempts: attempts, last_audit_recovery_at: new Date().toISOString() },
+        ...(giveUp
+          ? { audit_reason: `Audit fastnade ${attempts} gånger utan att slutföras.`.slice(0, 500) }
+          : {}),
+      })
+      .eq('id', (row as any).id)
+      .eq('status', 'auditing')
+    if (upErr) {
+      report.errors.push(`recoverStuckAudits ${(row as any).id}: ${upErr.message}`)
+      continue
+    }
+    if (!giveUp) recovered++
+  }
+  return recovered
+}
+
+
 
 async function queueOldGoodEnoughForReaudit(
   supabase: ReturnType<typeof createClient>,
