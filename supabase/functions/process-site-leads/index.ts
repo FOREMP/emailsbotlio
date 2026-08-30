@@ -601,6 +601,54 @@ async function auditOne(
   }).eq('id', row.id)
 }
 
+// Leads get status 'auditing' before the Firecrawl/AI call. If that call times
+// out or the worker hits its resource limit the row is never advanced, and the
+// audit phase (which only looks for pending_audit) never touches it again.
+// Every tick we push those back into the queue, and give up after
+// MAX_AUDIT_ATTEMPTS so a permanently broken site cannot eat audit capacity.
+async function recoverStuckAudits(
+  supabase: ReturnType<typeof createClient>,
+  report: { errors: string[] },
+): Promise<number> {
+  const cutoff = new Date(Date.now() - STALE_AUDIT_MINUTES * 60_000).toISOString()
+  const { data: stuck, error } = await supabase
+    .from('site_leads')
+    .select('id, audit_details, updated_at')
+    .eq('status', 'auditing')
+    .lt('updated_at', cutoff)
+    .limit(200)
+  if (error) {
+    report.errors.push(`recoverStuckAudits: ${error.message}`)
+    return 0
+  }
+
+  let recovered = 0
+  for (const row of stuck ?? []) {
+    const details = ((row as any).audit_details ?? {}) as Record<string, unknown>
+    const attempts = Number(details.audit_attempts ?? 0) + 1
+    const giveUp = attempts >= MAX_AUDIT_ATTEMPTS
+    const { error: upErr } = await supabase
+      .from('site_leads')
+      .update({
+        status: giveUp ? 'failed' : 'pending_audit',
+        audit_details: { ...details, audit_attempts: attempts, last_audit_recovery_at: new Date().toISOString() },
+        ...(giveUp
+          ? { audit_reason: `Audit fastnade ${attempts} gånger utan att slutföras.`.slice(0, 500) }
+          : {}),
+      })
+      .eq('id', (row as any).id)
+      .eq('status', 'auditing')
+    if (upErr) {
+      report.errors.push(`recoverStuckAudits ${(row as any).id}: ${upErr.message}`)
+      continue
+    }
+    if (!giveUp) recovered++
+  }
+  return recovered
+}
+
+
+
 async function queueOldGoodEnoughForReaudit(
   supabase: ReturnType<typeof createClient>,
   options?: { includeTouched?: boolean },
