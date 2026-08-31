@@ -13,7 +13,12 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 export interface AuditResult {
   score: number
   reason: string
+  /** structural + cosmetic concatenated — kept for existing consumers. */
   weaknesses: string[]
+  /** Real deficiencies that make an owner want a new site. */
+  structural: string[]
+  /** Polish nits that alone never justify a rebuild. */
+  cosmetic: string[]
   /** true when we could not read the site at all (blocked / down / parked). */
   unreadable: boolean
   /** true when Firecrawl was blocked — score is a guess, not a verdict. */
@@ -23,6 +28,7 @@ export interface AuditResult {
   markdown: string
   screenshot: string | null
 }
+
 
 export interface ScrapeResult {
   markdown: string
