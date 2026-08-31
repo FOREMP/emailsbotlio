@@ -18,7 +18,13 @@ type TriageLead = {
   niche: string | null;
   audit_score: number | null;
   audit_reason: string | null;
-  audit_details: { weaknesses?: string[] } | null;
+  audit_details: {
+    weaknesses?: string[];
+    structural?: string[];
+    cosmetic?: string[];
+    borderline?: boolean;
+  } | null;
+
 };
 
 const PAGE = 25;
