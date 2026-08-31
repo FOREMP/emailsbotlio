@@ -213,18 +213,34 @@ export async function auditWebsite(
   const aiData = await aiResp.json().catch(() => ({}))
   if (!aiResp.ok) throw new Error(`AI audit ${aiResp.status}: ${JSON.stringify(aiData).slice(0, 200)}`)
 
-  let parsed: { score?: number; reason?: string; weaknesses?: string[] } = {}
+  let parsed: { score?: number; reason?: string; weaknesses?: string[]; structural?: string[]; cosmetic?: string[] } = {}
   try { parsed = JSON.parse(aiData.choices?.[0]?.message?.content ?? '{}') } catch (_) { /* keep default */ }
+
+  const clean = (list: unknown): string[] =>
+    Array.isArray(list) ? list.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).slice(0, 5) : []
+
+  const structural = clean(parsed.structural)
+  // Older/looser responses may still return a flat "weaknesses" list. Without a
+  // split we cannot tell nits from real deficiencies, so treat them as cosmetic
+  // — the safe side, since cosmetic alone never drags a lead into a build.
+  const cosmetic = clean(parsed.cosmetic).length || structural.length
+    ? clean(parsed.cosmetic)
+    : clean(parsed.weaknesses)
 
   let score = Math.max(1, Math.min(10, Math.round(Number(parsed.score) || 5)))
   // Without a screenshot the model has no design signal — never let it bottom
   // out on text alone.
   if (!scraped.screenshot) score = Math.max(4, score)
+  // Enforce the rule the prompt states: polish nits alone are not a reason to
+  // rebuild, so a site with no structural problems cannot score below 5.
+  if (structural.length === 0) score = Math.max(5, score)
 
   return {
     score,
     reason: (parsed.reason ?? '').slice(0, 500),
-    weaknesses: (parsed.weaknesses ?? []).slice(0, 5),
+    weaknesses: [...structural, ...cosmetic].slice(0, 6),
+    structural,
+    cosmetic,
     unreadable: false,
     uncertain: !scraped.screenshot,
     url,
@@ -233,3 +249,4 @@ export async function auditWebsite(
     screenshot: scraped.screenshot,
   }
 }
+
