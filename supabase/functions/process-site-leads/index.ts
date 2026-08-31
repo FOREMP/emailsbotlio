@@ -575,11 +575,12 @@ async function auditOne(
 
   const result = await auditWebsite(row.website, row.company_name, fcKey, openrouterKey)
   const score = Math.max(1, Math.min(10, Math.round(result.score)))
-  // Only auto-park when the audit had enough confidence. Uncertain / blocked /
-  // no-screenshot cases go to triage instead of being silently excluded.
-  const nextStatus = (!result.uncertain && !result.unreadable && score >= 7)
-    ? 'site_good_enough'
-    : 'needs_triage'
+  // The score now answers "will this owner want a new site?", not "is this
+  // pretty?". Only a clearly maintained site (7+) is auto-parked; everything
+  // from 1-6 goes to the human triage queue rather than being decided here.
+  const confident = !result.uncertain && !result.unreadable
+  const nextStatus = (confident && score >= 7) ? 'site_good_enough' : 'needs_triage'
+  const borderline = nextStatus === 'needs_triage' && confident && score >= 5
   const reason = result.uncertain
     ? `${result.reason} Osäker audit utan full visuell signal — kontrollera manuellt.`.slice(0, 500)
     : result.reason.slice(0, 500)
@@ -589,10 +590,13 @@ async function auditOne(
     audit_score: score,
     audit_reason: reason,
     audit_details: {
-      weaknesses: result.weaknesses.slice(0, 5),
+      weaknesses: result.weaknesses.slice(0, 6),
+      structural: result.structural.slice(0, 5),
+      cosmetic: result.cosmetic.slice(0, 5),
+      borderline,
       uncertain: result.uncertain,
       unreadable: result.unreadable,
-      audit_source: 'screenshot_first_v2',
+      audit_source: 'buy_intent_v3',
       screenshot_present: !!result.screenshot,
       title: result.title,
       audited_url: result.url,
@@ -600,6 +604,7 @@ async function auditOne(
     },
   }).eq('id', row.id)
 }
+
 
 // Leads get status 'auditing' before the Firecrawl/AI call. If that call times
 // out or the worker hits its resource limit the row is never advanced, and the
