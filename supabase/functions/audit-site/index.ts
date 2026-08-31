@@ -11,18 +11,26 @@ const corsHeaders = {
 
 
 interface AuditRequest {
-  generated_site_id: string
+  generated_site_id?: string
   url?: string
+  /** Calibration mode: re-score these site_leads WITHOUT writing anything. */
+  calibrate_lead_ids?: string[]
 }
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   try {
-    const { generated_site_id, url }: AuditRequest = await req.json()
+    const { generated_site_id, url, calibrate_lead_ids }: AuditRequest = await req.json()
+
+    if (Array.isArray(calibrate_lead_ids) && calibrate_lead_ids.length) {
+      return await calibrate(calibrate_lead_ids)
+    }
+
     if (!generated_site_id) {
       return json({ error: 'generated_site_id required' }, 400)
     }
+
 
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
