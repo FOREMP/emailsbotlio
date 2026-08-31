@@ -148,14 +148,17 @@ export async function auditWebsite(
   if (!scraped.screenshot && !hasText) {
     // Nothing readable at all. If Firecrawl was blocked we must NOT pretend we
     // saw a bad site — flag it as uncertain instead of scoring it a 1.
+    const noSiteIssues = scraped.blocked
+      ? ['Kunde inte läsas automatiskt — kontrollera manuellt.']
+      : ['Ingen läsbar hemsida idag.']
     return {
       score: scraped.blocked ? 5 : 1,
       reason: scraped.blocked
         ? 'Sajten kunde inte läsas automatiskt (blockerad eller timeout) — betyget är en platshållare, kräver manuell koll.'
         : 'Sajten returnerar tomt innehåll — parkerad domän eller trasig sida.',
-      weaknesses: scraped.blocked
-        ? ['Kunde inte läsas automatiskt — kontrollera manuellt.']
-        : ['Ingen läsbar hemsida idag.'],
+      weaknesses: noSiteIssues,
+      structural: noSiteIssues,
+      cosmetic: [],
       unreadable: true,
       uncertain: scraped.blocked,
       url,
@@ -164,6 +167,7 @@ export async function auditWebsite(
       screenshot: null,
     }
   }
+
 
   const userContent: unknown[] = [
     {
