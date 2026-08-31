@@ -104,9 +104,12 @@ Deno.serve(async (req) => {
       score: result.score,
       reason: result.reason,
       weaknesses: result.weaknesses,
+      structural: result.structural,
+      cosmetic: result.cosmetic,
       uncertain: result.uncertain,
       url: result.url,
     })
+
 
   } catch (err) {
     console.error('audit-site error', err)
