@@ -125,12 +125,67 @@ Deno.serve(async (req) => {
   }
 })
 
+// Re-score already-decided leads under the current rubric and report how the
+// new score compares to the human decision. Writes nothing — this exists purely
+// to check the bands before trusting them in the pipeline.
+async function calibrate(leadIds: string[]): Promise<Response> {
+  const fcKey = Deno.env.get('FIRECRAWL_API_KEY')
+  const openrouterKey = Deno.env.get('OPENROUTER_API_KEY')
+  if (!fcKey || !openrouterKey) return json({ error: 'missing FIRECRAWL_API_KEY or OPENROUTER_API_KEY' }, 500)
+
+  const supabase = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+  )
+  const { data: leads, error } = await supabase
+    .from('site_leads')
+    .select('id, company_name, website, status, audit_score')
+    .in('id', leadIds.slice(0, 40))
+  if (error) return json({ error: error.message }, 500)
+
+  const results: unknown[] = []
+  let agree = 0
+  let scored = 0
+
+  for (const lead of leads ?? []) {
+    if (!lead.website) continue
+    try {
+      const r = await auditWebsite(lead.website, lead.company_name ?? '', fcKey, openrouterKey)
+      // Human decision: parked means "they won't buy", anything built means "they will".
+      const humanWontBuy = lead.status === 'site_good_enough'
+      const modelWontBuy = r.score >= 7
+      const match = humanWontBuy === modelWontBuy
+      if (match) agree++
+      scored++
+      results.push({
+        company: lead.company_name,
+        website: lead.website,
+        human_status: lead.status,
+        old_score: lead.audit_score,
+        new_score: r.score,
+        structural: r.structural,
+        cosmetic: r.cosmetic,
+        agrees_with_human: match,
+      })
+    } catch (e) {
+      results.push({ company: lead.company_name, error: (e as Error).message })
+    }
+  }
+
+  return json({
+    scored,
+    agreement_pct: scored ? Math.round((agree / scored) * 100) : 0,
+    results,
+  })
+}
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   })
 }
+
 
 function normaliseUrl(raw: string): string {
   const s = raw.trim()
