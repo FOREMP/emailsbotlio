@@ -671,7 +671,7 @@ async function queueOldGoodEnoughForReaudit(
 
   const ids = (rows ?? [])
     .filter((row: any) => {
-      const isOldAudit = (row.audit_details?.audit_source ?? null) !== 'screenshot_first_v2'
+      const isOldAudit = (row.audit_details?.audit_source ?? null) !== 'buy_intent_v3'
       const isTouched = !!row.triaged_at
       if (!isOldAudit) return false
       if (!includeTouched && isTouched) return false
