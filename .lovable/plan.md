@@ -1,59 +1,96 @@
-# Lead runway — corrected numbers, and why the UI is wrong
+# Audit rework: score buying intent, not design polish
 
-My earlier numbers were wrong. They counted `site_good_enough` leads (which deliberately never get a site) and assumed `last_email_sent_at` tracked sends. It does not — that column is `null` on all 2,187 leads.
+## The problem, confirmed in the data
 
-## Two data bugs found
+The audit today asks one question: *how modern and well-designed is this site?* That is not the question that matters. What matters is: *is this owner likely to want a new site?*
 
-1. **`site_leads.last_email_sent_at` is never written.** Every row is null, in both languages. Nothing in the pipeline stamps it, so "have we contacted this lead?" is unanswerable from the leads table.
-2. **`generated_sites.contact_id` does not match `sent_emails.contact_id`.** Joining them gives 0 emailed leads across all 685 sites with a lead link, even though 328 leads provably received mail. The only reliable link today is matching `lower(site_leads.email)` to `lower(sent_emails.recipient_email)`.
+Reading the last 50 leads you approved, almost every rejection reason is cosmetic:
 
-## Real stock: leads with an email that have never been contacted
+- "Brist på tydliga call-to-action knappar i hero-sektionen"
+- "Svag visuell hierarki med enformig typografi"
+- "Rörig cookie-banner"
+- "Designen känns steril"
 
-Excludes `skipped_no_contact`, `failed`, and `site_good_enough`.
+Those are nits on sites that basically work. An owner with a working site does not buy a rebuild because the hero lacks a button.
 
-| Language | Niche | Never emailed |
+Meanwhile the genuinely strong buy signals sit in the same weakness lists, undifferentiated:
+
+- "Kvarlämnad platshållartext (refererar till 'Promac Roofing' istället för det egna bolaget)"
+- "'Projects Done: 0+'"
+- "Använder en gratis Gmail-adress istället för en professionell domänmejl"
+- "Daterad design med 2010-tals estetik", "ingen mobilanpassning"
+
+## Where your judgement actually sits
+
+328 leads carry a human decision. Comparing them to the audit score:
+
+| Score | You built + sent | You parked |
 |---|---|---|
-| sv | construction | 47 |
-| sv | other | 20 |
-| sv | hair_salon | 3 |
-| sv | auto_workshop | 1 |
-| **sv total** | | **71** |
-| en | construction | 40 |
-| en | other | 8 |
-| en | hair_salon | 1 |
-| **en total** | | **49** |
+| 1–3 | 61 | 9 |
+| 4 | 189 | 18 |
+| 5 | 12 | 35 |
+| 6 | 6 | 57 |
+| 7+ | 0 | 46 |
 
-Of these, roughly 47 sv and 31 en are still in `pending_audit` — they have no site built yet. The rest are approved with a demo URL, ready to send.
+Your real cutoff is between 4 and 5, not the code's 7. The pipeline currently parks at score ≥7 (`process-site-leads/index.ts:580`) and pushes everything from 1–6 towards a build. That is the mismatch: 97 leads scored 4 sit in `site_good_enough` while 189 leads scored 4 got built and sent. Same score, opposite outcome, decided by nothing consistent.
 
-For context, the full table is 2,187 rows but 1,291 are `skipped_no_contact` (no email), 259 `site_good_enough`, and 189 `failed`. Only ~120 rows are actually actionable.
+## The fix
 
-## Runway
+### 1. Rewrite the audit question
 
-At current sender capacity — Swedish ~24 new mails/day, English ~10/day:
+Replace the design-grading prompt in `supabase/functions/_shared/site-audit.ts` with a buy-intent prompt. Same screenshot-first input, different scale:
 
-- **Swedish: ~3 days of stock. Dry around 2 September.**
-- **English: ~5 days of stock. Dry around 4 September.**
+```text
+1-2  No real site: parked domain, broken, error page, or only a
+     Facebook/Bokadirekt profile. Strongest possible buyer.
+3-4  Real site but visibly obsolete or neglected: pre-2015 look,
+     no mobile layout, placeholder/wrong-company text, broken
+     images, free-mail contact address. Clear buyer.
+5-6  Ordinary functioning small-business site. Dated but not
+     embarrassing. Might buy, might not — human call.
+7-8  Modern, coherent, clearly maintained. Will not buy.
+9-10 Professionally designed and current. Will not buy.
+```
 
-Note: no mail has gone out since 28 August (146 sent that day, 0 since). So the clock is currently paused, but the moment sending resumes both languages empty within a week.
+### 2. Separate cosmetic from structural
 
-## Is the UI correct?
+The model returns two lists instead of one flat `weaknesses`:
 
-No. `SiteLeads.tsx` counts rows per status and shows nothing else, which is misleading in three ways:
+- `structural[]` — obsolete look, no mobile layout, placeholder or wrong-company text, broken links/images, no own domain, free-mail address, third-party profile only, no services or contact info at all.
+- `cosmetic[]` — missing CTA button, weak hierarchy, generic template, thin copy, no pricing, cookie banner, sterile feel.
 
-- Status totals lump `skipped_no_contact`, `site_good_enough`, and `failed` in with live leads, so the page looks like there are thousands of leads when ~120 are usable.
-- There is no "already contacted" signal anywhere, because the column backing it is never written.
-- There is no runway or days-of-stock indicator, so an empty pipeline looks identical to a full one until sending stalls.
+Hard rule in the prompt: **cosmetic issues alone never push a score below 5.** A site with only cosmetic issues is a working site, and its owner is not a buyer. Structural issues are what drive the score down.
 
-## What to add next (priority order)
+The cosmetic list is still stored — it stays useful as cold-email argument material even when the lead is parked.
 
-1. **Swedish construction — this week.** Only 47 uncontacted, the largest sv pocket and a proven niche. Scrape byggfirmor/snickare/målare in Göteborg, Malmö, Uppsala, Linköping, Örebro, Umeå. ~600 raw rows → ~200 usable (only ~35% of scrapes carry an email).
-2. **English construction — this week.** 40 uncontacted. UK/Ireland mid-size cities (Manchester, Leeds, Bristol, Dublin, Cork), builders/roofers/landscapers. ~500 raw → ~175 usable.
-3. **Swedish hair salons — next.** Effectively exhausted (3 left) after 159 contacted. Same secondary cities, frisör/hårstudio. ~500 raw → ~175 usable.
-4. **Skip English hair salons.** 36 of 37 already contacted and 67 previously failed generation — weak niche, do not refill.
+### 3. Re-cut the thresholds toward your approval queue
 
-## Fixes to make alongside
+In `auditOne` (`process-site-leads/index.ts:580`):
 
-1. Stamp `site_leads.last_email_sent_at` when `send-cold-email` sends to a lead, and backfill it once by matching lead email to `sent_emails.recipient_email`.
-2. Repair the lead↔contact link so `generated_sites.contact_id` matches the contact actually enrolled, making per-lead send history queryable without email matching.
-3. Add a lead-inventory panel to `SiteLeads.tsx`: uncontacted leads per language and niche, split into "site ready" vs "needs build", plus estimated days of runway at current sender capacity.
-4. Filter rows without an email at import time so `skipped_no_contact` stops inflating every count.
+| Score | Route | Meaning |
+|---|---|---|
+| 1–4 | `needs_triage` | Strong buyer — you confirm, then build |
+| 5–6 | `needs_triage`, flagged `borderline` | Your call, defaults to visible in the queue |
+| 7+ | `site_good_enough` | Auto-parked, no outreach |
+
+Nothing between 1 and 6 gets auto-parked any more, which is what you asked for: err toward your approval rather than silently discarding. Unreadable and uncertain audits also route to triage instead of being scored blind.
+
+### 4. Show the reasoning in the triage queue
+
+`TriageQueue.tsx` currently shows the score and a reason string. Add:
+
+- Structural issues in red, cosmetic in grey — so a card with an empty red list is instantly recognisable as a probable park.
+- A `borderline` badge on 5–6.
+- Sort by score ascending so the strongest buyers land at the top.
+
+### 5. Validate before it goes live
+
+Re-run the new audit against the 328 leads that already carry your decision and compare. Target: the new score agrees with your build/park choice on 85%+ of them. If it does not, adjust the band boundaries before switching the pipeline over. This costs one Firecrawl + one vision call per lead and runs as a one-off script, not in the pipeline.
+
+## Technical summary
+
+- `supabase/functions/_shared/site-audit.ts` — new system prompt, new scale, `AuditResult` gains `structural: string[]` and `cosmetic: string[]` (keep `weaknesses` as their concatenation so nothing downstream breaks).
+- `supabase/functions/process-site-leads/index.ts` — new routing bands in `auditOne`; store `structural`/`cosmetic`/`borderline` in `audit_details`; route uncertain and unreadable to `needs_triage`.
+- `src/components/site-leads/TriageQueue.tsx` — split issue display, borderline badge, score-ascending sort.
+- No schema change: `audit_details` is already `jsonb`.
+- The 97 auto-parked leads scored 4 are re-queued for re-audit under the new rules — that is a meaningful chunk of stock recovered given how thin the pipeline is right now.
