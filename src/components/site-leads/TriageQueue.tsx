@@ -18,7 +18,13 @@ type TriageLead = {
   niche: string | null;
   audit_score: number | null;
   audit_reason: string | null;
-  audit_details: { weaknesses?: string[] } | null;
+  audit_details: {
+    weaknesses?: string[];
+    structural?: string[];
+    cosmetic?: string[];
+    borderline?: boolean;
+  } | null;
+
 };
 
 const PAGE = 25;
@@ -95,8 +101,9 @@ export default function TriageQueue({ languageFilter, nicheFilter, onChanged, re
         <h2 className="text-sm font-semibold">Att besluta</h2>
         <Badge className="bg-amber-500">{total}</Badge>
         <p className="text-xs text-muted-foreground ml-2">
-          Auditen tycker de behöver ny hemsida. Välj om vi ska bygga och skicka direkt, bygga och låta dig granska först, eller hoppa över.
+          Sorterade efter köpvilja — lägst betyg först. Rött = riktiga brister som gör ägaren missnöjd. Grått = putsdetaljer som sällan säljer in en ny sajt.
         </p>
+
         <Button size="sm" variant="ghost" className="ml-auto" onClick={load} disabled={loading}>
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Uppdatera"}
         </Button>
@@ -110,10 +117,16 @@ export default function TriageQueue({ languageFilter, nicheFilter, onChanged, re
         {rows.map((l) => (
           <div key={l.id} className="p-3 flex flex-wrap items-start gap-3">
             <div className="min-w-[220px] flex-1">
-              <div className="font-medium flex items-center gap-2">
+              <div className="font-medium flex items-center gap-2 flex-wrap">
                 {l.company_name}
                 <Badge variant="outline">{(l.language ?? "sv").toUpperCase()}</Badge>
-                <Badge className="bg-slate-500">Audit {l.audit_score ?? "—"}</Badge>
+                <Badge className="bg-slate-500">Köpvilja {l.audit_score ?? "—"}</Badge>
+                {l.audit_details?.borderline && (
+                  <Badge className="bg-amber-500">Gränsfall</Badge>
+                )}
+                {!l.audit_details?.structural?.length && (
+                  <Badge variant="outline" className="text-muted-foreground">Inga riktiga brister</Badge>
+                )}
               </div>
               <div className="text-xs text-muted-foreground mt-1">
                 {l.category ?? l.niche ?? "—"} · {l.email ?? "ingen email"}
@@ -125,11 +138,23 @@ export default function TriageQueue({ languageFilter, nicheFilter, onChanged, re
                 )}
               </div>
               {l.audit_reason && <p className="text-xs mt-1">{l.audit_reason}</p>}
-              {!!l.audit_details?.weaknesses?.length && (
+              {!!l.audit_details?.structural?.length && (
+                <ul className="text-xs text-destructive list-disc pl-4 mt-1">
+                  {l.audit_details.structural.slice(0, 3).map((w, i) => <li key={i}>{w}</li>)}
+                </ul>
+              )}
+              {!!l.audit_details?.cosmetic?.length && (
+                <ul className="text-xs text-muted-foreground list-disc pl-4 mt-1">
+                  {l.audit_details.cosmetic.slice(0, 3).map((w, i) => <li key={i}>{w}</li>)}
+                </ul>
+              )}
+              {!l.audit_details?.structural?.length && !l.audit_details?.cosmetic?.length
+                && !!l.audit_details?.weaknesses?.length && (
                 <ul className="text-xs text-muted-foreground list-disc pl-4 mt-1">
                   {l.audit_details.weaknesses.slice(0, 3).map((w, i) => <li key={i}>{w}</li>)}
                 </ul>
               )}
+
             </div>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="outline" className="gap-1" disabled={busyId === l.id}

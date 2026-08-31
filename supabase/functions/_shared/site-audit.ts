@@ -13,7 +13,12 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 export interface AuditResult {
   score: number
   reason: string
+  /** structural + cosmetic concatenated — kept for existing consumers. */
   weaknesses: string[]
+  /** Real deficiencies that make an owner want a new site. */
+  structural: string[]
+  /** Polish nits that alone never justify a rebuild. */
+  cosmetic: string[]
   /** true when we could not read the site at all (blocked / down / parked). */
   unreadable: boolean
   /** true when Firecrawl was blocked — score is a guess, not a verdict. */
@@ -23,6 +28,7 @@ export interface AuditResult {
   markdown: string
   screenshot: string | null
 }
+
 
 export interface ScrapeResult {
   markdown: string
@@ -86,36 +92,47 @@ export async function scrapeForAudit(url: string, fcKey: string): Promise<Scrape
 }
 
 const SYSTEM_PROMPT = [
-  'Du auditerar små företags hemsidor och sätter betyg 1-10 på hur moderna, förtroendeingivande och konverterande de ser ut.',
-  'Var STRIKT, KONSEKVENT och DETERMINISTISK — samma input MÅSTE ge samma svar.',
+  'Du bedömer små företags hemsidor för en säljpipeline som säljer NYA hemsidor.',
+  'Din enda fråga är: HUR TROLIGT ÄR DET ATT ÄGAREN VILL KÖPA EN NY HEMSIDA?',
+  'Du sätter INTE designbetyg. En snygg sajt och en ful sajt kan båda vara "vill inte köpa" —',
+  'det avgörande är om sajten har RIKTIGA BRISTER som gör ägaren missnöjd.',
+  'Var KONSEKVENT och DETERMINISTISK — samma input MÅSTE ge samma svar.',
   '',
-  'VIKTIGAST: du får oftast en SKÄRMBILD av startsidan. Döm i första hand på hur sajten SER UT',
-  '(layout, typografi, bildkvalitet, whitespace, färgharmoni, hierarki, tydliga CTA:er, känsla av årtal).',
-  'Texten är bara ett stödjande signal.',
+  'VIKTIGAST: du får oftast en SKÄRMBILD av startsidan. Döm i första hand på den. Texten är stödjande signal.',
   '',
-  'Betygsskala:',
-  '  1  = trasig, tom sida, parkerad domän eller felmeddelande',
-  '  2  = extremt föråldrad (pre-2010-känsla): tabelllayout, splash-sida, clipart, ingen mobilanpassning',
-  '  3  = tydligt daterad (2010-2014-mall), rörig navigering, låg bildkvalitet',
-  '  4  = daterad men fungerande; grundinfo finns men ful typografi/layout',
-  '  5  = genomsnittlig småföretagssajt: fungerar, ser okej ut, men generisk mall och svag hero',
-  '  6  = hyfsat modern mall, tydliga tjänster och kontaktvägar, acceptabel design',
-  '  7  = klart modern och responsiv, bra hierarki, snygga bilder, tydliga CTA:er',
-  '  8  = polerad och on-brand, stark copy, trust signals (omdömen, case, priser)',
-  '  9-10 = förstklassig, i nivå med bra byråarbete — inget väsentligt att förbättra',
+  'Köpviljeskala 1-10 (lågt = stark köpare, högt = kommer inte köpa):',
+  '  1-2  = ingen riktig sajt: parkerad domän, trasig sida, felmeddelande, eller bara en',
+  '         tredjepartsprofil (Facebook, Bokadirekt, bokningsportal). Starkast möjliga köpare.',
+  '  3-4  = riktig sajt men synligt föråldrad eller vanskött: pre-2015-känsla, ingen',
+  '         mobilanpassning, platshållartext eller fel företagsnamn, trasiga bilder,',
+  '         gratis mailadress (gmail/hotmail) som kontakt. Tydlig köpare.',
+  '  5-6  = vanlig fungerande småföretagssajt. Daterad men inte pinsam. Kan köpa, kan låta bli — mänskligt beslut.',
+  '  7-8  = modern, sammanhållen och tydligt underhållen. Kommer inte köpa.',
+  '  9-10 = professionellt designad och helt aktuell. Kommer inte köpa.',
+  '',
+  'Dela svagheterna i två listor:',
+  '- "structural" = riktiga brister: föråldrat utseende, ingen mobilanpassning, platshållartext',
+  '  eller fel företagsnamn, trasiga länkar/bilder, ingen egen domän, gratis mailadress,',
+  '  bara tredjepartsprofil, saknar helt tjänster eller kontaktuppgifter.',
+  '- "cosmetic" = putsdetaljer: saknad CTA-knapp, svag hierarki, generisk mall, tunn copy,',
+  '  saknade priser, cookie-banner, steril känsla, tråkig typografi.',
+  '',
+  'ABSOLUT REGEL: enbart kosmetiska brister får ALDRIG ge betyg under 5.',
+  'En sajt som fungerar men saknar CTA-knapp eller känns generisk är en fungerande sajt,',
+  'och den ägaren är inte en köpare. Bara "structural"-brister drar ner betyget under 5.',
   '',
   'Regler som ofta missförstås — följ dem exakt:',
-  '- LITE TEXT ÄR INTE ETT FEL. Moderna sajter har ofta kort copy. Sänk ALDRIG betyget bara för att markdown-utdraget är kort.',
+  '- LITE TEXT ÄR INTE ETT FEL. Moderna sajter har ofta kort copy. Sänk ALDRIG betyget bara för att textutdraget är kort.',
   '- Att sajten är byggd i Wix / Squarespace / Wordpress / One.com / Webflow / Shopify är INTE i sig negativt. Döm på resultatet, inte verktyget.',
-  '- Om skärmbilden saknas: döm försiktigt på text och metadata och lägg dig runt 5 om inget tydligt talar emot. Gissa inte lågt.',
-  '- Sätt bara 1-2 om du faktiskt SER att sidan är trasig, tom eller pre-2010.',
-  '- En tredjepartsprofil (Bokadirekt, Facebook, en bokningsportal) i stället för egen sajt: max 4.',
+  '- Om skärmbilden saknas: döm försiktigt och lägg dig runt 5 om inget tydligt talar emot. Gissa inte lågt.',
+  '- Sätt bara 1-2 om du faktiskt SER att sidan är trasig, tom eller bara en tredjepartsprofil.',
   '- Bedöm ENDAST det du faktiskt ser eller läser. Spekulera inte.',
   '',
   'Svara ENDAST med strikt JSON:',
-  '{"score": <heltal 1-10>, "reason": "<max 200 tecken, konkret evidens på svenska>", "weaknesses": ["<konkret svaghet 1>", "<konkret svaghet 2>", "<konkret svaghet 3>"]}',
-  'Svagheterna ska vara på svenska, konkreta (t.ex. "hero utan tydlig CTA", "lågupplösta bilder", "ingen mobilmeny", "saknar priser") och användbara som argument i ett kallmail.',
+  '{"score": <heltal 1-10>, "reason": "<max 200 tecken, konkret evidens på svenska>", "structural": ["<riktig brist>"], "cosmetic": ["<putsdetalj>"]}',
+  'Båda listorna får vara tomma. Punkterna ska vara på svenska, konkreta och användbara som argument i ett kallmail.',
 ].join('\n')
+
 
 /** Score a scraped site. Returns a fair, screenshot-first verdict. */
 export async function auditWebsite(
@@ -131,14 +148,17 @@ export async function auditWebsite(
   if (!scraped.screenshot && !hasText) {
     // Nothing readable at all. If Firecrawl was blocked we must NOT pretend we
     // saw a bad site — flag it as uncertain instead of scoring it a 1.
+    const noSiteIssues = scraped.blocked
+      ? ['Kunde inte läsas automatiskt — kontrollera manuellt.']
+      : ['Ingen läsbar hemsida idag.']
     return {
       score: scraped.blocked ? 5 : 1,
       reason: scraped.blocked
         ? 'Sajten kunde inte läsas automatiskt (blockerad eller timeout) — betyget är en platshållare, kräver manuell koll.'
         : 'Sajten returnerar tomt innehåll — parkerad domän eller trasig sida.',
-      weaknesses: scraped.blocked
-        ? ['Kunde inte läsas automatiskt — kontrollera manuellt.']
-        : ['Ingen läsbar hemsida idag.'],
+      weaknesses: noSiteIssues,
+      structural: noSiteIssues,
+      cosmetic: [],
       unreadable: true,
       uncertain: scraped.blocked,
       url,
@@ -147,6 +167,7 @@ export async function auditWebsite(
       screenshot: null,
     }
   }
+
 
   const userContent: unknown[] = [
     {
@@ -192,18 +213,34 @@ export async function auditWebsite(
   const aiData = await aiResp.json().catch(() => ({}))
   if (!aiResp.ok) throw new Error(`AI audit ${aiResp.status}: ${JSON.stringify(aiData).slice(0, 200)}`)
 
-  let parsed: { score?: number; reason?: string; weaknesses?: string[] } = {}
+  let parsed: { score?: number; reason?: string; weaknesses?: string[]; structural?: string[]; cosmetic?: string[] } = {}
   try { parsed = JSON.parse(aiData.choices?.[0]?.message?.content ?? '{}') } catch (_) { /* keep default */ }
+
+  const clean = (list: unknown): string[] =>
+    Array.isArray(list) ? list.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).slice(0, 5) : []
+
+  const structural = clean(parsed.structural)
+  // Older/looser responses may still return a flat "weaknesses" list. Without a
+  // split we cannot tell nits from real deficiencies, so treat them as cosmetic
+  // — the safe side, since cosmetic alone never drags a lead into a build.
+  const cosmetic = clean(parsed.cosmetic).length || structural.length
+    ? clean(parsed.cosmetic)
+    : clean(parsed.weaknesses)
 
   let score = Math.max(1, Math.min(10, Math.round(Number(parsed.score) || 5)))
   // Without a screenshot the model has no design signal — never let it bottom
   // out on text alone.
   if (!scraped.screenshot) score = Math.max(4, score)
+  // Enforce the rule the prompt states: polish nits alone are not a reason to
+  // rebuild, so a site with no structural problems cannot score below 5.
+  if (structural.length === 0) score = Math.max(5, score)
 
   return {
     score,
     reason: (parsed.reason ?? '').slice(0, 500),
-    weaknesses: (parsed.weaknesses ?? []).slice(0, 5),
+    weaknesses: [...structural, ...cosmetic].slice(0, 6),
+    structural,
+    cosmetic,
     unreadable: false,
     uncertain: !scraped.screenshot,
     url,
@@ -212,3 +249,4 @@ export async function auditWebsite(
     screenshot: scraped.screenshot,
   }
 }
+
