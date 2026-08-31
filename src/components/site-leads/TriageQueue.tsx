@@ -101,8 +101,9 @@ export default function TriageQueue({ languageFilter, nicheFilter, onChanged, re
         <h2 className="text-sm font-semibold">Att besluta</h2>
         <Badge className="bg-amber-500">{total}</Badge>
         <p className="text-xs text-muted-foreground ml-2">
-          Auditen tycker de behöver ny hemsida. Välj om vi ska bygga och skicka direkt, bygga och låta dig granska först, eller hoppa över.
+          Sorterade efter köpvilja — lägst betyg först. Rött = riktiga brister som gör ägaren missnöjd. Grått = putsdetaljer som sällan säljer in en ny sajt.
         </p>
+
         <Button size="sm" variant="ghost" className="ml-auto" onClick={load} disabled={loading}>
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Uppdatera"}
         </Button>
