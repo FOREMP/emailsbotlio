@@ -38,6 +38,18 @@ export interface ScrapeResult {
   blocked: boolean
 }
 
+/**
+ * Raised when Firecrawl itself failed (out of credits, auth, rate limit) rather
+ * than the lead's site being unreadable. Callers must NOT score a lead from
+ * this — the lead has to stay in the queue until scraping works again.
+ */
+export class ScrapeProviderError extends Error {
+  constructor(public status: number, message: string) {
+    super(message)
+    this.name = 'ScrapeProviderError'
+  }
+}
+
 export function normaliseUrl(raw: string): string {
   const s = (raw ?? '').trim()
   if (!s) return ''
@@ -50,46 +62,90 @@ export async function scrapeForAudit(url: string, fcKey: string): Promise<Scrape
   const empty: ScrapeResult = { markdown: '', title: '', description: '', screenshot: null, blocked: true }
   if (!url) return empty
 
+
+
   const attempt = async (withScreenshot: boolean) => {
     const formats: unknown[] = ['markdown']
     if (withScreenshot) formats.push({ type: 'screenshot', fullPage: false, viewport: { width: 1280, height: 900 } })
-    const resp = await fetch(`${FIRECRAWL_V2}/scrape`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url,
-        formats,
-        // Full page, not just "main content" — nav, hero and footer are exactly
-        // the parts that reveal whether a site looks modern.
-        onlyMainContent: false,
-        waitFor: 2500,
-        timeout: 45000,
-      }),
-    })
-    const data = await resp.json().catch(() => ({}))
-    if (!resp.ok) return null
-    const d = data.data ?? data
-    return {
-      markdown: (d.markdown ?? '') as string,
-      title: (d.metadata?.title ?? '') as string,
-      description: (d.metadata?.description ?? '') as string,
-      screenshot: (d.screenshot ?? d.screenshotUrl ?? null) as string | null,
-      blocked: false,
+
+    // Firecrawl enforces a per-minute request cap. A 429 says nothing about the
+    // lead's website, so retry it instead of scoring the lead as unreadable.
+    for (let tryNo = 0; tryNo < 3; tryNo++) {
+      const resp = await fetch(`${FIRECRAWL_V2}/scrape`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url,
+          formats,
+          // Full page, not just "main content" — nav, hero and footer are exactly
+          // the parts that reveal whether a site looks modern.
+          onlyMainContent: false,
+          waitFor: 2500,
+          timeout: 45000,
+        }),
+      })
+      const data = await resp.json().catch(() => ({}))
+
+      if (resp.status === 429 && tryNo < 2) {
+        const retryHeader = Number(resp.headers.get('retry-after'))
+        const fromBody = /retry after (\d+)s/i.exec(JSON.stringify(data ?? {}))?.[1]
+        const waitSec = Math.min(
+          40,
+          Number.isFinite(retryHeader) && retryHeader > 0 ? retryHeader : Number(fromBody) || 15,
+        )
+        console.warn(`firecrawl 429 for ${url} — waiting ${waitSec}s (try ${tryNo + 1}/3)`)
+        await new Promise((r) => setTimeout(r, waitSec * 1000))
+        continue
+      }
+
+      if (!resp.ok) {
+        // Silent nulls here made a Firecrawl outage look like "every site is
+        // blocked", so always surface the provider's own status and message.
+        const detail = JSON.stringify(data).slice(0, 400)
+        console.error(`firecrawl scrape failed [${resp.status}] ${url}: ${detail}`)
+        // 402 = out of credits, 401/403 = bad key, 429 = still limited after
+        // retries. None of these are facts about the lead's website.
+        if ([401, 402, 403, 429].includes(resp.status)) {
+          throw new ScrapeProviderError(resp.status, `Firecrawl ${resp.status}: ${detail}`)
+        }
+        return null
+      }
+
+      const d = data.data ?? data
+      return {
+        markdown: (d.markdown ?? '') as string,
+        title: (d.metadata?.title ?? '') as string,
+        description: (d.metadata?.description ?? '') as string,
+        screenshot: (d.screenshot ?? d.screenshotUrl ?? null) as string | null,
+        blocked: false,
+      }
     }
+    return null
   }
+
+  // A provider-level failure must propagate: the caller has to leave the lead
+  // untouched rather than record a verdict we never actually made.
+  let providerError: ScrapeProviderError | null = null
 
   try {
     const withShot = await attempt(true)
     if (withShot && (withShot.markdown || withShot.screenshot)) return withShot
-  } catch (_) { /* fall through */ }
+  } catch (e) {
+    if (e instanceof ScrapeProviderError) providerError = e
+  }
 
   try {
     const textOnly = await attempt(false)
     if (textOnly) return textOnly
-  } catch (_) { /* fall through */ }
+  } catch (e) {
+    if (e instanceof ScrapeProviderError) providerError = e
+  }
 
+  if (providerError) throw providerError
   return empty
 }
+
+
 
 const SYSTEM_PROMPT = [
   'Du bedömer små företags hemsidor för en säljpipeline som säljer NYA hemsidor.',

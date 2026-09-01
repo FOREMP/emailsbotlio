@@ -15,7 +15,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { classifyNiche, type NicheKey } from '../_shared/niche.ts'
 import { approveLeadForOutreach } from '../_shared/approve-lead.ts'
-import { auditWebsite } from '../_shared/site-audit.ts'
+import { auditWebsite, ScrapeProviderError } from '../_shared/site-audit.ts'
 import {
   blockTemplateFamilyCatalog,
   BLOCK_TEMPLATE_FAMILIES,
@@ -190,8 +190,15 @@ Deno.serve(async (req) => {
         report.audited++
       } catch (e) {
         report.errors.push(`audit ${row.id}: ${(e as Error).message}`)
+        if (e instanceof ScrapeProviderError) {
+          // The scraper is down for everyone (no credits / bad key). Retrying
+          // the rest of the batch just spams errors — stop auditing this tick.
+          report.errors.push('audit halted: scrape provider unavailable — check Firecrawl credits/key')
+          break
+        }
       }
     }
+
 
     // ---------------- 3. GENERATE -----------------
     // Build budgets are language-specific and run side by side:
@@ -573,7 +580,19 @@ async function auditOne(
 
   await supabase.from('site_leads').update({ status: 'auditing' }).eq('id', row.id)
 
-  const result = await auditWebsite(row.website, row.company_name, fcKey, openrouterKey)
+  let result
+  try {
+    result = await auditWebsite(row.website, row.company_name, fcKey, openrouterKey)
+  } catch (e) {
+    if (e instanceof ScrapeProviderError) {
+      // Firecrawl is out of credits / rate limited / misconfigured. That is our
+      // problem, not the lead's — put it straight back in the queue so it does
+      // not burn recovery attempts and end up marked failed.
+      await supabase.from('site_leads').update({ status: 'pending_audit' }).eq('id', row.id)
+    }
+    throw e
+  }
+
   const score = Math.max(1, Math.min(10, Math.round(result.score)))
   // The score now answers "will this owner want a new site?", not "is this
   // pretty?". Only a clearly maintained site (7+) is auto-parked; everything
