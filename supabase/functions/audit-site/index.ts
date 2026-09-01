@@ -147,10 +147,15 @@ async function calibrate(leadIds: string[]): Promise<Response> {
   let agree = 0
   let scored = 0
 
+  let first = true
   for (const lead of leads ?? []) {
     if (!lead.website) continue
+    // Stay under Firecrawl's per-minute cap: a burst here starves the live pipeline.
+    if (!first) await new Promise((r) => setTimeout(r, 2000))
+    first = false
     try {
       const r = await auditWebsite(lead.website, lead.company_name ?? '', fcKey, openrouterKey)
+
       // Human decision: parked means "they won't buy", anything built means "they will".
       const humanWontBuy = lead.status === 'site_good_enough'
       const modelWontBuy = r.score >= 7
