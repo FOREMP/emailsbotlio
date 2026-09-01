@@ -573,7 +573,19 @@ async function auditOne(
 
   await supabase.from('site_leads').update({ status: 'auditing' }).eq('id', row.id)
 
-  const result = await auditWebsite(row.website, row.company_name, fcKey, openrouterKey)
+  let result
+  try {
+    result = await auditWebsite(row.website, row.company_name, fcKey, openrouterKey)
+  } catch (e) {
+    if (e instanceof ScrapeProviderError) {
+      // Firecrawl is out of credits / rate limited / misconfigured. That is our
+      // problem, not the lead's — put it straight back in the queue so it does
+      // not burn recovery attempts and end up marked failed.
+      await supabase.from('site_leads').update({ status: 'pending_audit' }).eq('id', row.id)
+    }
+    throw e
+  }
+
   const score = Math.max(1, Math.min(10, Math.round(result.score)))
   // The score now answers "will this owner want a new site?", not "is this
   // pretty?". Only a clearly maintained site (7+) is auto-parked; everything
