@@ -101,7 +101,13 @@ export async function scrapeForAudit(url: string, fcKey: string): Promise<Scrape
       if (!resp.ok) {
         // Silent nulls here made a Firecrawl outage look like "every site is
         // blocked", so always surface the provider's own status and message.
-        console.error(`firecrawl scrape failed [${resp.status}] ${url}: ${JSON.stringify(data).slice(0, 400)}`)
+        const detail = JSON.stringify(data).slice(0, 400)
+        console.error(`firecrawl scrape failed [${resp.status}] ${url}: ${detail}`)
+        // 402 = out of credits, 401/403 = bad key, 429 = still limited after
+        // retries. None of these are facts about the lead's website.
+        if ([401, 402, 403, 429].includes(resp.status)) {
+          throw new ScrapeProviderError(resp.status, `Firecrawl ${resp.status}: ${detail}`)
+        }
         return null
       }
 
@@ -117,18 +123,28 @@ export async function scrapeForAudit(url: string, fcKey: string): Promise<Scrape
     return null
   }
 
+  // A provider-level failure must propagate: the caller has to leave the lead
+  // untouched rather than record a verdict we never actually made.
+  let providerError: ScrapeProviderError | null = null
+
   try {
     const withShot = await attempt(true)
     if (withShot && (withShot.markdown || withShot.screenshot)) return withShot
-  } catch (_) { /* fall through */ }
+  } catch (e) {
+    if (e instanceof ScrapeProviderError) providerError = e
+  }
 
   try {
     const textOnly = await attempt(false)
     if (textOnly) return textOnly
-  } catch (_) { /* fall through */ }
+  } catch (e) {
+    if (e instanceof ScrapeProviderError) providerError = e
+  }
 
+  if (providerError) throw providerError
   return empty
 }
+
 
 
 const SYSTEM_PROMPT = [
