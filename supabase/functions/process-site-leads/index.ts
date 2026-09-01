@@ -15,7 +15,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { classifyNiche, type NicheKey } from '../_shared/niche.ts'
 import { approveLeadForOutreach } from '../_shared/approve-lead.ts'
-import { auditWebsite } from '../_shared/site-audit.ts'
+import { auditWebsite, ScrapeProviderError } from '../_shared/site-audit.ts'
 import {
   blockTemplateFamilyCatalog,
   BLOCK_TEMPLATE_FAMILIES,
