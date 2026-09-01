@@ -6,6 +6,12 @@
 // 5. Capture a screenshot of the home page (design inspo for the generator).
 // 6. Persist full branding palette + fonts.
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import {
+  activePipelineBreakers,
+  pipelineErrorCode,
+  pipelinePausedPayload,
+  recordPipelineFailure,
+} from '../_shared/site-pipeline-health.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -45,9 +51,12 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     )
 
+    const breakers = await activePipelineBreakers(supabase)
+    if (breakers.length) return json(pipelinePausedPayload(breakers), 423)
+
     const { data: site, error: siteErr } = await supabase
       .from('generated_sites')
-      .select('id, source_url, contact_id')
+      .select('id, source_url, contact_id, site_lead_id')
       .eq('id', generated_site_id)
       .single()
     if (siteErr || !site) return json({ error: 'site not found' }, 404)
@@ -56,17 +65,24 @@ Deno.serve(async (req) => {
     await supabase.from('generated_sites').update({ status: 'scraping', error_message: null }).eq('id', generated_site_id)
 
     const fcKey = Deno.env.get('FIRECRAWL_API_KEY')
-    if (!fcKey) return json({ error: 'FIRECRAWL_API_KEY missing' }, 500)
+    if (!fcKey) {
+      await recordPipelineFailure(supabase, {
+        provider: 'firecrawl', sourceFunction: 'scrape-lead-data',
+        message: 'FIRECRAWL_API_KEY missing', generatedSiteId: generated_site_id,
+        siteLeadId: site.site_lead_id ?? null,
+      })
+      return json({ error: 'FIRECRAWL_API_KEY missing', provider: 'firecrawl', error_code: 'invalid_credentials' }, 503)
+    }
 
     // ---- 1. Find a working root URL by scraping variants (with screenshot) ----
     const candidates = buildUrlCandidates(site.source_url)
-    const attempts: { url: string; status: number; title?: string }[] = []
+    const attempts: { url: string; status: number; apiStatus: number; title?: string; error?: string }[] = []
     let rootScrape: any = null
     let usedUrl = site.source_url
 
     for (const candidate of candidates) {
-      const { data, status, title } = await scrapeOne(candidate, fcKey, true)
-      attempts.push({ url: candidate, status, title: (title || '').slice(0, 60) })
+      const { data, status, apiStatus, title, error } = await scrapeOne(candidate, fcKey, true)
+      attempts.push({ url: candidate, status, apiStatus, title: (title || '').slice(0, 60), error })
       const badTitle = /(400|401|403|404|500|502|503|504)\s*(bad request|unauthorized|forbidden|not found|error|gateway|unavailable)|access denied|cloudflare|attention required/i
       const looksBad = (status && status >= 400) || badTitle.test(title || '')
       if (data && !looksBad && (data.markdown || '').trim().length > 300) {
@@ -77,6 +93,22 @@ Deno.serve(async (req) => {
     }
 
     if (!rootScrape) {
+      const providerFailure = attempts.find((attempt) =>
+        [401, 402, 429].includes(attempt.apiStatus) || attempt.apiStatus >= 500
+      )
+      if (providerFailure) {
+        const message = providerFailure.error || `Firecrawl API failed with HTTP ${providerFailure.apiStatus}`
+        const errorCode = pipelineErrorCode('firecrawl', providerFailure.apiStatus, message)
+        const incident = await recordPipelineFailure(supabase, {
+          provider: 'firecrawl', sourceFunction: 'scrape-lead-data', message,
+          httpStatus: providerFailure.apiStatus, siteLeadId: site.site_lead_id ?? null,
+          generatedSiteId: generated_site_id,
+        })
+        await supabase.from('generated_sites').update({
+          status: 'failed', error_message: `Firecrawl ${errorCode}: ${message}`,
+        }).eq('id', generated_site_id)
+        return json({ error: message, provider: 'firecrawl', error_code: errorCode, pipeline_paused: incident.isPaused }, providerFailure.apiStatus === 402 ? 402 : 503)
+      }
       await supabase.from('generated_sites').update({
         status: 'failed',
         error_message: `Root page failed on all variants: ${attempts.map(a => `${a.url}→${a.status}`).join(', ')}`,
@@ -163,7 +195,7 @@ Deno.serve(async (req) => {
   }
 })
 
-async function scrapeOne(url: string, fcKey: string, includeScreenshot: boolean): Promise<{ data: any | null; status: number; title: string }> {
+async function scrapeOne(url: string, fcKey: string, includeScreenshot: boolean): Promise<{ data: any | null; status: number; apiStatus: number; title: string; error: string }> {
   try {
     const formats: any[] = ['markdown', 'links', 'branding', 'summary']
     if (includeScreenshot) formats.push({ type: 'screenshot', fullPage: false })
@@ -176,10 +208,11 @@ async function scrapeOne(url: string, fcKey: string, includeScreenshot: boolean)
     const payload = j?.data ?? j
     const status = payload?.metadata?.statusCode ?? payload?.metadata?.status_code ?? r.status
     const title = payload?.metadata?.title ?? ''
-    if (!r.ok) return { data: null, status, title }
-    return { data: payload, status, title }
-  } catch (_) {
-    return { data: null, status: 0, title: '' }
+    const error = String(j?.error ?? j?.message ?? '')
+    if (!r.ok) return { data: null, status, apiStatus: r.status, title, error }
+    return { data: payload, status, apiStatus: r.status, title, error }
+  } catch (error) {
+    return { data: null, status: 0, apiStatus: 0, title: '', error: error instanceof Error ? error.message : String(error) }
   }
 }
 

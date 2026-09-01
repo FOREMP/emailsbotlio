@@ -13,80 +13,50 @@
 // The whole file uses the service role; cron sends the anon key just so
 // pg_net can hit the function endpoint (verify_jwt is off).
 import { createClient } from 'npm:@supabase/supabase-js@2'
-import { classifyNiche, type NicheKey } from '../_shared/niche.ts'
-import { approveLeadForOutreach } from '../_shared/approve-lead.ts'
-import { auditWebsite, ScrapeProviderError } from '../_shared/site-audit.ts'
+import {
+  activePipelineBreakers,
+  pipelinePausedPayload,
+  recordPipelineFailure,
+} from '../_shared/site-pipeline-health.ts'
+import { classifyNiche, templateForNiche, type NicheKey } from '../_shared/niche.ts'
 import {
   blockTemplateFamilyCatalog,
   BLOCK_TEMPLATE_FAMILIES,
   selectBlockTemplateFamily,
   type BlockTemplateFamily,
   type BlockTemplateFamilyKey,
-} from '../_shared/block-templates.ts'
+} from '../process-site-jobs/block-templates.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
+const FIRECRAWL_V2 = 'https://api.firecrawl.dev/v2'
+const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
 
-const AUDIT_PER_TICK = 6    // Firecrawl+Gemini per invocation — keep memory low
-const GEN_PER_TICK = 3      // how many new pipelines may START per tick
-const MAX_CONCURRENT_GEN_PER_LANGUAGE = 3 // how many leads per language may be mid-pipeline at once
-const BUILD_BUDGET_MULTIPLIER = 2
-const DAILY_SEND_CAP_FALLBACK: Record<'sv' | 'en', number> = { sv: 16, en: 8 }
+const AUDIT_PER_TICK = 3    // Firecrawl+Gemini per invocation — keep memory low
+const GEN_PER_TICK = 6      // how many new pipelines may START per tick
+const MAX_CONCURRENT_GEN = 24 // how many leads may be mid-pipeline at once
+const DAILY_GEN_CAP_FALLBACK = 16  // used only if we can't read sender limits
 const OUTREACH_DOMAINS = ['foremp.email', 'foremp.eu'] as const
 const GHOST_LIST_NAME = 'Site Leads (auto)'
-const STOCKHOLM_TZ = 'Europe/Stockholm'
 
 function isCanonicalDemoUrl(value?: string | null): boolean {
   if (!value) return false
   try {
     const url = new URL(value)
     if (url.protocol !== 'https:') return false
-    if (!/^demo-[a-z0-9-]+\.vercel\.app$/.test(url.hostname)) return false
+    if (!url.hostname.endsWith('.vercel.app')) return false
+    if (url.hostname.endsWith('-foremp.vercel.app')) return false
     return true
   } catch {
     return false
   }
 }
-const STALE_PIPELINE_MINUTES = 30 // never let one dead scrape/generate/deploy block the whole queue
-const STALE_AUDIT_MINUTES = 30    // 'auditing' older than this = dead audit call
-const MAX_AUDIT_ATTEMPTS = 3      // after this many recoveries the lead is marked failed
+const STALE_PIPELINE_MINUTES = 180 // queued work may legitimately wait; don't fail healthy backlog
 const ORPHAN_GRACE_MINUTES = 10   // 'generating' with no generated_sites row = dead job
-const TEMPLATE_PICKER_MODEL = 'gpt-4o-mini'
-const ACTIVE_GENERATED_SITE_STATUSES = ['pending', 'scraped', 'queued', 'processing', 'generated', 'deploying'] as const
-
-function startOfStockholmDayUtc(now = new Date()): Date {
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
-    timeZone: STOCKHOLM_TZ,
-    hour12: false,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(now).map((p) => [p.type, p.value])) as any
-  const guess = new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), 0, 0, 0))
-  const stockholm = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
-    timeZone: STOCKHOLM_TZ,
-    hour12: false,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).formatToParts(guess).map((p) => [p.type, p.value])) as any
-  const asStockholm = Date.UTC(
-    Number(stockholm.year),
-    Number(stockholm.month) - 1,
-    Number(stockholm.day),
-    Number(stockholm.hour),
-    Number(stockholm.minute),
-    Number(stockholm.second),
-  )
-  return new Date(guess.getTime() - (asStockholm - guess.getTime()))
-}
+const TEMPLATE_PICKER_MODEL = 'deepseek/deepseek-chat-v3.1'
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
@@ -94,53 +64,24 @@ Deno.serve(async (req) => {
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   const supabase = createClient(supabaseUrl, serviceKey)
 
-  const report = { reconciled: 0, recovered: 0, audits_recovered: 0, audited: 0, generated: 0, capacity: 0, errors: [] as string[] }
+  const report = { reconciled: 0, recovered: 0, audited: 0, generated: 0, capacity: 0, errors: [] as string[] }
 
   // Manual override from the Site Leads UI: build these leads right now,
   // ignoring the automation switch and the daily cap.
   let overrideIds: string[] = []
-  let auditLeadIds: string[] = []
-  let reAuditAutoGoodEnough = false
-  let reAuditTouchedGoodEnough = false
   if (req.method === 'POST') {
     try {
       const body = await req.json()
       if (body?.force && Array.isArray(body?.lead_ids)) {
         overrideIds = body.lead_ids.filter((v: unknown) => typeof v === 'string').slice(0, 20)
       }
-      if (Array.isArray(body?.audit_lead_ids)) {
-        auditLeadIds = body.audit_lead_ids.filter((v: unknown) => typeof v === 'string').slice(0, 50)
-      }
-      reAuditAutoGoodEnough = body?.re_audit_auto_good_enough === true
-      reAuditTouchedGoodEnough = body?.re_audit_touched_good_enough === true
     } catch { /* no body — normal cron tick */ }
   }
 
+  const activeBreakers = await activePipelineBreakers(supabase)
+  if (activeBreakers.length) return json(pipelinePausedPayload(activeBreakers), 423)
+
   try {
-    if (reAuditAutoGoodEnough) {
-      const queued = await queueOldGoodEnoughForReaudit(supabase, {
-        includeTouched: reAuditTouchedGoodEnough,
-      })
-      report.errors.push(`queued ${queued} old-audit site_good_enough leads for re-audit`)
-    }
-
-    if (auditLeadIds.length > 0) {
-      const { data: auditRows } = await supabase
-        .from('site_leads')
-        .select('id, website, company_name, language')
-        .in('id', auditLeadIds)
-        .not('website', 'is', null)
-      for (const row of auditRows ?? []) {
-        try {
-          await auditOne(supabase, row as any)
-          report.audited++
-        } catch (e) {
-          report.errors.push(`audit ${row.id}: ${(e as Error).message}`)
-        }
-      }
-      return json({ ok: true, forced_audit: true, ...report })
-    }
-
     if (overrideIds.length > 0) {
       const { data: forced } = await supabase
         .from('site_leads')
@@ -148,7 +89,7 @@ Deno.serve(async (req) => {
         .in('id', overrideIds)
       for (const lead of forced ?? []) {
         try {
-          await ensureGenerationForLead(supabase, supabaseUrl, serviceKey, lead as any)
+          await startGeneration(supabase, supabaseUrl, serviceKey, lead as any)
           report.generated++
         } catch (e) {
           report.errors.push(`force ${lead.id}: ${(e as Error).message}`)
@@ -160,7 +101,6 @@ Deno.serve(async (req) => {
     // ---------------- 1. RECONCILE ----------------
     report.reconciled = await reconcile(supabase, supabaseUrl, serviceKey, report)
     report.recovered = await recoverStuckGenerations(supabase, supabaseUrl, serviceKey, report)
-    report.audits_recovered = await recoverStuckAudits(supabase, report)
 
 
     // Operator on/off switch (Igång / Pausad / Stoppad) from /site-leads.
@@ -190,109 +130,47 @@ Deno.serve(async (req) => {
         report.audited++
       } catch (e) {
         report.errors.push(`audit ${row.id}: ${(e as Error).message}`)
-        if (e instanceof ScrapeProviderError) {
-          // The scraper is down for everyone (no credits / bad key). Retrying
-          // the rest of the batch just spams errors — stop auditing this tick.
-          report.errors.push('audit halted: scrape provider unavailable — check Firecrawl credits/key')
-          break
-        }
       }
     }
-
 
     // ---------------- 3. GENERATE -----------------
-    // Build budgets are language-specific and run side by side:
-    // Swedish build budget = Swedish new-mail budget * multiplier
-    // English build budget = English new-mail budget * multiplier
-    // This prevents one language from consuming the other's website budget.
+    // Daily generation cap = today's outreach send capacity (sum of active
+    // sender daily_limits on the outreach domain). Keeps sites-created/day in
+    // lockstep with contacts-emailed/day so we never build stock we can't send.
     const { data: dailySenders } = await supabase
       .from('senders')
-      .select('daily_limit, from_email, language')
+      .select('daily_limit, from_email')
       .eq('is_active', true)
+    const dailyCap = (dailySenders ?? [])
+      .filter((r: any) => OUTREACH_DOMAINS.some((domain) => String(r.from_email ?? '').toLowerCase().endsWith(`@${domain}`)))
+      .reduce((s: number, r: any) => s + (r.daily_limit ?? 0), 0)
+      || DAILY_GEN_CAP_FALLBACK
 
-    const sendCapByLanguage: Record<'sv' | 'en', number> = { sv: 0, en: 0 }
-    for (const row of dailySenders ?? []) {
-      const domainOk = OUTREACH_DOMAINS.some((domain) => String((row as any).from_email ?? '').toLowerCase().endsWith(`@${domain}`))
-      if (!domainOk) continue
-      const lang = (row as any).language === 'en' ? 'en' : 'sv'
-      sendCapByLanguage[lang] += Number((row as any).daily_limit ?? 0)
-    }
-    if (!sendCapByLanguage.sv && !sendCapByLanguage.en) {
-      sendCapByLanguage.sv = DAILY_SEND_CAP_FALLBACK.sv
-      sendCapByLanguage.en = DAILY_SEND_CAP_FALLBACK.en
-    }
+    // Count builds actually STARTED today. Using site_leads.updated_at made
+    // approvals of older leads eat today's quota, starving generation.
+    const today = new Date().toISOString().slice(0, 10)
+    const { count: doneToday } = await supabase
+      .from('generated_sites')
+      .select('id', { count: 'exact', head: true })
+      .gte('created_at', `${today}T00:00:00Z`)
+    const capacity = Math.max(0, dailyCap - (doneToday ?? 0))
+    report.capacity = capacity
 
-    const buildCapByLanguage: Record<'sv' | 'en', number> = {
-      sv: sendCapByLanguage.sv * BUILD_BUDGET_MULTIPLIER,
-      en: sendCapByLanguage.en * BUILD_BUDGET_MULTIPLIER,
-    }
-
-    // Count builds actually STARTED today in Stockholm time, split by language.
-    const dayStart = startOfStockholmDayUtc()
-    const [{ count: doneSv }, { count: doneEn }] = await Promise.all([
-      supabase
-        .from('generated_sites')
-        .select('id', { count: 'exact', head: true })
-        .eq('language', 'sv')
-        .gte('created_at', dayStart.toISOString()),
-      supabase
-        .from('generated_sites')
-        .select('id', { count: 'exact', head: true })
-        .eq('language', 'en')
-        .gte('created_at', dayStart.toISOString()),
-    ])
-
-    const capacityByLanguage: Record<'sv' | 'en', number> = {
-      sv: Math.max(0, buildCapByLanguage.sv - (doneSv ?? 0)),
-      en: Math.max(0, buildCapByLanguage.en - (doneEn ?? 0)),
-    }
-    report.capacity = capacityByLanguage.sv + capacityByLanguage.en
-
-    const [{ count: inFlightSv }, { count: inFlightEn }] = await Promise.all([
-      supabase
+    if (capacity > 0) {
+      // Bounded-concurrency pipeline: keep up to MAX_CONCURRENT_GEN leads
+      // mid-flight so the daily quota can actually be reached, instead of the
+      // old strictly-serial gate where one lead blocked the whole queue.
+      const { count: inFlight } = await supabase
         .from('site_leads')
         .select('id', { count: 'exact', head: true })
         .eq('status', 'generating')
-        .eq('language', 'sv'),
-      supabase
-        .from('site_leads')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'generating')
-        .eq('language', 'en'),
-    ])
 
-    const slotsByLanguage: Record<'sv' | 'en', number> = {
-      sv: Math.max(0, MAX_CONCURRENT_GEN_PER_LANGUAGE - (inFlightSv ?? 0)),
-      en: Math.max(0, MAX_CONCURRENT_GEN_PER_LANGUAGE - (inFlightEn ?? 0)),
-    }
-
-    const possibleByLanguage: Record<'sv' | 'en', number> = {
-      sv: Math.min(capacityByLanguage.sv, slotsByLanguage.sv),
-      en: Math.min(capacityByLanguage.en, slotsByLanguage.en),
-    }
-
-    const totalPossible = possibleByLanguage.sv + possibleByLanguage.en
-    if (totalPossible <= 0) {
-      report.errors.push(`skip generate: no build slots left (sv cap ${capacityByLanguage.sv}/${slotsByLanguage.sv}, en cap ${capacityByLanguage.en}/${slotsByLanguage.en})`)
-    } else {
-      const totalTake = Math.min(GEN_PER_TICK, totalPossible)
-      const takeByLanguage: Record<'sv' | 'en', number> = { sv: 0, en: 0 }
-
-      for (const lang of ['sv', 'en'] as const) {
-        if (takeByLanguage.sv + takeByLanguage.en >= totalTake) break
-        if (possibleByLanguage[lang] > 0) takeByLanguage[lang]++
-      }
-      while (takeByLanguage.sv + takeByLanguage.en < totalTake) {
-        const svRemaining = possibleByLanguage.sv - takeByLanguage.sv
-        const enRemaining = possibleByLanguage.en - takeByLanguage.en
-        if (svRemaining <= 0 && enRemaining <= 0) break
-        if (svRemaining >= enRemaining && svRemaining > 0) takeByLanguage.sv++
-        else if (enRemaining > 0) takeByLanguage.en++
-      }
-
-      const fetchNeedsSite = async (language: 'sv' | 'en', take: number) => {
-        if (take <= 0) return []
-        let query = supabase
+      const slots = Math.max(0, MAX_CONCURRENT_GEN - (inFlight ?? 0))
+      if (slots === 0) {
+        report.errors.push(`skip generate: ${inFlight} lead(s) still in flight`)
+      } else {
+        const take = Math.min(GEN_PER_TICK, capacity, slots)
+        const { data: needsSite } = await supabase
           .from('site_leads')
           .select('id, user_id, company_name, website, email, phone, address, category, niche, rating, review_snippets, audit_reason, audit_details, feedback, language')
           .eq('status', 'needs_site')
@@ -300,28 +178,20 @@ Deno.serve(async (req) => {
           .not('email', 'is', null)
           .order('audit_score', { ascending: true, nullsFirst: false })
           .limit(take)
-        query = language === 'en'
-          ? query.eq('language', 'en')
-          : query.or('language.is.null,language.eq.sv')
-        const { data } = await query
-        return data ?? []
-      }
 
-      const [needsSv, needsEn] = await Promise.all([
-        fetchNeedsSite('sv', takeByLanguage.sv),
-        fetchNeedsSite('en', takeByLanguage.en),
-      ])
+        if (!needsSite?.length) {
+          // Nothing to build right now — the tick simply idles and picks up
+          // new needs_site leads as soon as the audit phase produces them.
+          report.errors.push('idle: no needs_site leads ready')
+        }
 
-      if (!needsSv.length && !needsEn.length) {
-        report.errors.push('idle: no needs_site leads ready')
-      }
-
-      for (const lead of [...needsSv, ...needsEn]) {
-        try {
-          await ensureGenerationForLead(supabase, supabaseUrl, serviceKey, lead as any)
-          report.generated++
-        } catch (e) {
-          report.errors.push(`gen ${lead.id}: ${(e as Error).message}`)
+        for (const lead of needsSite ?? []) {
+          try {
+            await startGeneration(supabase, supabaseUrl, serviceKey, lead as any)
+            report.generated++
+          } catch (e) {
+            report.errors.push(`gen ${lead.id}: ${(e as Error).message}`)
+          }
         }
       }
     }
@@ -398,20 +268,8 @@ async function recoverStuckGenerations(
 
   for (const lead of leads as any[]) {
     const gs = byId.get(lead.generated_site_id)
-    const isRegen = typeof lead.feedback === 'string' && lead.feedback.trim().length > 0
     if (!gs) {
-      await supabase.from('site_leads').update(
-        isRegen
-          ? {
-              status: 'failed',
-              generated_site_id: null,
-              feedback: 'Site pipeline failed: regenerated site disappeared before completion. The lead was moved to Failed so you can retry directly.',
-            }
-          : {
-              status: 'needs_site',
-              generated_site_id: null,
-            },
-      ).eq('id', lead.id)
+      await supabase.from('site_leads').update({ status: 'needs_site', generated_site_id: null }).eq('id', lead.id)
       recovered++
       continue
     }
@@ -424,6 +282,30 @@ async function recoverStuckGenerations(
       await supabase.from('generated_sites').update({ updated_at: new Date().toISOString() }).eq('id', gs.id)
       await invokeFn(supabaseUrl, serviceKey, 'generate-site', { generated_site_id: gs.id })
         .catch((e) => report.errors.push(`recover generate ${gs.id}: ${e.message}`))
+      recovered++
+      continue
+    }
+
+    if (gs.status === 'queued') {
+      await supabase.from('generated_sites').update({
+        queued_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }).eq('id', gs.id)
+      await invokeFn(supabaseUrl, serviceKey, 'process-site-jobs', { generated_site_id: gs.id, force: true })
+        .catch((e) => report.errors.push(`recover queued ${gs.id}: ${e.message}`))
+      recovered++
+      continue
+    }
+
+    if (gs.status === 'processing') {
+      await supabase.from('generated_sites').update({
+        status: 'queued',
+        queued_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        error_message: `Recovered a stalled processing step after ${STALE_PIPELINE_MINUTES} minutes; retrying automatically.`,
+      }).eq('id', gs.id)
+      await invokeFn(supabaseUrl, serviceKey, 'process-site-jobs', { generated_site_id: gs.id, force: true })
+        .catch((e) => report.errors.push(`recover processing ${gs.id}: ${e.message}`))
       recovered++
       continue
     }
@@ -454,22 +336,13 @@ async function recoverStuckGenerations(
     }
 
     await supabase.from('generated_sites').update({
-      status: 'failed',
-      error_message: `Stale ${gs.status} job was reset after ${STALE_PIPELINE_MINUTES} minutes so the queue can continue.`,
+      status: 'queued',
+      queued_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      error_message: `Recovered stale ${gs.status} step after ${STALE_PIPELINE_MINUTES} minutes; keeping the job in queue.`,
     }).eq('id', gs.id)
-
-    await supabase.from('site_leads').update(
-      isRegen
-        ? {
-            status: 'failed',
-            generated_site_id: null,
-            feedback: `Site pipeline failed: regeneration stalled in ${gs.status} and was moved to Failed so you can retry directly.`,
-          }
-        : {
-            status: 'needs_site',
-            generated_site_id: null,
-          },
-    ).eq('id', lead.id)
+    await invokeFn(supabaseUrl, serviceKey, 'process-site-jobs', { generated_site_id: gs.id, force: true })
+      .catch((e) => report.errors.push(`recover generic ${gs.id}: ${e.message}`))
     recovered++
   }
 
@@ -489,7 +362,7 @@ async function reconcile(
   // Only look at leads currently mid-flight
   const { data: leads } = await supabase
     .from('site_leads')
-    .select('id, user_id, company_name, language, email, phone, website, category, audit_score, audit_reason, audit_details, demo_url, status, auto_send, generated_site_id')
+    .select('id, status, generated_site_id')
     .eq('status', 'generating')
     .not('generated_site_id', 'is', null)
     .limit(50)
@@ -534,26 +407,6 @@ async function reconcile(
         demo_url: gs.demo_site_url,
       }).eq('id', lead.id)
       moved++
-
-      // Pre-triaged as "build + send directly" → enroll now, no second review.
-      if ((lead as any).auto_send && (lead as any).email) {
-        try {
-          await approveLeadForOutreach(supabase, {
-            ...(lead as any),
-            demo_url: gs.demo_site_url,
-          })
-          await supabase.from('site_leads').update({
-            status: 'auto_approved',
-            approved_at: new Date().toISOString(),
-          }).eq('id', lead.id)
-        } catch (e) {
-          // Stays in awaiting_approval so it never disappears silently.
-          await supabase.from('site_leads').update({
-            feedback: `Auto-send failed, needs manual approval: ${(e as Error).message}`.slice(0, 400),
-          }).eq('id', lead.id)
-          report.errors.push(`auto-approve ${lead.id}: ${(e as Error).message}`)
-        }
-      }
     } else if (gs.status === 'failed') {
       await supabase.from('site_leads').update({
         status: 'failed',
@@ -566,145 +419,139 @@ async function reconcile(
 }
 
 // ---------------------------------------------------------------------------
-// AUDIT — screenshot-first website audit shared with the dedicated audit-site
-// function. This replaces the older markdown-only rating path that repeatedly
-// underrated modern sites with short, polished copy.
+// AUDIT — Firecrawl (markdown only) + Gemini (deterministic scoring).
+// Also asks for 2-3 concrete weaknesses to reuse in outreach emails later.
 // ---------------------------------------------------------------------------
 async function auditOne(
   supabase: ReturnType<typeof createClient>,
   row: { id: string; website: string; company_name: string },
 ) {
+  const breakers = await activePipelineBreakers(supabase)
+  if (breakers.length) throw new Error(`pipeline paused: ${breakers.map((breaker) => breaker.provider).join(', ')}`)
+
   const fcKey = Deno.env.get('FIRECRAWL_API_KEY')
-  const openrouterKey = Deno.env.get('OPENROUTER_API_KEY')
-  if (!fcKey || !openrouterKey) throw new Error('missing FIRECRAWL_API_KEY or OPENROUTER_API_KEY')
+  const lovableKey = Deno.env.get('LOVABLE_API_KEY')
+  if (!fcKey || !lovableKey) throw new Error('missing FIRECRAWL_API_KEY or LOVABLE_API_KEY')
 
   await supabase.from('site_leads').update({ status: 'auditing' }).eq('id', row.id)
 
-  let result
+  const url = normaliseUrl(row.website)
+  let markdown = ''
+  let title = ''
+  let unreachable = false
+
   try {
-    result = await auditWebsite(row.website, row.company_name, fcKey, openrouterKey)
-  } catch (e) {
-    if (e instanceof ScrapeProviderError) {
-      // Firecrawl is out of credits / rate limited / misconfigured. That is our
-      // problem, not the lead's — put it straight back in the queue so it does
-      // not burn recovery attempts and end up marked failed.
-      await supabase.from('site_leads').update({ status: 'pending_audit' }).eq('id', row.id)
+    const fcResp = await fetch(`${FIRECRAWL_V2}/scrape`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: true }),
+    })
+    const fcData = await fcResp.json()
+    if (!fcResp.ok) {
+      if ([401, 402, 429].includes(fcResp.status) || fcResp.status >= 500) {
+        const message = String(fcData?.error ?? fcData?.message ?? `Firecrawl API failed with HTTP ${fcResp.status}`)
+        await recordPipelineFailure(supabase, {
+          provider: 'firecrawl', sourceFunction: 'process-site-leads:audit', message,
+          httpStatus: fcResp.status, siteLeadId: row.id,
+        })
+        await supabase.from('site_leads').update({ status: 'pending_audit' }).eq('id', row.id)
+        throw new Error(`Firecrawl provider error (${fcResp.status}): ${message}`)
+      }
+      unreachable = true
+    } else {
+      markdown = fcData.data?.markdown ?? fcData.markdown ?? ''
+      title = fcData.data?.metadata?.title ?? fcData.metadata?.title ?? ''
     }
-    throw e
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Firecrawl provider error')) throw error
+    unreachable = true
   }
 
-  const score = Math.max(1, Math.min(10, Math.round(result.score)))
-  // The score now answers "will this owner want a new site?", not "is this
-  // pretty?". Only a clearly maintained site (7+) is auto-parked; everything
-  // from 1-6 goes to the human triage queue rather than being decided here.
-  const confident = !result.uncertain && !result.unreadable
-  const nextStatus = (confident && score >= 7) ? 'site_good_enough' : 'needs_triage'
-  const borderline = nextStatus === 'needs_triage' && confident && score >= 5
-  const reason = result.uncertain
-    ? `${result.reason} Osäker audit utan full visuell signal — kontrollera manuellt.`.slice(0, 500)
-    : result.reason.slice(0, 500)
+  if (unreachable || !markdown) {
+    await supabase.from('site_leads').update({
+      status: 'needs_site',
+      audit_score: 1,
+      audit_reason: unreachable ? 'Could not reach existing website.' : 'Site returned empty content.',
+      audit_details: { weaknesses: ['Ingen nåbar eller läsbar hemsida idag.'] },
+    }).eq('id', row.id)
+    return
+  }
+
+  const aiResp = await fetch(`${AI_GATEWAY}/chat/completions`, {
+    method: 'POST',
+    headers: { 'Lovable-API-Key': lovableKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'google/gemini-3-flash-preview',
+      temperature: 0,
+      top_p: 1,
+      seed: 42,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Du auditerar små företags hemsidor och betygsätter dem 1-10 för hur moderna, förtroendeingivande och konverterande de ser ut.',
+            'Var STRIKT, KONSEKVENT och DETERMINISTISK — samma input MÅSTE ge samma svar.',
+            '',
+            'Rubrik för poäng:',
+            '  1  = trasig, tom, parkerad domän',
+            '  2-3 = extremt föråldrad (pre-2010), ingen mobil, tunt innehåll',
+            '  4  = daterad men fungerande, ful typografi/layout',
+            '  5  = genomsnittlig småföretagssajt, generisk, tunn hero',
+            '  6  = hyfsad modern-ish, tydliga tjänster + kontakt',
+            '  7  = klart modern, responsiv, tydlig hierarki, tydliga CTA',
+            '  8  = polerad, on-brand, trust signals',
+            '  9-10 = förstklassig, inget meningsfullt att förbättra',
+            '',
+            'Om innehållet är väldigt tunt (<300 tecken riktig copy) — cap 4.',
+            '',
+            'Svara ENDAST med strikt JSON:',
+            '{"score": <heltal 1-10>, "reason": "<max 200 tecken, konkret evidens>", "weaknesses": ["<konkret svaghet 1>", "<konkret svaghet 2>", "<konkret svaghet 3>"]}',
+            'Svagheterna ska vara på svenska, konkreta (t.ex. "generisk stock-hero", "ingen mobil-nav", "saknar priser", "gammal design 2015-typ"), och användbara i ett kallmail som argument för varför de behöver ny hemsida.',
+          ].join('\n'),
+        },
+        {
+          role: 'user',
+          content: `URL: ${url}\nFöretag: ${row.company_name}\nTitel: ${title}\n\nInnehåll:\n${markdown.slice(0, 3000)}`,
+        },
+      ],
+      response_format: { type: 'json_object' },
+    }),
+  })
+  const aiData = await aiResp.json()
+  if (!aiResp.ok) throw new Error(`AI audit ${aiResp.status}: ${JSON.stringify(aiData).slice(0, 200)}`)
+
+  let parsed: { score: number; reason: string; weaknesses?: string[] } = { score: 5, reason: 'unparsed' }
+  try { parsed = JSON.parse(aiData.choices?.[0]?.message?.content ?? '{}') } catch (_) { /* keep default */ }
+  const score = Math.max(1, Math.min(10, Math.round(parsed.score)))
+  const nextStatus = score >= 7 ? 'site_good_enough' : 'needs_site'
 
   await supabase.from('site_leads').update({
     status: nextStatus,
     audit_score: score,
-    audit_reason: reason,
-    audit_details: {
-      weaknesses: result.weaknesses.slice(0, 6),
-      structural: result.structural.slice(0, 5),
-      cosmetic: result.cosmetic.slice(0, 5),
-      borderline,
-      uncertain: result.uncertain,
-      unreadable: result.unreadable,
-      audit_source: 'buy_intent_v3',
-      screenshot_present: !!result.screenshot,
-      title: result.title,
-      audited_url: result.url,
-      audited_at: new Date().toISOString(),
-    },
+    audit_reason: (parsed.reason ?? '').slice(0, 500),
+    audit_details: { weaknesses: (parsed.weaknesses ?? []).slice(0, 5) },
   }).eq('id', row.id)
 }
 
-
-// Leads get status 'auditing' before the Firecrawl/AI call. If that call times
-// out or the worker hits its resource limit the row is never advanced, and the
-// audit phase (which only looks for pending_audit) never touches it again.
-// Every tick we push those back into the queue, and give up after
-// MAX_AUDIT_ATTEMPTS so a permanently broken site cannot eat audit capacity.
-async function recoverStuckAudits(
+// ---------------------------------------------------------------------------
+// Which site engine new jobs use. Controlled from /site-leads via
+// app_settings.site_generation_mode ('template' = current template engine,
+// 'freeform' = AI builds the whole site). Env var is a hard override.
+let cachedGenerationMode: 'template' | 'freeform' | null = null
+async function resolveGenerationMode(
   supabase: ReturnType<typeof createClient>,
-  report: { errors: string[] },
-): Promise<number> {
-  const cutoff = new Date(Date.now() - STALE_AUDIT_MINUTES * 60_000).toISOString()
-  const { data: stuck, error } = await supabase
-    .from('site_leads')
-    .select('id, audit_details, updated_at')
-    .eq('status', 'auditing')
-    .lt('updated_at', cutoff)
-    .limit(200)
-  if (error) {
-    report.errors.push(`recoverStuckAudits: ${error.message}`)
-    return 0
-  }
-
-  let recovered = 0
-  for (const row of stuck ?? []) {
-    const details = ((row as any).audit_details ?? {}) as Record<string, unknown>
-    const attempts = Number(details.audit_attempts ?? 0) + 1
-    const giveUp = attempts >= MAX_AUDIT_ATTEMPTS
-    const { error: upErr } = await supabase
-      .from('site_leads')
-      .update({
-        status: giveUp ? 'failed' : 'pending_audit',
-        audit_details: { ...details, audit_attempts: attempts, last_audit_recovery_at: new Date().toISOString() },
-        ...(giveUp
-          ? { audit_reason: `Audit fastnade ${attempts} gånger utan att slutföras.`.slice(0, 500) }
-          : {}),
-      })
-      .eq('id', (row as any).id)
-      .eq('status', 'auditing')
-    if (upErr) {
-      report.errors.push(`recoverStuckAudits ${(row as any).id}: ${upErr.message}`)
-      continue
-    }
-    if (!giveUp) recovered++
-  }
-  return recovered
-}
-
-
-
-async function queueOldGoodEnoughForReaudit(
-  supabase: ReturnType<typeof createClient>,
-  options?: { includeTouched?: boolean },
-): Promise<number> {
-  const includeTouched = options?.includeTouched === true
-  const { data: rows, error } = await supabase
-    .from('site_leads')
-    .select('id, audit_details, triaged_at, generated_site_id, website')
-    .eq('status', 'site_good_enough')
-    .is('triaged_at', null)
-    .is('generated_site_id', null)
-    .not('website', 'is', null)
-    .limit(2000)
-  if (error) throw new Error(`re-audit queue read: ${error.message}`)
-
-  const ids = (rows ?? [])
-    .filter((row: any) => {
-      const isOldAudit = (row.audit_details?.audit_source ?? null) !== 'buy_intent_v3'
-      const isTouched = !!row.triaged_at
-      if (!isOldAudit) return false
-      if (!includeTouched && isTouched) return false
-      return true
-    })
-    .map((row: any) => row.id)
-  if (!ids.length) return 0
-
-  const { error: updateErr } = await supabase
-    .from('site_leads')
-    .update({ status: 'pending_audit' })
-    .in('id', ids)
-  if (updateErr) throw new Error(`re-audit queue update: ${updateErr.message}`)
-  return ids.length
+): Promise<'template' | 'freeform'> {
+  const envMode = Deno.env.get('SITE_GENERATION_MODE')
+  if (envMode === 'freeform' || envMode === 'template') return envMode
+  if (cachedGenerationMode) return cachedGenerationMode
+  const { data } = await supabase
+    .from('app_settings')
+    .select('value')
+    .eq('key', 'site_generation_mode')
+    .maybeSingle()
+  const mode = (data?.value as any)?.mode
+  cachedGenerationMode = mode === 'freeform' ? 'freeform' : 'template'
+  return cachedGenerationMode
 }
 
 async function chooseTemplateFamilyForLead(lead: any): Promise<{
@@ -717,17 +564,17 @@ async function chooseTemplateFamilyForLead(lead: any): Promise<{
     niche: lead?.niche ?? null,
     businessName: lead?.company_name ?? null,
   })
-  const openaiKey = Deno.env.get('OPENAI_API_KEY')
-  if (!openaiKey) return { family: fallback, source: 'rules', reason: 'OPENAI_API_KEY missing' }
+  const lovableKey = Deno.env.get('LOVABLE_API_KEY')
+  if (!lovableKey) return { family: fallback, source: 'rules', reason: 'LOVABLE_API_KEY missing' }
 
   const familyCatalog = blockTemplateFamilyCatalog()
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 12_000)
   try {
-    const resp = await fetch(OPENAI_URL, {
+    const resp = await fetch(`${AI_GATEWAY}/chat/completions`, {
       method: 'POST',
       signal: controller.signal,
-      headers: { Authorization: `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
+      headers: { 'Lovable-API-Key': lovableKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: TEMPLATE_PICKER_MODEL,
         temperature: 0,
@@ -792,68 +639,6 @@ async function chooseTemplateFamilyForLead(lead: any): Promise<{
   }
 }
 
-async function ensureGenerationForLead(
-  supabase: ReturnType<typeof createClient>,
-  supabaseUrl: string,
-  serviceKey: string,
-  lead: any,
-) {
-  const reusable = await findReusableGeneratedSite(supabase, lead.id)
-  if (!reusable) {
-    await startGeneration(supabase, supabaseUrl, serviceKey, lead)
-    return { mode: 'created' as const }
-  }
-
-  await supabase.from('site_leads').update({
-    status: 'generating',
-    generated_site_id: reusable.id,
-    updated_at: new Date().toISOString(),
-  }).eq('id', lead.id)
-
-  await kickGeneratedSite(supabaseUrl, serviceKey, reusable.id, reusable.status)
-  return { mode: 'reused' as const, generated_site_id: reusable.id, status: reusable.status }
-}
-
-async function findReusableGeneratedSite(
-  supabase: ReturnType<typeof createClient>,
-  leadId: string,
-) {
-  const { data, error } = await supabase
-    .from('generated_sites')
-    .select('id, status, updated_at')
-    .eq('site_lead_id', leadId)
-    .in('status', [...ACTIVE_GENERATED_SITE_STATUSES])
-    .order('updated_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  if (error) throw new Error(`find active generated site: ${error.message}`)
-  return data
-}
-
-async function kickGeneratedSite(
-  supabaseUrl: string,
-  serviceKey: string,
-  generatedSiteId: string,
-  status: string,
-) {
-  if (status === 'pending') {
-    await invokeFn(supabaseUrl, serviceKey, 'scrape-lead-data', { generated_site_id: generatedSiteId })
-    return
-  }
-  if (status === 'scraped') {
-    await invokeFn(supabaseUrl, serviceKey, 'generate-site', { generated_site_id: generatedSiteId })
-    return
-  }
-  if (status === 'generated' || status === 'deploying') {
-    await invokeFn(supabaseUrl, serviceKey, 'deploy-site', { generated_site_id: generatedSiteId })
-    return
-  }
-  if (status === 'queued' || status === 'processing') {
-    await invokeFn(supabaseUrl, serviceKey, 'process-site-jobs', { generated_site_id: generatedSiteId })
-    return
-  }
-}
-
 // GENERATE — creates synthetic contact + generated_sites row, kicks off
 // scrape-lead-data. The reconciler above then walks the pipeline forward.
 // ---------------------------------------------------------------------------
@@ -863,18 +648,31 @@ async function startGeneration(
   serviceKey: string,
   lead: any,
 ) {
+  const breakers = await activePipelineBreakers(supabase)
+  if (breakers.length) throw new Error(`pipeline paused: ${breakers.map((row) => row.provider).join(', ')}`)
+
   // Resolve the niche up-front: it is used both on the ghost contact and on
   // the generated_sites row (previously declared after first use -> TDZ crash).
   const niche = inferLeadNiche(lead)
+  const nicheTemplate = templateForNiche(niche)
   const chosenFamily = await chooseTemplateFamilyForLead({
     ...lead,
     niche: lead?.niche ?? niche ?? null,
   })
   const blockFamily = chosenFamily.family
 
-  // Always use the modern block-family builder for generation.
-  // New builds should not fall back to the older simpler renderer.
-  const generationMode = 'freeform'
+  // No template exists for this category yet -> the site can only be built by
+  // the freeform (AI-from-scratch) engine.
+  const resolvedMode = await resolveGenerationMode(supabase)
+  const shouldUseBlockTemplateRenderer = lead.language !== 'en'
+    && blockFamily.key !== 'service_clarity_default'
+  const generationMode = lead.language === 'en'
+    ? 'freeform'
+    : shouldUseBlockTemplateRenderer
+      ? 'freeform'
+    : nicheTemplate
+      ? resolvedMode
+      : 'freeform'
 
 
   // Ensure ghost list for this user
@@ -949,8 +747,9 @@ async function startGeneration(
       source_url: normaliseUrl(lead.website),
       status: 'pending',
       language: lead.language === 'en' ? 'en' : 'sv',
-      // The chosen block template family is the source of truth for the modern renderer.
-      template: blockFamily.key,
+      // NOT NULL column: freeform builds have no template, use a marker so the
+      // insert can't fail (this used to abort every non-template category).
+      template: generationMode === 'freeform' ? blockFamily.key : (nicheTemplate ?? 'freeform'),
       generation_mode: generationMode,
     })
     .select('id')
@@ -994,9 +793,12 @@ async function startGeneration(
   const scrapeResp = await invokeFn(supabaseUrl, serviceKey, 'scrape-lead-data', { generated_site_id: gs.id })
   if (!scrapeResp.ok) {
     const body = await scrapeResp.text().catch(() => '')
+    let providerFailure = false
+    try { providerFailure = JSON.parse(body)?.provider === 'firecrawl' } catch { /* plain error body */ }
     await supabase.from('site_leads').update({
-      status: 'failed',
-      feedback: `Scrape failed: ${body.slice(0, 400)}`,
+      status: providerFailure || scrapeResp.status === 423 ? 'needs_site' : 'failed',
+      generated_site_id: providerFailure || scrapeResp.status === 423 ? null : gs.id,
+      feedback: providerFailure || scrapeResp.status === 423 ? null : `Scrape failed: ${body.slice(0, 400)}`,
     }).eq('id', lead.id)
     throw new Error(`scrape failed (${scrapeResp.status}): ${body.slice(0, 200)}`)
   }

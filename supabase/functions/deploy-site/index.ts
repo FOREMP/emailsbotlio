@@ -1,6 +1,11 @@
 // Deploys the generated HTML to Vercel as a static site.
 // Uses Vercel's v13 deployments API with inline files — no GitHub repo needed.
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import {
+  activePipelineBreakers,
+  pipelinePausedPayload,
+  recordPipelineFailure,
+} from '../_shared/site-pipeline-health.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -345,15 +350,24 @@ Deno.serve(async (req) => {
     const { generated_site_id }: Req = await req.json()
     if (!generated_site_id) return json({ error: 'generated_site_id required' }, 400)
 
-    const vercelToken = Deno.env.get('VERCEL_API_TOKEN')
-    if (!vercelToken) return json({ error: 'VERCEL_API_TOKEN missing' }, 500)
-    const vercelTeamId = Deno.env.get('VERCEL_TEAM_ID')?.trim() || null
-    const vercelScopeSlug = Deno.env.get('VERCEL_SCOPE_SLUG')?.trim() || null
-
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     )
+
+    const breakers = await activePipelineBreakers(supabase)
+    if (breakers.length) return json(pipelinePausedPayload(breakers), 423)
+
+    const vercelToken = Deno.env.get('VERCEL_API_TOKEN')
+    if (!vercelToken) {
+      const incident = await recordPipelineFailure(supabase, {
+        provider: 'vercel', sourceFunction: 'deploy-site', message: 'VERCEL_API_TOKEN missing',
+        generatedSiteId: generated_site_id,
+      })
+      return json({ error: 'VERCEL_API_TOKEN missing', provider: 'vercel', error_code: 'invalid_credentials' }, 503)
+    }
+    const vercelTeamId = Deno.env.get('VERCEL_TEAM_ID')?.trim() || null
+    const vercelScopeSlug = Deno.env.get('VERCEL_SCOPE_SLUG')?.trim() || null
 
     const { data: site, error: siteErr } = await supabase
       .from('generated_sites')
@@ -369,9 +383,13 @@ Deno.serve(async (req) => {
     })
     if (!accessCheck.ok) {
       const message = `Vercel access check failed (${accessCheck.status}). ${accessCheck.detail}`.slice(0, 500)
+      const incident = await recordPipelineFailure(supabase, {
+        provider: 'vercel', sourceFunction: 'deploy-site:access-check', message,
+        httpStatus: accessCheck.status, siteLeadId: site.site_lead_id, generatedSiteId: generated_site_id,
+      })
       await supabase.from('generated_sites').update({
-        status: 'failed',
-        error_message: message,
+        status: 'generated',
+        error_message: incident.isPaused ? `Pipeline paused: ${message}` : `Retrying Vercel access: ${message}`,
       }).eq('id', generated_site_id)
       return json({
         error: 'vercel auth failed',
@@ -482,9 +500,14 @@ Deno.serve(async (req) => {
       }
 
       if (!deployResp.ok) {
+        const message = `Vercel deploy failed (${deployResp.status}): ${JSON.stringify(deployData).slice(0, 500)}`
+        const incident = await recordPipelineFailure(supabase, {
+          provider: 'vercel', sourceFunction: 'deploy-site:create', message,
+          httpStatus: deployResp.status, siteLeadId: site.site_lead_id, generatedSiteId: generated_site_id,
+        })
         await supabase.from('generated_sites').update({
-          status: 'failed',
-          error_message: `Vercel deploy failed (${deployResp.status}): ${JSON.stringify(deployData).slice(0, 500)}`,
+          status: 'generated',
+          error_message: incident.isPaused ? `Pipeline paused: ${message}` : `Retrying Vercel deploy: ${message}`,
         }).eq('id', generated_site_id)
         return json({ error: 'vercel failed', details: deployData }, deployResp.status)
       }
@@ -577,7 +600,7 @@ Deno.serve(async (req) => {
         fail_hard: shouldFailHard,
       }))
       await supabase.from('generated_sites').update({
-        status: shouldFailHard ? 'failed' : 'deploying',
+        status: 'deploying',
         vercel_project_id: projectId ?? site.vercel_project_id ?? null,
         vercel_deployment_id: deploymentId,
         vercel_deployment_url: deploymentUrl,
@@ -591,7 +614,15 @@ Deno.serve(async (req) => {
           : detail,
       }).eq('id', generated_site_id)
       if (shouldFailHard) {
-        return json({ ok: false, error: detail, deployment: deploymentUrl, ready_state: readyState }, 502)
+        const incident = await recordPipelineFailure(supabase, {
+          provider: 'vercel', sourceFunction: 'deploy-site:public-url', message: detail,
+          httpStatus: verify.status, siteLeadId: site.site_lead_id, generatedSiteId: generated_site_id,
+        })
+        await supabase.from('generated_sites').update({
+          status: 'deploying',
+          error_message: incident.isPaused ? `Pipeline paused: ${detail}` : `Retrying Vercel verification: ${detail}`,
+        }).eq('id', generated_site_id)
+        return json({ ok: false, error: detail, deployment: deploymentUrl, ready_state: readyState, pipeline_paused: incident.isPaused }, 502)
       }
       return json({ ok: false, pending: true, error: detail, deployment: deploymentUrl, ready_state: readyState }, 202)
     }

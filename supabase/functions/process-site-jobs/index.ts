@@ -9,11 +9,10 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { runFreeformStep, BUILD_MODEL, type FreeformCtx } from './freeform.ts'
 import {
-  blockTemplateFamilyCatalog,
-  BLOCK_TEMPLATE_FAMILIES,
-  selectBlockTemplateFamily,
-  type BlockTemplateFamilyKey,
-} from '../_shared/block-templates.ts'
+  activePipelineBreakers,
+  pipelinePausedPayload,
+  recordPipelineFailure,
+} from '../_shared/site-pipeline-health.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -21,16 +20,15 @@ const corsHeaders = {
 }
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
-const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 // Fast model for the content plan. DeepSeek V3.1 was frequently queued on
 // OpenRouter for 60s+, which is what killed most generations.
 const MODEL = 'openai/gpt-4o-mini'
-const POLISH_MODEL = 'gpt-4o-mini'
-// Plan generation stays on OpenRouter; copy polish now runs directly on OpenAI.
-const SKIP_POLISH = false
+const POLISH_MODEL = 'openai/gpt-4o-mini'
+// When plan + polish use the same model we merge them into ONE call — the
+// second round-trip roughly doubled wall time for no measurable gain.
+const SKIP_POLISH = MODEL === POLISH_MODEL
 const MAX_ATTEMPTS = 3
-const STUCK_MINUTES = 10
-const TEMPLATE_PICKER_MODEL = 'gpt-4o-mini'
+const STUCK_MINUTES = 20
 
 const CURRENT_YEAR = new Date().getFullYear()
 
@@ -72,98 +70,6 @@ interface SitePlan {
   faqs?: FaqItem[]
   ctaTitle?: string
   ctaText?: string
-}
-
-function feedbackRequestsTemplateChange(value: string | null | undefined): boolean {
-  if (!value) return false
-  return /(change\s+template|change\s+theme|byt\s+mall|byt\s+template|ny\s+mall|annan\s+mall|more\s+fitting\s+template|use\s+.*template|use\s+a\s+more\s+fitting|mer\s+passande\s+mall|hair\s*salon|hairsalon|frisör|salong|clinic|mekaniker|verkstad|restaurang|bistro)/i.test(value)
-}
-
-async function chooseTemplateFamilyForRegeneration(input: {
-  category?: string | null
-  niche?: string | null
-  company_name?: string | null
-  language?: string | null
-  feedback?: string | null
-}) {
-  const fallback = selectBlockTemplateFamily({
-    category: input?.category ?? null,
-    niche: input?.niche ?? null,
-    businessName: input?.company_name ?? null,
-  })
-  const openaiKey = Deno.env.get('OPENAI_API_KEY')
-  if (!openaiKey) return { family: fallback, source: 'rules' as const, reason: 'OPENAI_API_KEY missing' }
-
-  const familyCatalog = blockTemplateFamilyCatalog()
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 12_000)
-  try {
-    const resp = await fetch(OPENAI_URL, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { Authorization: `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: TEMPLATE_PICKER_MODEL,
-        temperature: 0,
-        top_p: 1,
-        seed: 42,
-        messages: [
-          {
-            role: 'system',
-            content: [
-              'You choose the best website template family for a local-business lead.',
-              'You must choose ONLY from the provided template families.',
-              'Use the lead category as the strongest signal, then niche, then company name.',
-              'Operator feedback is high priority, especially when it asks for a more fitting template or points out the current template is wrong.',
-              'Read the notes carefully: some templates fit visual/beauty businesses with many images, some fit practical service companies, some fit clinics, restaurants, mechanics or construction.',
-              'Do not choose based on one random keyword if the broader business type points elsewhere.',
-              'If the lead is unclear, choose the safest broad fit instead of forcing a niche-specific template.',
-              'Return strict JSON only.',
-              '{"templateFamily":"one of the provided keys","reason":"short explanation","confidence":0}',
-            ].join('\n'),
-          },
-          {
-            role: 'user',
-            content: JSON.stringify({
-              lead: {
-                category: input?.category ?? null,
-                niche: input?.niche ?? null,
-                company_name: input?.company_name ?? null,
-                language: input?.language ?? 'sv',
-                feedback: input?.feedback ?? null,
-              },
-              templateFamilies: familyCatalog,
-            }),
-          },
-        ],
-        response_format: { type: 'json_object' },
-      }),
-    })
-    clearTimeout(timeoutId)
-    const data = await resp.json().catch(() => ({}))
-    if (!resp.ok) {
-      return { family: fallback, source: 'rules' as const, reason: `AI picker failed (${resp.status})` }
-    }
-    const raw = String(data?.choices?.[0]?.message?.content ?? '{}')
-    const parsed = JSON.parse(raw) as { templateFamily?: string; reason?: string }
-    const key = parsed?.templateFamily
-    if (!key || !(key in BLOCK_TEMPLATE_FAMILIES)) {
-      return { family: fallback, source: 'rules' as const, reason: 'AI picker returned unknown family' }
-    }
-    return {
-      family: BLOCK_TEMPLATE_FAMILIES[key as BlockTemplateFamilyKey],
-      source: 'ai' as const,
-      reason: typeof parsed.reason === 'string' ? parsed.reason.slice(0, 240) : undefined,
-    }
-  } catch (err) {
-    return {
-      family: fallback,
-      source: 'rules' as const,
-      reason: (err as Error).name === 'AbortError' ? 'AI picker timed out' : `AI picker error: ${(err as Error).message}`,
-    }
-  } finally {
-    clearTimeout(timeoutId)
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -773,22 +679,30 @@ function adaptConstructionConfig(nc: NicheConfig, plan: SitePlan): NicheConfig {
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   try {
-    const openrouterKey = Deno.env.get('OPENROUTER_API_KEY')
-    if (!openrouterKey) return json({ error: 'OPENROUTER_API_KEY missing' }, 500)
-    const openaiKey = Deno.env.get('OPENAI_API_KEY') ?? ''
-
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     )
+
+    const breakers = await activePipelineBreakers(supabase)
+    if (breakers.length) return json(pipelinePausedPayload(breakers), 423)
+
+    const openrouterKey = Deno.env.get('OPENROUTER_API_KEY')
+    if (!openrouterKey) {
+      await recordPipelineFailure(supabase, {
+        provider: 'openrouter', sourceFunction: 'process-site-jobs', message: 'OPENROUTER_API_KEY missing',
+      })
+      return json({ error: 'OPENROUTER_API_KEY missing', provider: 'openrouter', error_code: 'invalid_credentials' }, 503)
+    }
 
     // 1. Reap 'processing' rows older than STUCK_MINUTES (worker died mid-run)
     const stuckCutoff = new Date(Date.now() - STUCK_MINUTES * 60_000).toISOString()
     await supabase
       .from('generated_sites')
       .update({
-        status: 'failed',
-        error_message: `Worker died mid-generation (>${STUCK_MINUTES} min in processing). Click Generate to retry.`,
+        status: 'queued',
+        queued_at: new Date().toISOString(),
+        error_message: `Recovered a stalled worker after >${STUCK_MINUTES} minutes; retrying automatically.`,
       })
       .eq('status', 'processing')
       .lt('updated_at', stuckCutoff)
@@ -883,54 +797,8 @@ Deno.serve(async (req) => {
         .maybeSingle()
       : { data: null }
 
-    // Regen feedback: injected when the user clicks "Regenerera" on /site-approvals
-    const regenFeedback = typeof cf.regen_feedback === 'string' && cf.regen_feedback.trim()
-      ? String(cf.regen_feedback).trim()
-      : null
-
-    let effectiveTemplate = typeof site.template === 'string' && site.template
-      ? site.template
-      : typeof cf.template_family === 'string' && cf.template_family
-        ? cf.template_family
-        : 'service_company_modern'
-
-    if (regenFeedback && feedbackRequestsTemplateChange(regenFeedback)) {
-      const picked = await chooseTemplateFamilyForRegeneration({
-        category: siteLead?.category ?? (typeof cf.category === 'string' ? cf.category : null),
-        niche: siteLead?.niche ?? (typeof cf.niche === 'string' ? cf.niche : null),
-        company_name: siteLead?.company_name ?? (typeof cf.company === 'string' ? cf.company : null),
-        language: siteLead?.language === 'en' ? 'en' : 'sv',
-        feedback: regenFeedback,
-      })
-
-      if (picked.family.key !== 'service_clarity_default') {
-        effectiveTemplate = picked.family.key
-        await supabase
-          .from('generated_sites')
-          .update({
-            template: effectiveTemplate,
-            generation_mode: 'freeform',
-            gen_progress: null,
-            generated_files: null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', generated_site_id)
-        await supabase
-          .from('contacts')
-          .update({
-            custom_fields: {
-              ...cf,
-              template_family: picked.family.key,
-              template_family_source: picked.source,
-              template_family_reason: picked.reason ?? null,
-            },
-          })
-          .eq('id', site.contact_id)
-      }
-    }
-
     // Category (from the uploaded lead file) is the primary signal.
-    const nc = nicheFromTemplate(effectiveTemplate, [
+    const nc = nicheFromTemplate(site.template, [
       siteLead?.category,
       cf.category,
       siteLead?.niche,
@@ -938,6 +806,13 @@ Deno.serve(async (req) => {
       siteLead?.company_name,
       cf.company,
     ])
+
+    if (site.generation_mode !== 'freeform' && site.template !== `${nc.key === 'hair_salon' ? 'hair_salon' : 'auto_workshop'}_v1`) {
+      await supabase
+        .from('generated_sites')
+        .update({ template: `${nc.key === 'hair_salon' ? 'hair_salon' : 'auto_workshop'}_v1` })
+        .eq('id', generated_site_id)
+    }
 
     const branding = scraped.branding ?? {}
 
@@ -1032,21 +907,23 @@ Deno.serve(async (req) => {
     // typically low quality and just confuse the plan).
     const screenshotUrl: string | null = nc.useLeadImages ? (scraped.screenshot_url ?? null) : null
 
+    // Regen feedback: injected when the user clicks "Regenerera" on /site-approvals
+    const regenFeedback = typeof cf.regen_feedback === 'string' && cf.regen_feedback.trim()
+      ? String(cf.regen_feedback).trim()
+      : null
+
     // -----------------------------------------------------------------------
-    // MODERN SITE BUILDER
-    // AI designs and writes the whole site from the raw Firecrawl material
-    // while following the selected block-template family.
+    // FREEFORM ENGINE (generation_mode = 'freeform')
+    // AI designs and writes the whole site from the raw Firecrawl material.
     // One step per invocation; the row is re-queued until the site is complete.
+    // Everything below this block is the untouched template engine.
     // -----------------------------------------------------------------------
-    {
+    if (site.generation_mode === 'freeform') {
       const ffCtx: FreeformCtx = {
         supabase,
         siteId: generated_site_id,
         openrouterKey,
         scraped,
-        selectedTemplateFamily: effectiveTemplate in BLOCK_TEMPLATE_FAMILIES
-          ? effectiveTemplate as BlockTemplateFamilyKey
-          : null,
         facts: {
           business_name: facts.business_name,
           phone: facts.phone,
@@ -1125,7 +1002,7 @@ Deno.serve(async (req) => {
           ? 'Freeform: modellen tog för lång tid på detta steg.'
           : `Freeform error: ${(err as Error).message}`
         console.error('freeform error', err)
-        await failOrRetry(supabase, generated_site_id, nextAttempts, msg)
+        await failOrRetry(supabase, generated_site_id, nextAttempts, msg, siteLeadId)
         return json({ ok: false, mode: 'freeform', error: msg }, 200)
       } finally {
         clearInterval(heartbeat)
@@ -1133,8 +1010,6 @@ Deno.serve(async (req) => {
     }
 
 
-    // Legacy template-engine code path intentionally left below as dead code
-    // for reference only. New builds and regenerations return above.
     const userTextParts = [
       `Skapa en kompakt innehållsplan för en 3-sidig premium-sajt. Utgångspunkt: ${nc.label.toLowerCase()}, men LÄS källdatan först och skriv för det verksamheten FAKTISKT gör. Skriv ENDAST JSON enligt schemat.`,
       siteLead?.category ? `Kategori enligt lead-datan: ${siteLead.category}` : '',
@@ -1219,7 +1094,7 @@ Deno.serve(async (req) => {
         if (!aiResp.ok) {
           const errText = await aiResp.text()
           const msg = `OpenRouter failed (${aiResp.status}): ${errText.slice(0, 400)}`
-          await failOrRetry(supabase, generated_site_id, nextAttempts, msg)
+          await failOrRetry(supabase, generated_site_id, nextAttempts, msg, siteLeadId)
           return
         }
 
@@ -1237,7 +1112,7 @@ Deno.serve(async (req) => {
           if (parsed?.error === 'invalid business name') {
             await supabase.from('generated_sites').update({ status: 'failed', error_message: msg }).eq('id', generated_site_id)
           } else {
-            await failOrRetry(supabase, generated_site_id, nextAttempts, msg)
+            await failOrRetry(supabase, generated_site_id, nextAttempts, msg, siteLeadId)
           }
           return
         }
@@ -1251,7 +1126,7 @@ Deno.serve(async (req) => {
           : await polishCopyWithClaude({
               plan: parsed,
               facts,
-              openaiKey,
+              openrouterKey,
               nc: ncFinal,
               language: siteLead?.language === 'en' ? 'en' : 'sv',
             }).catch((e) => {
@@ -1282,7 +1157,7 @@ Deno.serve(async (req) => {
           ? 'Timed out after 75s — model took too long.'
           : `Error: ${(err as Error).message}`
         console.error('generate error', err)
-        await failOrRetry(supabase, generated_site_id, nextAttempts, msg)
+        await failOrRetry(supabase, generated_site_id, nextAttempts, msg, siteLeadId)
       } finally {
         clearTimeout(timeoutId)
         clearInterval(heartbeat)
@@ -1305,11 +1180,11 @@ Deno.serve(async (req) => {
 async function polishCopyWithClaude(args: {
   plan: SitePlan
   facts: Record<string, unknown>
-  openaiKey: string
+  openrouterKey: string
   nc: NicheConfig
   language?: 'sv' | 'en'
 }): Promise<SitePlan> {
-  const { plan, facts, openaiKey, nc, language } = args
+  const { plan, facts, openrouterKey, nc, language } = args
   const english = language === 'en'
 
   const user = `${english ? 'FACTS (do not invent information — stay inside these facts):' : 'FAKTA (påhittad information är förbjuden — håll dig till dessa):'}
@@ -1323,15 +1198,17 @@ ${english ? 'Return the same JSON with improved natural English copy.' : 'Return
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 45_000)
   try {
-    const resp = await fetch(OPENAI_URL, {
+    const resp = await fetch(OPENROUTER_URL, {
       method: 'POST',
       signal: controller.signal,
       headers: {
-        Authorization: `Bearer ${openaiKey}`,
+        Authorization: `Bearer ${openrouterKey}`,
         'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://emailsbotlio.lovable.app',
+        'X-Title': 'Botlio Site Copy Polish',
       },
       body: JSON.stringify({
-        model: POLISH_MODEL,
+        model: 'openai/gpt-4o-mini',
         messages: [
           { role: 'system', content: english ? 'You are a senior English copy editor for premium small-business websites. Keep the JSON structure exactly, improve the language, and never invent facts.' : nc.polishSystemPrompt },
           { role: 'user', content: user },
@@ -2210,19 +2087,31 @@ function parseCssColor(color: string): { r: number; g: number; b: number } | nul
   return null
 }
 
-async function failOrRetry(supabase: any, id: string, attempts: number, msg: string) {
-  if (attempts >= MAX_ATTEMPTS) {
-    await supabase.from('generated_sites').update({
-      status: 'failed',
-      error_message: `${msg} (max ${MAX_ATTEMPTS} attempts reached)`,
-    }).eq('id', id)
-  } else {
+async function failOrRetry(supabase: any, id: string, attempts: number, msg: string, siteLeadId?: string | null) {
+  const statusMatch = msg.match(/(?:failed|status|http|[a-z0-9._/-]+)\s*\(?([45]\d\d)\)?/i)
+  const incident = await recordPipelineFailure(supabase, {
+    provider: 'openrouter',
+    sourceFunction: 'process-site-jobs',
+    message: msg,
+    httpStatus: statusMatch ? Number(statusMatch[1]) : null,
+    siteLeadId: siteLeadId ?? null,
+    generatedSiteId: id,
+  })
+  if (incident.isPaused) {
     await supabase.from('generated_sites').update({
       status: 'queued',
       queued_at: new Date().toISOString(),
-      error_message: `Retrying (attempt ${attempts}/${MAX_ATTEMPTS}): ${msg}`,
+      error_message: `Pipeline paused after ${incident.errorCount} matching OpenRouter errors: ${msg}`,
     }).eq('id', id)
+    return
   }
+  // Provider failures stay retryable. The circuit breaker, not an arbitrary
+  // per-site attempt cap, stops the queue after five matching failures.
+  await supabase.from('generated_sites').update({
+    status: 'queued',
+    queued_at: new Date().toISOString(),
+    error_message: `Retrying after provider error (attempt ${attempts}): ${msg}`,
+  }).eq('id', id)
 }
 
 function json(body: unknown, status = 200): Response {

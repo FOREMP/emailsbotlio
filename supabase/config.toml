@@ -15,11 +15,5 @@ project_id = "eyliwidiljmzllsmytdh"
     verify_jwt = false
   [functions.track-open]
     verify_jwt = false
-  [functions.check-tracking-hosts]
-    # Public cron target with bounded, input-free behavior. It can only test the
-    # active sending domains already stored by the service and is rate-limited.
-    verify_jwt = false
-  [functions.setup-tracking-proxy]
-    # JWT validation is performed inside the function so the browser receives a
-    # useful JSON error and the service-role client is never exposed.
-    verify_jwt = false
+  [functions.resume-site-pipeline]
+    verify_jwt = true

@@ -5,6 +5,7 @@ import {
   Sparkles, Target, CheckCircle2, ChevronDown, Rocket,
 } from "lucide-react";
 import Header from "@/components/Header";
+import SitePipelineAlert from "@/components/SitePipelineAlert";
 import { cn } from "@/lib/utils";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
@@ -106,6 +107,7 @@ const AppLayout = ({ children, bare }: AppLayoutProps) => {
             </div>
           </div>
         </nav>
+        <SitePipelineAlert />
         <main className={bare ? "" : "container mx-auto px-4 py-8"}>{children}</main>
       </div>
     </div>
