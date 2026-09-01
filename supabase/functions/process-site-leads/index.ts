@@ -190,8 +190,15 @@ Deno.serve(async (req) => {
         report.audited++
       } catch (e) {
         report.errors.push(`audit ${row.id}: ${(e as Error).message}`)
+        if (e instanceof ScrapeProviderError) {
+          // The scraper is down for everyone (no credits / bad key). Retrying
+          // the rest of the batch just spams errors — stop auditing this tick.
+          report.errors.push('audit halted: scrape provider unavailable — check Firecrawl credits/key')
+          break
+        }
       }
     }
+
 
     // ---------------- 3. GENERATE -----------------
     // Build budgets are language-specific and run side by side:
