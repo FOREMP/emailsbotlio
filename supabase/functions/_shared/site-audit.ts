@@ -38,6 +38,18 @@ export interface ScrapeResult {
   blocked: boolean
 }
 
+/**
+ * Raised when Firecrawl itself failed (out of credits, auth, rate limit) rather
+ * than the lead's site being unreadable. Callers must NOT score a lead from
+ * this — the lead has to stay in the queue until scraping works again.
+ */
+export class ScrapeProviderError extends Error {
+  constructor(public status: number, message: string) {
+    super(message)
+    this.name = 'ScrapeProviderError'
+  }
+}
+
 export function normaliseUrl(raw: string): string {
   const s = (raw ?? '').trim()
   if (!s) return ''
@@ -49,6 +61,8 @@ export function normaliseUrl(raw: string): string {
 export async function scrapeForAudit(url: string, fcKey: string): Promise<ScrapeResult> {
   const empty: ScrapeResult = { markdown: '', title: '', description: '', screenshot: null, blocked: true }
   if (!url) return empty
+
+
 
   const attempt = async (withScreenshot: boolean) => {
     const formats: unknown[] = ['markdown']
