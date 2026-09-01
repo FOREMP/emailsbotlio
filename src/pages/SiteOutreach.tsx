@@ -170,7 +170,9 @@ export default function SiteOutreach() {
       if (page.length < 1000) break;
     }
 
-    const stats: SentEmailRow[] = [];
+    // The query below selects the analytics columns plus the extra ones the
+    // preview list needs (body, open_count, contact_id), so rows satisfy both.
+    const stats: (SentEmailRow & SentRow)[] = [];
     for (let i = 0; i < allEnrIds.length; i += 200) {
       const chunk = allEnrIds.slice(i, i + 200);
       const { data, error } = await supabase
@@ -183,14 +185,15 @@ export default function SiteOutreach() {
       if (error) {
         toast({ title: "Kunde inte ladda 30-dagarsstatistik", description: error.message, variant: "destructive" });
       } else if (data) {
-        stats.push(...(data as SentEmailRow[]));
+        stats.push(...(data as unknown as (SentEmailRow & SentRow)[]));
       }
     }
 
-    const sent = stats
+    const sent: SentRow[] = stats
       .slice()
       .sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime())
-      .slice(0, 5) as SentRow[];
+      .slice(0, 5);
+
 
     setNodes((ns ?? []) as Node[]);
     setEnrollments(enrsWithContact as any);
