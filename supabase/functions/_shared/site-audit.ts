@@ -67,7 +67,13 @@ export async function scrapeForAudit(url: string, fcKey: string): Promise<Scrape
       }),
     })
     const data = await resp.json().catch(() => ({}))
-    if (!resp.ok) return null
+    if (!resp.ok) {
+      // Silent nulls here made a total Firecrawl outage look like "every site is
+      // blocked", so always surface the provider's own status and message.
+      console.error(`firecrawl scrape failed [${resp.status}] ${url}: ${JSON.stringify(data).slice(0, 400)}`)
+      return null
+    }
+
     const d = data.data ?? data
     return {
       markdown: (d.markdown ?? '') as string,
