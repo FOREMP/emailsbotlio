@@ -53,35 +53,54 @@ export async function scrapeForAudit(url: string, fcKey: string): Promise<Scrape
   const attempt = async (withScreenshot: boolean) => {
     const formats: unknown[] = ['markdown']
     if (withScreenshot) formats.push({ type: 'screenshot', fullPage: false, viewport: { width: 1280, height: 900 } })
-    const resp = await fetch(`${FIRECRAWL_V2}/scrape`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url,
-        formats,
-        // Full page, not just "main content" — nav, hero and footer are exactly
-        // the parts that reveal whether a site looks modern.
-        onlyMainContent: false,
-        waitFor: 2500,
-        timeout: 45000,
-      }),
-    })
-    const data = await resp.json().catch(() => ({}))
-    if (!resp.ok) {
-      // Silent nulls here made a total Firecrawl outage look like "every site is
-      // blocked", so always surface the provider's own status and message.
-      console.error(`firecrawl scrape failed [${resp.status}] ${url}: ${JSON.stringify(data).slice(0, 400)}`)
-      return null
-    }
 
-    const d = data.data ?? data
-    return {
-      markdown: (d.markdown ?? '') as string,
-      title: (d.metadata?.title ?? '') as string,
-      description: (d.metadata?.description ?? '') as string,
-      screenshot: (d.screenshot ?? d.screenshotUrl ?? null) as string | null,
-      blocked: false,
+    // Firecrawl enforces a per-minute request cap. A 429 says nothing about the
+    // lead's website, so retry it instead of scoring the lead as unreadable.
+    for (let tryNo = 0; tryNo < 3; tryNo++) {
+      const resp = await fetch(`${FIRECRAWL_V2}/scrape`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url,
+          formats,
+          // Full page, not just "main content" — nav, hero and footer are exactly
+          // the parts that reveal whether a site looks modern.
+          onlyMainContent: false,
+          waitFor: 2500,
+          timeout: 45000,
+        }),
+      })
+      const data = await resp.json().catch(() => ({}))
+
+      if (resp.status === 429 && tryNo < 2) {
+        const retryHeader = Number(resp.headers.get('retry-after'))
+        const fromBody = /retry after (\d+)s/i.exec(JSON.stringify(data ?? {}))?.[1]
+        const waitSec = Math.min(
+          40,
+          Number.isFinite(retryHeader) && retryHeader > 0 ? retryHeader : Number(fromBody) || 15,
+        )
+        console.warn(`firecrawl 429 for ${url} — waiting ${waitSec}s (try ${tryNo + 1}/3)`)
+        await new Promise((r) => setTimeout(r, waitSec * 1000))
+        continue
+      }
+
+      if (!resp.ok) {
+        // Silent nulls here made a Firecrawl outage look like "every site is
+        // blocked", so always surface the provider's own status and message.
+        console.error(`firecrawl scrape failed [${resp.status}] ${url}: ${JSON.stringify(data).slice(0, 400)}`)
+        return null
+      }
+
+      const d = data.data ?? data
+      return {
+        markdown: (d.markdown ?? '') as string,
+        title: (d.metadata?.title ?? '') as string,
+        description: (d.metadata?.description ?? '') as string,
+        screenshot: (d.screenshot ?? d.screenshotUrl ?? null) as string | null,
+        blocked: false,
+      }
     }
+    return null
   }
 
   try {
@@ -96,6 +115,7 @@ export async function scrapeForAudit(url: string, fcKey: string): Promise<Scrape
 
   return empty
 }
+
 
 const SYSTEM_PROMPT = [
   'Du bedömer små företags hemsidor för en säljpipeline som säljer NYA hemsidor.',
