@@ -88,6 +88,12 @@ export default function SiteOutreach() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [savingLimit, setSavingLimit] = useState(false);
   const [stepFilter, setStepFilter] = useState<StepFilter>("all");
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  // The queue table is long, so it stays collapsed until asked for.
+  const [queueOpen, setQueueOpen] = useState(() => {
+    try { return localStorage.getItem("outreach-queue-open") === "1"; } catch { return false; }
+  });
+  const [queuePage, setQueuePage] = useState(1);
 
   const load = useCallback(async () => {
     setLoading(true);
