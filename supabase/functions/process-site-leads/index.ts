@@ -1,8 +1,8 @@
 // Site-lead outreach orchestrator.
 // Runs every 10 min (cron) or on-demand. Three phases per tick:
 //   1. RECONCILE — advance in-flight generated_sites through scraped → queued
-//      → generated → live, mirror status onto site_leads (awaiting_approval
-//      when live, failed when the site pipeline errored).
+//      → generated → live, then either queue outreach automatically or send
+//      the lead to manual approval according to its saved auto_send choice.
 //   2. GENERATE — derive independent SV/EN build targets from each outreach
 //      sequence's throttle (2x daily first-mail capacity), atomically claim
 //      leads, then create generated_sites jobs without cross-language starvation.
@@ -577,20 +577,36 @@ async function reconcile(
   serviceKey: string,
   report: { errors: string[] },
 ): Promise<number> {
-  // Only look at leads currently mid-flight
-  const { data: leads } = await supabase
-    .from('site_leads')
-    .select('id, status, generated_site_id')
-    .eq('status', 'generating')
-    .not('generated_site_id', 'is', null)
-    .limit(50)
+  const leadFields = 'id, user_id, company_name, email, phone, website, category, language, audit_score, audit_reason, audit_details, status, auto_send, generated_site_id'
+  const [{ data: inFlight, error: inFlightError }, { data: recovery, error: recoveryError }] = await Promise.all([
+    supabase
+      .from('site_leads')
+      .select(leadFields)
+      .eq('status', 'generating')
+      .not('generated_site_id', 'is', null)
+      .limit(50),
+    // Older deployments always used awaiting_approval here. Recover those
+    // rows automatically without requiring the operator to click twice.
+    supabase
+      .from('site_leads')
+      .select(leadFields)
+      .eq('status', 'awaiting_approval')
+      .eq('auto_send', true)
+      .not('generated_site_id', 'is', null)
+      .limit(25),
+  ])
+  if (inFlightError) throw new Error(`reconcile in-flight leads: ${inFlightError.message}`)
+  if (recoveryError) throw new Error(`reconcile auto-send recovery: ${recoveryError.message}`)
+
+  const leads = [...(inFlight ?? []), ...(recovery ?? [])]
   if (!leads?.length) return 0
 
-  const ids = leads.map((l) => l.generated_site_id!).filter(Boolean)
-  const { data: sites } = await supabase
+  const ids = [...new Set(leads.map((l: any) => l.generated_site_id).filter(Boolean))]
+  const { data: sites, error: sitesError } = await supabase
     .from('generated_sites')
     .select('id, status, demo_site_url, error_message')
     .in('id', ids)
+  if (sitesError) throw new Error(`reconcile generated sites: ${sitesError.message}`)
 
   const byId = new Map((sites ?? []).map((s: any) => [s.id, s]))
   let moved = 0
@@ -598,6 +614,10 @@ async function reconcile(
   for (const lead of leads) {
     const gs: any = byId.get(lead.generated_site_id!)
     if (!gs) continue
+
+    // A recovery row already has a finished approval state. Do not restart an
+    // earlier pipeline step if its generated site is unexpectedly not live.
+    if (lead.status === 'awaiting_approval' && gs.status !== 'live') continue
 
     if (gs.status === 'scraped') {
       await invokeFn(supabaseUrl, serviceKey, 'generate-site', { generated_site_id: gs.id })
@@ -620,10 +640,26 @@ async function reconcile(
         moved++
         continue
       }
-      await supabase.from('site_leads').update({
-        status: 'awaiting_approval',
-        demo_url: gs.demo_site_url,
-      }).eq('id', lead.id)
+      if (lead.auto_send) {
+        try {
+          await approveAndEnrollLead(supabase, lead, gs.demo_site_url)
+        } catch (error) {
+          // Keep the completed site visible and retryable. auto_send remains
+          // true, and the idempotent enrollment code can safely run next tick.
+          await supabase.from('site_leads').update({
+            status: 'awaiting_approval',
+            demo_url: gs.demo_site_url,
+            feedback: `Automatic outreach setup failed: ${(error as Error).message}`.slice(0, 500),
+          }).eq('id', lead.id)
+          report.errors.push(`auto-send ${lead.id}: ${(error as Error).message}`)
+        }
+      } else {
+        const { error } = await supabase.from('site_leads').update({
+          status: 'awaiting_approval',
+          demo_url: gs.demo_site_url,
+        }).eq('id', lead.id)
+        if (error) report.errors.push(`manual-review ${lead.id}: ${error.message}`)
+      }
       moved++
     } else if (gs.status === 'failed') {
       await supabase.from('site_leads').update({
@@ -634,6 +670,116 @@ async function reconcile(
     }
   }
   return moved
+}
+
+async function approveAndEnrollLead(
+  supabase: SupabaseAdmin,
+  lead: any,
+  demoUrl: string,
+): Promise<void> {
+  if (!lead.email) throw new Error('lead has no email address')
+
+  const language = normaliseLanguage(lead.language)
+  const sequenceName = OUTREACH_SEQUENCES[language].name
+  const { data: sequence, error: sequenceError } = await supabase
+    .from('sequences')
+    .select('id, contact_list_id')
+    .eq('user_id', lead.user_id)
+    .eq('name', sequenceName)
+    .maybeSingle()
+  if (sequenceError) throw new Error(`sequence lookup: ${sequenceError.message}`)
+  if (!sequence?.id || !sequence.contact_list_id) throw new Error(`${sequenceName} is missing its contact list`)
+
+  const { data: triggerNode, error: triggerError } = await supabase
+    .from('sequence_nodes')
+    .select('id')
+    .eq('sequence_id', sequence.id)
+    .eq('node_type', 'trigger')
+    .maybeSingle()
+  if (triggerError) throw new Error(`trigger lookup: ${triggerError.message}`)
+  if (!triggerNode?.id) throw new Error(`${sequenceName} has no trigger node`)
+
+  const email = String(lead.email).toLowerCase().trim()
+  const firstName = email.split('@')[0].split(/[._-]/)[0].replace(/^\w/, (character) => character.toUpperCase())
+  const weakness = lead.audit_details?.weaknesses?.[0] ?? lead.audit_reason ?? ''
+  const customFields = {
+    site_lead_id: lead.id,
+    company_name: lead.company_name,
+    demo_url: demoUrl,
+    website: lead.website ?? '',
+    audit_weakness: weakness,
+    audit_score: lead.audit_score ?? '',
+    category: lead.category ?? '',
+    language,
+  }
+
+  const { data: contacts, error: contactLookupError } = await supabase
+    .from('contacts')
+    .select('id, custom_fields')
+    .eq('user_id', lead.user_id)
+    .eq('list_id', sequence.contact_list_id)
+    .eq('email', email)
+    .limit(1)
+  if (contactLookupError) throw new Error(`contact lookup: ${contactLookupError.message}`)
+
+  let contactId = contacts?.[0]?.id as string | undefined
+  if (contactId) {
+    const mergedFields = { ...((contacts?.[0]?.custom_fields as Record<string, unknown>) ?? {}), ...customFields }
+    const { error } = await supabase.from('contacts').update({
+      first_name: firstName,
+      demo_site_url: demoUrl,
+      custom_fields: mergedFields,
+    }).eq('id', contactId)
+    if (error) throw new Error(`contact update: ${error.message}`)
+  } else {
+    const { data: inserted, error } = await supabase
+      .from('contacts')
+      .insert({
+        user_id: lead.user_id,
+        list_id: sequence.contact_list_id,
+        email,
+        first_name: firstName,
+        phone: lead.phone ?? null,
+        demo_site_url: demoUrl,
+        custom_fields: customFields,
+        tags: ['site-demo'],
+      })
+      .select('id')
+      .single()
+    if (error) throw new Error(`contact create: ${error.message}`)
+    contactId = inserted.id
+  }
+
+  // Do not rewind an existing enrollment. Reconcile may retry after a timeout;
+  // preserving the current step prevents duplicate first emails.
+  const { data: enrollments, error: enrollmentLookupError } = await supabase
+    .from('enrollments')
+    .select('id')
+    .eq('user_id', lead.user_id)
+    .eq('sequence_id', sequence.id)
+    .eq('contact_id', contactId)
+    .limit(1)
+  if (enrollmentLookupError) throw new Error(`enrollment lookup: ${enrollmentLookupError.message}`)
+
+  if (!enrollments?.length) {
+    const { error } = await supabase.from('enrollments').insert({
+      user_id: lead.user_id,
+      sequence_id: sequence.id,
+      contact_id: contactId,
+      status: 'active',
+      current_node_id: triggerNode.id,
+      current_step: 0,
+      next_send_at: new Date().toISOString(),
+    })
+    if (error && error.code !== '23505') throw new Error(`enrollment create: ${error.message}`)
+  }
+
+  const { error: leadError } = await supabase.from('site_leads').update({
+    status: 'auto_approved',
+    demo_url: demoUrl,
+    approved_at: new Date().toISOString(),
+  }).eq('id', lead.id)
+  if (leadError) throw new Error(`lead finalize: ${leadError.message}`)
 }
 
 // ---------------------------------------------------------------------------

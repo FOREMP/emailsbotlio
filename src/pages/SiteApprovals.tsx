@@ -29,6 +29,7 @@ type LeadRow = {
   demo_url: string | null;
   generated_site_id: string | null;
   feedback: string | null;
+  auto_send: boolean;
   updated_at: string;
 };
 
@@ -106,7 +107,7 @@ export default function SiteApprovals() {
       const { data, error, count } = await applyListFilters(
         supabase
           .from("site_leads")
-          .select("id, company_name, language, email, website, phone, category, status, audit_score, audit_reason, audit_details, demo_url, generated_site_id, feedback, updated_at", { count: "exact" }),
+          .select("id, company_name, language, email, website, phone, category, status, audit_score, audit_reason, audit_details, demo_url, generated_site_id, feedback, auto_send, updated_at", { count: "exact" }),
         true,
       );
       if (error) throw error;
@@ -136,7 +137,7 @@ export default function SiteApprovals() {
         false,
       );
       if (error) throw error;
-      setRows(((data ?? []) as any[]).map((row) => ({ ...row, language: "sv" })) as LeadRow[]);
+      setRows(((data ?? []) as any[]).map((row) => ({ ...row, language: "sv", auto_send: false })) as LeadRow[]);
       setTotalCount(count ?? 0);
       await loadCounts();
       toast({
@@ -541,7 +542,15 @@ export default function SiteApprovals() {
                   <h2 className="text-lg font-semibold">{row.company_name}</h2>
                   <Badge className={STATUS_BADGE[row.status] ?? "bg-slate-500"}>{row.status}</Badge>
                   {row.status === "auto_approved" && (
-                    <Badge variant="outline" className="ml-1 text-[10px]">auto-skickad</Badge>
+                    <Badge variant="outline" className="ml-1 text-[10px]">direkt till utskickskö</Badge>
+                  )}
+                  {row.status === "awaiting_approval" && row.auto_send && (
+                    <Badge variant="outline" className="ml-1 border-amber-500 text-amber-700">
+                      Direktutskick väntar på synkning
+                    </Badge>
+                  )}
+                  {row.status === "awaiting_approval" && !row.auto_send && (
+                    <Badge variant="outline" className="ml-1 text-[10px]">manuell granskning vald</Badge>
                   )}
                   <Badge variant="outline">{(row.language ?? "sv").toUpperCase()}</Badge>
                   {row.audit_score != null && (
