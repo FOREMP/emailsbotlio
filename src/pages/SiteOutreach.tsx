@@ -61,6 +61,7 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 const STOCKHOLM_TZ = "Europe/Stockholm";
+const QUEUE_PAGE_SIZE = 20;
 const COUNTED_SEND_STATUSES = new Set(["queued", "sent", "bounced", "complained", "unsubscribed"]);
 
 const stockholmDateKey = (value: string | Date): string | null => {
