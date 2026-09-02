@@ -1143,6 +1143,99 @@ export type Database = {
           },
         ]
       }
+      site_pipeline_breakers: {
+        Row: {
+          error_code: string | null
+          error_count: number
+          error_message: string | null
+          ignored_count: number
+          is_paused: boolean
+          last_error_at: string | null
+          paused_at: string | null
+          provider: string
+          resumed_at: string | null
+          updated_at: string
+          window_started_at: string | null
+        }
+        Insert: {
+          error_code?: string | null
+          error_count?: number
+          error_message?: string | null
+          ignored_count?: number
+          is_paused?: boolean
+          last_error_at?: string | null
+          paused_at?: string | null
+          provider: string
+          resumed_at?: string | null
+          updated_at?: string
+          window_started_at?: string | null
+        }
+        Update: {
+          error_code?: string | null
+          error_count?: number
+          error_message?: string | null
+          ignored_count?: number
+          is_paused?: boolean
+          last_error_at?: string | null
+          paused_at?: string | null
+          provider?: string
+          resumed_at?: string | null
+          updated_at?: string
+          window_started_at?: string | null
+        }
+        Relationships: []
+      }
+      site_pipeline_error_events: {
+        Row: {
+          created_at: string
+          error_code: string
+          error_message: string
+          generated_site_id: string | null
+          http_status: number | null
+          id: number
+          provider: string
+          site_lead_id: string | null
+          source_function: string
+        }
+        Insert: {
+          created_at?: string
+          error_code: string
+          error_message: string
+          generated_site_id?: string | null
+          http_status?: number | null
+          id?: number
+          provider: string
+          site_lead_id?: string | null
+          source_function: string
+        }
+        Update: {
+          created_at?: string
+          error_code?: string
+          error_message?: string
+          generated_site_id?: string | null
+          http_status?: number | null
+          id?: number
+          provider?: string
+          site_lead_id?: string | null
+          source_function?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "site_pipeline_error_events_generated_site_id_fkey"
+            columns: ["generated_site_id"]
+            isOneToOne: false
+            referencedRelation: "generated_sites"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "site_pipeline_error_events_site_lead_id_fkey"
+            columns: ["site_lead_id"]
+            isOneToOne: false
+            referencedRelation: "site_leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       suppressed_emails: {
         Row: {
           created_at: string
@@ -1192,6 +1285,21 @@ export type Database = {
           user_id: string
         }[]
       }
+      record_site_pipeline_failure: {
+        Args: {
+          p_error_code: string
+          p_error_message: string
+          p_generated_site_id?: string
+          p_http_status?: number
+          p_provider: string
+          p_site_lead_id?: string
+          p_source_function: string
+        }
+        Returns: {
+          error_count: number
+          is_paused: boolean
+        }[]
+      }
       seed_default_senders: { Args: never; Returns: number }
       sender_capacity_remaining: {
         Args: { _is_followup: boolean; _sender_id: string }
@@ -1217,12 +1325,12 @@ export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1246,11 +1354,11 @@ export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1271,11 +1379,11 @@ export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1296,11 +1404,11 @@ export type Enums<
   DefaultSchemaEnumNameOrOptions extends
     | keyof DefaultSchema["Enums"]
     | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1313,11 +1421,11 @@ export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
     | keyof DefaultSchema["CompositeTypes"]
     | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never = never,
+    : never) = never,
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
