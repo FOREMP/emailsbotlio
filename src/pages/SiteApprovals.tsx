@@ -56,7 +56,7 @@ export default function SiteApprovals() {
   const [rows, setRows] = useState<LeadRow[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [totalCount, setTotalCount] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [regen, setRegen] = useState<LeadRow | null>(null);
   const [feedback, setFeedback] = useState("");
   const [regenMode, setRegenMode] = useState<"keep" | "template" | "freeform">("keep");
@@ -65,6 +65,14 @@ export default function SiteApprovals() {
   const [filter, setFilter] = useState<string>("awaiting_approval");
   const [languageFilter, setLanguageFilter] = useState<string>("all");
   const [page, setPage] = useState(1);
+  // The lead list is heavy (two iframes per row), so it stays collapsed until
+  // asked for. The choice is remembered between visits.
+  const [listOpen, setListOpen] = useState(() => {
+    try { return localStorage.getItem("approvals-list-open") === "1"; } catch { return false; }
+  });
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const loadedKeyRef = useRef<string | null>(null);
+
 
   const loadCounts = async () => {
     const statusQueries = APPROVAL_STATUSES.map((status) => {
