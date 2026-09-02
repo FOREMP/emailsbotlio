@@ -583,9 +583,27 @@ export default function SiteOutreach() {
                 })}
               </tbody>
             </table>
+            <div className="flex items-center justify-between gap-3 pt-3 mt-2 border-t">
+              <div className="text-xs text-muted-foreground">
+                Sida {queuePage} av {queuePageCount} · Visar {pagedEnrollments.length} av {enrollments.length}
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" disabled={queuePage <= 1}
+                  onClick={() => setQueuePage((p) => Math.max(1, p - 1))}>
+                  Föregående
+                </Button>
+                <Button size="sm" variant="outline" disabled={queuePage >= queuePageCount}
+                  onClick={() => setQueuePage((p) => Math.min(queuePageCount, p + 1))}>
+                  Nästa
+                </Button>
+              </div>
+            </div>
           </div>
-        )}
+            )}
+          </CollapsibleContent>
+        </Collapsible>
       </Card>
+
 
       <Card className="p-4">
         <h2 className="text-lg font-semibold mb-3 flex items-center gap-2"><Mail className="h-4 w-4" /> Senaste 5 skickade mail</h2>
