@@ -11,7 +11,8 @@ import { toast } from "@/hooks/use-toast";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
-import { Loader2, StopCircle, Mail, Save, Eye, Gauge, BarChart3 } from "lucide-react";
+import { Loader2, StopCircle, Mail, Save, Eye, Gauge, BarChart3, ChevronDown, RefreshCw } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { VolumeTrendChart } from "@/components/analytics/VolumeTrendChart";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
