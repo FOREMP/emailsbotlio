@@ -151,12 +151,31 @@ export default function SiteApprovals() {
     }
   };
 
+  const listKey = `${filter}|${languageFilter}|${page}`;
+
+  const runLoad = async () => {
+    loadedKeyRef.current = listKey;
+    await load();
+    setLastUpdated(new Date());
+  };
+
+  // Counts are cheap and drive the filter chips, so they load on open.
   useEffect(() => {
-    load();
-    // Poll every 30s so newly-live demos + status changes show up automatically
-    const t = setInterval(load, 30_000);
-    return () => clearInterval(t);
-  }, [filter, languageFilter, page]);
+    loadCounts();
+  }, [filter, languageFilter]);
+
+  // The list itself is only fetched once the section is expanded, and cached
+  // until filters/page change or you hit "Uppdatera".
+  useEffect(() => {
+    if (!listOpen) return;
+    if (loadedKeyRef.current === listKey) return;
+    runLoad();
+  }, [listKey, listOpen]);
+
+  useEffect(() => {
+    try { localStorage.setItem("approvals-list-open", listOpen ? "1" : "0"); } catch { /* ignore */ }
+  }, [listOpen]);
+
 
   useEffect(() => {
     setPage(1);
