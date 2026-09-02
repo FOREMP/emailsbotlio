@@ -215,6 +215,24 @@ export default function SiteOutreach() {
     load().then(() => setLastUpdated(new Date()));
   }, [load]);
 
+  useEffect(() => {
+    try { localStorage.setItem("outreach-queue-open", queueOpen ? "1" : "0"); } catch { /* ignore */ }
+  }, [queueOpen]);
+
+  useEffect(() => { setQueuePage(1); }, [language, enrollments.length]);
+
+  const queuePageCount = Math.max(1, Math.ceil(enrollments.length / QUEUE_PAGE_SIZE));
+  const pagedEnrollments = useMemo(
+    () => enrollments.slice((queuePage - 1) * QUEUE_PAGE_SIZE, queuePage * QUEUE_PAGE_SIZE),
+    [enrollments, queuePage],
+  );
+
+  const refreshAll = async () => {
+    await load();
+    setLastUpdated(new Date());
+  };
+
+
 
   const sendNodes = useMemo(
     () => nodes.filter((n) => n.node_type === "send_email").sort((a, b) => a.position_y - b.position_y),
