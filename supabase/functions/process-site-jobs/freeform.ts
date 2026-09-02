@@ -22,7 +22,7 @@ export const BUILD_MODEL = 'deepseek/deepseek-v4-flash-0731'
 export const BUILD_FALLBACK_MODEL = 'deepseek/deepseek-chat-v3.1'
 export const BUILD_LAST_RESORT_MODEL = 'openai/gpt-4o-mini'
 export const LANG_MODEL = 'openai/gpt-4o-mini'
-const VERSION = 11
+const VERSION = 12
 const MAX_PAGES = 6
 
 type Stage = 'plan' | 'theme' | 'content' | 'polish_content' | 'render' | 'quality_check' | 'done'
@@ -413,6 +413,7 @@ ${isEnglish(ctx)
 - Follow the selected template family and block order. The blocks define structure and tone; you fill them with the company’s facts.
 - If the template family is a restaurant landing page, keep everything restaurant, bar or café relevant and keep the output for index.html only.
 - If the template family is editorial service, make the tone warmer and more premium while staying factual and source-based.
+- For a landing page, create a complete homepage rather than a short campaign page: use 2 to 4 factual sections about the company, how the work or visit starts, what customers can expect and the next step.
 - If the page is an FAQ page, use faqGroups with 2 to 3 categories and only questions that fit the business category and source material. Fewer good questions are better than many generic ones.
 - If the source material is thin, write elegant, industry-relevant copy but stay careful.`
   : `- All text ska vara på svenska. Översätt källtext som är på engelska.
@@ -426,9 +427,12 @@ ${isEnglish(ctx)
 - Följ vald templatefamilj och blockordning. Blocken styr struktur/känsla; du fyller dem med företagets fakta.
 - Om templatefamiljen är restaurant landingpage: skriv bara restaurang/bar/café-relevant text och håll allt för index.html.
 - Om templatefamiljen är editorial service: gör texten varmare och mer premium, men fortfarande saklig och baserad på kategori/källa.
+- För en startsida: skapa en komplett startsida, inte en kort kampanjsida. Skriv 2-4 sakliga sektioner om företaget, hur ett uppdrag eller besök börjar, vad kunden kan förvänta sig och nästa steg.
 - Om sidan är FAQ: använd faqGroups med 2-3 kategorier och bara frågor som passar företagets kategori/källa. Hellre färre bra frågor än många generiska.
 - Om underlaget är tunt: skriv elegant och branschrelevant men försiktigt.`}
-- Varje textfält max 45 ord.
+${isEnglish(ctx)
+  ? '- Length: heroLead 25-45 words, introText 45-80 words, each section.text 35-70 words and each service.text 20-45 words. Prefer useful substance over short filler.'
+  : '- Längd: heroLead 25-45 ord, introText 45-80 ord, varje section.text 35-70 ord och varje service.text 20-45 ord. Hellre substans än kort utfyllnad.'}
 Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","heroLead":"","introTitle":"","introText":"","primaryCta":"","secondaryCta":"","services":[{"title":"","text":"","detail":""}],"sections":[{"eyebrow":"","title":"","text":"","bullets":[""]}],"faqs":[{"question":"","answer":""}],"faqGroups":[{"title":"","items":[{"question":"","answer":""}]}],"closingTitle":"","closingText":""}`
   const user = [
     `Företag: ${ctx.facts.business_name || '[okänt]'}`,
@@ -579,9 +583,9 @@ function fallbackContent(ctx: FreeformCtx, page: FreeformPageSpec): FreeformPage
             ? 'En första känsla med värme och karaktär'
             : 'Ett första intryck som känns genomarbetat'
       : page.title,
-    introText: sourceFor(ctx, page).slice(0, 360) || (en
-      ? `Here the visitor quickly understands what ${business} offers and how to get in touch.`
-      : `Här får besökaren snabbt förstå vad ${business} erbjuder och hur kontakten tas.`),
+    introText: sourceFor(ctx, page).slice(0, 480) || (en
+      ? `${business} brings its services together around clear communication, a straightforward first contact and an offer that is easy to understand. Get in touch with a short description of what you need, and the conversation can start from the right place.`
+      : `${business} samlar sina tjänster kring tydlig kommunikation, enkel första kontakt och ett erbjudande som är lätt att förstå. Ta kontakt med en kort beskrivning av vad du behöver hjälp med, så kan dialogen börja i rätt ände.`),
     primaryCta: ctx.facts.phone ? (en ? 'Call us' : 'Ring oss') : (en ? 'Contact us' : 'Kontakta oss'),
     secondaryCta: ctx.facts.email ? (en ? 'Email us' : 'Mejla oss') : (en ? 'Contact' : 'Kontakt'),
     services,
@@ -604,12 +608,12 @@ function fallbackContent(ctx: FreeformCtx, page: FreeformPageSpec): FreeformPage
             ? `${profile.venueNoun[0].toUpperCase() + profile.venueNoun.slice(1)} makes it easy to understand the offer and get in touch before booking.`
             : salon
               ? 'The presentation should make the style, service and next step feel natural before any booking happens.'
-              : 'The most important things are shown first so the next step feels simple.'
+              : `${business} keeps the offer clear and the contact direct, so it is easy to describe the need and understand what should happen next.`
           : profile.isClinic
             ? `${profile.venueNoun[0].toUpperCase() + profile.venueNoun.slice(1)} gör det enkelt att förstå utbudet och ta kontakt innan bokning.`
             : salon
               ? 'Presentation, ton och utbud ska göra nästa steg naturligt redan innan bokning.'
-              : 'Det viktigaste lyfts fram först så att nästa steg blir enkelt.',
+              : `${business} håller erbjudandet tydligt och kontakten rak, så att det blir enkelt att beskriva behovet och förstå vad som händer härnäst.`,
         bullets: en
           ? salon ? ['Personal guidance', profile.servicePlural, 'Mobile-friendly contact'] : ['Clear structure', 'Fast contact', 'No invented details']
           : salon ? ['Personlig rådgivning', profile.servicePlural, 'Mobilanpassad kontakt'] : ['Tydlig struktur', 'Snabb kontakt', 'Inga påhittade detaljer'],
@@ -874,12 +878,12 @@ function intro(c: FreeformPageContent, img: string, ctx: FreeformCtx): string {
     : profile.isBeauty
       ? (isEnglish(ctx) ? ['Personal guidance', profile.servicePlural, 'Easy to contact'] : ['Personlig rådgivning', profile.servicePlural, 'Lätt att kontakta'])
       : (isEnglish(ctx) ? ['Clear structure', profile.servicePlural, 'Fast contact'] : ['Tydligt upplägg', profile.servicePlural, 'Snabb kontakt'])
-  const mediaTitle = profile.kind === 'restaurant' ? (isEnglish(ctx) ? 'A sense of the place' : 'En känsla av platsen') : profile.isBeauty ? (isEnglish(ctx) ? 'The feeling before the visit' : 'Känslan inför besöket') : (isEnglish(ctx) ? 'Clear from the first impression' : 'Tydligt från första intryck')
+  const mediaTitle = profile.kind === 'restaurant' ? (isEnglish(ctx) ? 'A sense of the place' : 'En känsla av platsen') : profile.isBeauty ? (isEnglish(ctx) ? 'The feeling before the visit' : 'Känslan inför besöket') : (isEnglish(ctx) ? 'Work, service and a clear next step' : 'Arbete, service och ett tydligt nästa steg')
   const mediaText = profile.kind === 'restaurant'
     ? (isEnglish(ctx) ? 'Imagery, rhythm and short copy help the guest understand the atmosphere before the visit.' : 'Bild, rytm och kort text hjälper gästen förstå atmosfären innan besöket.')
     : profile.isBeauty
       ? (isEnglish(ctx) ? 'A warm and clear presentation that makes the offer easier to understand before booking.' : 'En varm och tydlig presentation som gör det enklare att förstå utbudet innan bokning.')
-      : (isEnglish(ctx) ? 'A concrete presentation that makes the offer easy to understand and act on.' : 'En konkret presentation som gör det enkelt att förstå erbjudandet och ta kontakt.')
+      : (isEnglish(ctx) ? 'Clear information about the offer and direct contact make it easier to start the right conversation.' : 'Tydlig information om erbjudandet och direkt kontakt gör det enklare att starta rätt dialog.')
   return `<section class='section'><div class='wrap split'><div class='stack'><p class='eyebrow'>${profile.kind === 'restaurant' ? (isEnglish(ctx) ? 'Experience' : 'Upplevelse') : (isEnglish(ctx) ? 'First impression' : 'Första intrycket')}</p><h2>${esc(c.introTitle || c.heroTitle || (isEnglish(ctx) ? 'Built for trust' : 'Byggt för förtroende'))}</h2><p class='lead'>${esc(c.introText || '')}</p><div class='tag-row'>${tags.map((t) => `<span>${esc(t)}</span>`).join('')}</div></div>${img ? `<article class='media-card'><img src='${attr(img)}' alt=''><div class='media-body'><h3>${esc(mediaTitle)}</h3><p>${esc(mediaText)}</p></div></article>` : ''}</div></section>`
 }
 function services(c: FreeformPageContent, ctx: FreeformCtx, style: ServiceStyle = 'cards'): string {
@@ -900,8 +904,8 @@ function trustBand(ctx: FreeformCtx, c: FreeformPageContent): string {
       ? [['Personal guidance', 'Every visit starts with a short conversation about what you actually want.'], ['A clear offer', `What ${business} offers is described without invented prices or promises.`], ['Easy contact', 'Call or email and get an answer about what fits best.']]
       : [['Personlig rådgivning', 'Varje besök börjar med ett kort samtal om vad du faktiskt vill ha.'], ['Tydligt utbud', `Det ${business} erbjuder beskrivs utan påhittade priser eller löften.`], ['Enkel kontakt', 'Ring eller mejla så får du svar på vad som passar bäst.']])
     : (en
-      ? [['Clear scope', 'What is included and what happens next is described before the work starts.'], ['Direct contact', `You reach ${business} without going through a form or a queue.`], ['No invented claims', 'Only information that comes from the business itself is presented here.']]
-      : [['Tydlig omfattning', 'Vad som ingår och vad som händer härnäst beskrivs innan arbetet börjar.'], ['Direkt kontakt', `Du når ${business} utan formulär eller kösystem.`], ['Inget påhittat', 'Här presenteras bara information som kommer från verksamheten själv.']])
+      ? [['Clear first contact', 'Describe the need briefly so the conversation can start with the right questions.'], ['Direct contact', `You reach ${business} by phone or email when you are ready to take the next step.`], ['A practical next step', 'The scope and suitable way forward can be clarified before the work begins.']]
+      : [['Tydlig första kontakt', 'Beskriv behovet kort så kan dialogen börja med rätt frågor.'], ['Direkt kontakt', `Du når ${business} via telefon eller mejl när du vill ta nästa steg.`], ['Ett praktiskt nästa steg', 'Omfattning och lämplig väg framåt kan tydliggöras innan arbetet börjar.']])
   return `<section class='section'><div class='wrap'><div class='trust-band'>${items.map(([t, x]) => `<div><h3>${esc(t)}</h3><p>${esc(x)}</p></div>`).join('')}</div></div></section>`
 }
 
@@ -917,9 +921,35 @@ function gallery(ctx: FreeformCtx, imgs: string[], style: GalleryStyle = 'mosaic
   const profile = buildProfile(ctx)
   if (imgs.length < 2) return ''
   const en = isEnglish(ctx)
-  const eyebrow = profile.isBeauty ? (en ? 'Atmosphere' : 'Känsla') : (en ? 'Impression' : 'Intryck')
-  const heading = profile.isClinic ? (en ? 'A reassuring feeling before booking.' : 'En trygg känsla redan innan bokning.') : profile.isBeauty ? (en ? 'A visual feeling that lifts the experience.' : 'En visuell känsla som lyfter upplevelsen.') : (en ? 'A design that feels considered.' : 'En design som känns arbetad.')
-  const lead = en ? 'Large image areas, clear rhythm and strong contrast create a more premium first impression and make the content easier to take in.' : 'Stora bildytor, tydlig rytm och bra kontrast ger ett mer exklusivt första intryck och gör innehållet lättare att ta in.'
+  const eyebrow = profile.isBeauty ? (en ? 'Atmosphere' : 'Känsla') : (en ? 'The work' : 'Arbetet')
+  const heading = profile.isClinic
+    ? (en ? 'A calm setting for the first conversation.' : 'En lugn miljö för den första kontakten.')
+    : profile.isBeauty
+      ? (en ? 'Details that shape the whole experience.' : 'Detaljer som formar hela upplevelsen.')
+      : profile.kind === 'auto'
+        ? (en ? 'Care and precision around every vehicle.' : 'Omsorg och precision kring varje fordon.')
+        : profile.kind === 'construction'
+          ? (en ? 'From planning to a finished result.' : 'Från planering till färdigt resultat.')
+          : (en ? 'A closer look at the service.' : 'En närmare bild av tjänsten.')
+  const lead = profile.isClinic
+    ? (en
+      ? 'A calm first contact gives you room to describe what you need and ask the questions that matter before booking.'
+      : 'En lugn första kontakt ger utrymme att beskriva vad du behöver och ställa viktiga frågor före bokning.')
+    : profile.isBeauty
+      ? (en
+        ? 'The atmosphere, the details and personal guidance all help shape an experience that feels right for you.'
+        : 'Känslan, detaljerna och den personliga vägledningen hjälper till att forma en upplevelse som passar dig.')
+      : profile.kind === 'auto'
+        ? (en
+          ? 'Describe the vehicle and what you have noticed, and the workshop can help clarify the most suitable next step.'
+          : 'Beskriv fordonet och vad du har märkt, så kan verkstaden hjälpa till att tydliggöra lämpligt nästa steg.')
+        : profile.kind === 'construction'
+          ? (en
+            ? 'Share what you want to build, repair or change, along with any photos or measurements you already have.'
+            : 'Berätta vad du vill bygga, reparera eller förändra och skicka gärna med de bilder eller mått du redan har.')
+          : (en
+            ? 'Describe what you need help with, and the first conversation can focus on the right questions and next step.'
+            : 'Beskriv vad du behöver hjälp med, så kan den första dialogen fokusera på rätt frågor och nästa steg.')
   if (style === 'strip') {
     return `<section class='section gallery-strip-section'><div class='wrap'><p class='eyebrow'>${esc(eyebrow)}</p><h2>${esc(heading)}</h2><p class='lead'>${esc(lead)}</p></div><div class='gallery-strip'>${imgs.slice(0, 4).map((src) => `<img src='${attr(src)}' alt=''>`).join('')}</div></section>`
   }
@@ -1252,10 +1282,6 @@ function shouldRenderIntro(plan: FreeformPlan, page: FreeformPageSpec): boolean 
 
 function shouldRenderGallery(plan: FreeformPlan, page: FreeformPageSpec, home: boolean): boolean {
   if (!home || page.pageKind === 'faq') return false
-  if (plan.templateFamily === 'mechanic_precision_workshop') return false
-  if (plan.templateFamily === 'clinic_private_care') return false
-  if (plan.templateFamily === 'byggform_architectural_trust') return false
-  if (plan.templateFamily === 'service_company_modern') return false
   return true
 }
 
@@ -1296,7 +1322,7 @@ function modernTemplateIssues(ctx: FreeformCtx, plan: FreeformPlan, page: Freefo
   if (shouldRenderIntro(plan, page)) {
     const sectionCount = (content.sections || []).filter((s) => s.title && s.text).length
     if (!content.introTitle || !content.introText) issues.push('missing-intro')
-    if (sectionCount < 1 && page.pageKind === 'landing') issues.push('thin-sections')
+    if (sectionCount < 2 && page.pageKind === 'landing') issues.push('thin-sections')
   }
   if (page.pageKind === 'faq') {
     const faqCount = (content.faqs || []).length + (content.faqGroups || []).reduce((sum, g) => sum + (g.items?.length || 0), 0)
@@ -1417,18 +1443,54 @@ const STOCK_BY_KIND: Record<string, string[]> = {
   massage: ['https://images.unsplash.com/photo-1600334129128-685c5582fd35?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1519823551278-64ac92734fb1?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1540555700478-4be289fbecef?auto=format&fit=crop&w=1400&q=80'],
   electrical: ['https://images.unsplash.com/photo-1621905251189-08b45d6a269e?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1581092160562-40aa08e78837?auto=format&fit=crop&w=1400&q=80'],
   plumbing: ['https://images.unsplash.com/photo-1607472586893-edb57bdc0e39?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1585704032915-c3400ca199e7?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1600566752355-35792bedcfea?auto=format&fit=crop&w=1400&q=80'],
-  construction: ['https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1541888946425-d81bb19240f5?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1581094794329-c8112a89af12?auto=format&fit=crop&w=1400&q=80'],
+  construction: ['https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1504307651254-35680f356dfd?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1541888946425-d81bb19240f5?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1400&q=80'],
+  roofing: ['https://images.unsplash.com/photo-1590986701608-1ba9a4d8f4b1?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1504307651254-35680f356dfd?auto=format&fit=crop&w=1400&q=80'],
+  renovation: ['https://images.unsplash.com/photo-1541888946425-d81bb19240f5?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1584622650111-993a426fbf0a?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1400&q=80'],
+  carpentry: ['https://images.unsplash.com/photo-1503389152951-9f343605f61e?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1621905251189-08b45d6a269e?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1523413651479-597eb2da0ad6?auto=format&fit=crop&w=1400&q=80'],
+  groundworks: ['https://images.unsplash.com/photo-1504307651254-35680f356dfd?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1581094794329-c8112a89af12?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&w=1400&q=80'],
+  painting: ['https://images.unsplash.com/photo-1541888946425-d81bb19240f5?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=1400&q=80'],
+  landscaping: ['https://images.unsplash.com/photo-1416879595882-3373a0480b5b?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=1400&q=80'],
+  moving: ['https://images.unsplash.com/photo-1556761175-b413da4baf72?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?auto=format&fit=crop&w=1400&q=80'],
+  locksmith: ['https://images.unsplash.com/photo-1621905251189-08b45d6a269e?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1581092160562-40aa08e78837?auto=format&fit=crop&w=1400&q=80'],
+  hvac: ['https://images.unsplash.com/photo-1581092160562-40aa08e78837?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1600566752355-35792bedcfea?auto=format&fit=crop&w=1400&q=80'],
+  solar: ['https://images.unsplash.com/photo-1509391366360-2e959784a276?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1497435334941-8c899ee9e8e9?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?auto=format&fit=crop&w=1400&q=80'],
   auto: ['https://images.unsplash.com/photo-1486262715619-67b85e0b08d3?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1530046339160-ce3e530c7d2f?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1517524008697-84bbe3c3fd98?auto=format&fit=crop&w=1400&q=80'],
   cleaning: ['https://images.unsplash.com/photo-1581578731548-c64695cc6952?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1563453392212-326f5e854473?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1585421514738-01798e348b17?auto=format&fit=crop&w=1400&q=80'],
   restaurant: ['https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1552566626-52f8b828add9?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=crop&w=1400&q=80'],
   general: ['https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1600&q=80', 'https://images.unsplash.com/photo-1556761175-b413da4baf72?auto=format&fit=crop&w=1400&q=80', 'https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?auto=format&fit=crop&w=1400&q=80'],
 }
 
-function images(ctx: FreeformCtx): string[] {
+function imageKind(ctx: FreeformCtx): string {
   const profile = buildProfile(ctx)
-  const stock = STOCK_BY_KIND[profile.kind || 'general'] ?? STOCK_BY_KIND.general
+  const primary = clean(decodeText([
+    ctx.category,
+    ctx.facts.niche,
+    ctx.nicheLabel,
+    ctx.facts.business_name,
+  ].filter(Boolean).join(' '))).toLowerCase()
+
+  if (/(taklägg|takarbete|takfirma|roofing|roofer)/i.test(primary)) return 'roofing'
+  if (/(markarbete|markentrepren|anläggning|gräv|schakt|excavat|groundwork)/i.test(primary)) return 'groundworks'
+  if (/(snickar|snickeri|carpenter|carpentry|joinery)/i.test(primary)) return 'carpentry'
+  if (/(renover|badrum|köksmont|remodel|renovation)/i.test(primary)) return 'renovation'
+  if (/(måleri|målare|painting|painter)/i.test(primary)) return 'painting'
+  if (/(trädgård|landskap|landscap|garden service|tree service)/i.test(primary)) return 'landscaping'
+  if (/(flyttfirma|flyttservice|moving company|removal company)/i.test(primary)) return 'moving'
+  if (/(låssmed|låsservice|locksmith)/i.test(primary)) return 'locksmith'
+  if (/(ventilation|värmepump|luftkondition|hvac|air conditioning)/i.test(primary)) return 'hvac'
+  if (/(solcell|solpanel|solar)/i.test(primary)) return 'solar'
+  return profile.kind || 'general'
+}
+
+function images(ctx: FreeformCtx): string[] {
+  const stock = STOCK_BY_KIND[imageKind(ctx)] ?? STOCK_BY_KIND.general
   const own = (ctx.imagePool || []).filter((u) => /^https?:\/\//i.test(u) && !/images\.unsplash\.com/i.test(u))
-  return Array.from(new Set([...stock, ...own])).slice(0, 6)
+  // Keep a category-matched stock image in the hero, then mix in real company
+  // images when the scraper found them. This avoids a logo/thumbnail taking
+  // over the hero while still making the rest of the site feel specific.
+  const mixed = [stock[0], own[0], stock[1], own[1], stock[2], own[2], ...stock.slice(3), ...own.slice(3)]
+    .filter((value): value is string => Boolean(value))
+  return Array.from(new Set(mixed)).slice(0, 6)
 
 }
 function cleanContentMap(input: any): Record<string, FreeformPageContent> {

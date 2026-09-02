@@ -12,6 +12,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { ExternalLink, Check, RefreshCw, XCircle, RotateCw, Loader2, ChevronDown } from "lucide-react";
+import { auditScoreLabel } from "@/lib/site-audit-score";
 
 type LeadRow = {
   id: string;
@@ -544,7 +545,10 @@ export default function SiteApprovals() {
                   )}
                   <Badge variant="outline">{(row.language ?? "sv").toUpperCase()}</Badge>
                   {row.audit_score != null && (
-                    <Badge variant="outline">Audit {row.audit_score}/10</Badge>
+                    <>
+                      <Badge className="bg-slate-700">Säljpotential {auditScoreLabel(row.audit_score)}</Badge>
+                      <Badge variant="outline">Sajtkvalitet {row.audit_score}/10</Badge>
+                    </>
                   )}
                 </div>
                 <div className="text-xs text-muted-foreground flex flex-wrap gap-x-3 mt-1">

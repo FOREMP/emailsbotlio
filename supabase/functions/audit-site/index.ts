@@ -156,7 +156,9 @@ async function calibrate(leadIds: string[]): Promise<Response> {
     try {
       const r = await auditWebsite(lead.website, lead.company_name ?? '', fcKey, openrouterKey)
 
-      // Human decision: parked means "they won't buy", anything built means "they will".
+      // audit_score is website quality: high means the current site is good.
+      // Human decision: parked means "good enough", anything built means the
+      // current website quality was low enough to justify a redesign.
       const humanWontBuy = lead.status === 'site_good_enough'
       const modelWontBuy = r.score >= 7
       const match = humanWontBuy === modelWontBuy

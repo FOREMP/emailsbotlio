@@ -60,6 +60,7 @@ export const BLOCK_TEMPLATE_FAMILIES: Record<BlockTemplateFamilyKey, BlockTempla
       'care_paths_editorial_rows',
       'people_and_approach_split',
       'trust_band_confidential',
+      'gallery_industry_relevant',
       'visit_panel_calm',
       'faq_private_visit_optional',
       'cta_soft_conversion',
@@ -97,6 +98,7 @@ export const BLOCK_TEMPLATE_FAMILIES: Record<BlockTemplateFamilyKey, BlockTempla
       'service_cards_workshop',
       'process_diagnostics_band',
       'workshop_standard_story',
+      'gallery_industry_relevant',
       'visit_route_panel',
       'faq_workshop_optional',
       'cta_book_service_band',
@@ -244,6 +246,8 @@ export const BLOCK_TEMPLATE_FAMILIES: Record<BlockTemplateFamilyKey, BlockTempla
     ],
     aiDecisionNotes: [
       'Använd en tydlig men premium känsla: stark hero, förtroendeskapande kort, tydliga tjänster och rak kontakt utan billig mallkänsla.',
+      'Startsidan ska kännas komplett, inte som en kort kampanjsida: kombinera erbjudande, företagets arbetssätt, relevanta bildytor, nästa steg och tydlig kontakt.',
+      'Bildvalet ska följa den uppladdade kategorin. Takföretag ska visa tak/fastigheter, markföretag arbetsplats/markarbete, städföretag rena miljöer och så vidare.',
       'Håll copy företagsnära och kategoristyrd. Använd uppladdad kategori som sanning och skriv aldrig in HVAC, el, VVS eller andra specifika fackord om kategorin inte stödjer det.',
       'Sidan får gärna kännas modern och självsäker, men inte påhittad. Hitta aldrig på certifikat, jour, garantier, serviceområden, omdömen eller årtal.',
       'FAQ ska vara praktisk och relevant för köpbeslut, kontakt, besök eller utförande — aldrig om själva webbsidan.',
@@ -254,6 +258,8 @@ export const BLOCK_TEMPLATE_FAMILIES: Record<BlockTemplateFamilyKey, BlockTempla
       'trust_badges_premium',
       'service_groups_clear_cards',
       'about_trust_story_split',
+      'process_clear_next_steps',
+      'gallery_industry_relevant',
       'contact_options_modern',
       'faq_layered_optional',
       'cta_direct_action_band',
@@ -383,7 +389,7 @@ export function pagesForTemplate(
           ? 'Create a calm, premium first impression where the visitor quickly feels trust and understands the first step.'
           : 'Skapa ett lugnt och premium första intryck där besökaren snabbt känner förtroende och förstår första steget.',
         pageKind: 'landing',
-        sections: ['hero_private_clinic_statement', 'care_paths_editorial_rows', 'people_and_approach_split', 'visit_panel_calm'],
+        sections: ['hero_private_clinic_statement', 'care_paths_editorial_rows', 'people_and_approach_split', 'trust_band_confidential', 'gallery_industry_relevant', 'visit_panel_calm', 'cta_soft_conversion'],
       },
       {
         slug: slugFor(input.serviceTitle),
@@ -436,7 +442,7 @@ export function pagesForTemplate(
           ? 'Create a strong first impression for the workshop with clear trust signals, workshop services and easy booking.'
           : 'Skapa ett starkt första intryck för verkstaden med tydligt förtroende, verkstadstjänster och enkel bokning.',
         pageKind: 'landing',
-        sections: ['hero_mechanic_confidence', 'service_cards_workshop', 'workshop_standard_story', 'visit_route_panel'],
+        sections: ['hero_mechanic_confidence', 'service_cards_workshop', 'workshop_standard_story', 'process_diagnostics_band', 'gallery_industry_relevant', 'visit_route_panel', 'cta_book_service_band'],
       },
       {
         slug: slugFor(input.serviceTitle),
@@ -508,10 +514,10 @@ export function pagesForTemplate(
         slug: 'index',
         title: input.business,
         purpose: en
-          ? 'Create a premium first impression with warmth, a clear offer and easy contact.'
-          : 'Skapa ett premium första intryck med varm känsla, tydligt erbjudande och enkel kontakt.',
+          ? 'Create a complete premium homepage with warmth, a clear offer, a factual company story, strong relevant imagery and easy contact.'
+          : 'Skapa en komplett premium-startsida med varm känsla, tydligt erbjudande, saklig företagsberättelse, starka relevanta bilder och enkel kontakt.',
         pageKind: 'landing',
-        sections: ['hero_editorial_split', 'offerings_visual_cards', 'experience_story_dual_visual', 'gallery_atmospheric_mosaic', 'contact_booking_panel'],
+        sections: ['hero_editorial_split', 'offerings_visual_cards', 'experience_story_dual_visual', 'gallery_atmospheric_mosaic', 'about_warm_brand_story', 'trust_badges_premium', 'contact_booking_panel', 'cta_direct_action_band'],
       },
       {
         slug: slugFor(input.serviceTitle),
@@ -570,10 +576,10 @@ export function pagesForTemplate(
         slug: 'index',
         title: input.business,
         purpose: en
-          ? 'Create a stable first impression with a clear offer, clear process and quote-ready contact.'
-          : 'Skapa ett stabilt första intryck med tydligt erbjudande, process och offertnära kontakt.',
+          ? 'Create a complete, image-supported first impression with a clear offer, factual company context, clear process and quote-ready contact.'
+          : 'Skapa ett komplett och bildstött första intryck med tydligt erbjudande, saklig företagsinformation, process och offertnära kontakt.',
         pageKind: 'landing',
-        sections: ['hero_construction_architectural', 'construction_services_grid', 'project_process_timeline', 'trust_clarity_panel', 'cta_band_architectural'],
+        sections: ['hero_construction_architectural', 'construction_services_grid', 'content_split_sticky_aside', 'project_process_timeline', 'image_split_material_detail_optional', 'trust_clarity_panel', 'quote_contact_panel', 'cta_band_architectural'],
       },
       {
         slug: slugFor(input.serviceTitle),
@@ -632,10 +638,10 @@ export function pagesForTemplate(
         slug: 'index',
         title: input.business,
         purpose: en
-          ? 'Create a strong, premium first impression with a clear offer, trust and easy contact.'
-          : 'Skapa ett starkt, premium första intryck med tydligt erbjudande, förtroende och enkel kontakt.',
+          ? 'Create a complete premium homepage: clear offer, factual company story, useful next steps, industry-relevant imagery, trust and easy contact. It must feel like a real full homepage, not a short campaign page.'
+          : 'Skapa en komplett premium-startsida: tydligt erbjudande, saklig företagsberättelse, användbara nästa steg, branschrelevanta bilder, förtroende och enkel kontakt. Den ska kännas som en riktig full startsida, inte en kort kampanjsida.',
         pageKind: 'landing',
-        sections: ['hero_confident_service_statement', 'trust_badges_premium', 'service_groups_clear_cards', 'contact_options_modern'],
+        sections: ['hero_confident_service_statement', 'trust_badges_premium', 'service_groups_clear_cards', 'about_trust_story_split', 'process_clear_next_steps', 'gallery_industry_relevant', 'contact_options_modern', 'cta_direct_action_band'],
       },
       {
         slug: slugFor(input.serviceTitle),

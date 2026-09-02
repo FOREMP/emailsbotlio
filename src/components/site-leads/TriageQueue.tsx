@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
 import { Check, Send, Eye, Loader2 } from "lucide-react";
+import { auditScoreLabel } from "@/lib/site-audit-score";
 
 type TriageLead = {
   id: string;
@@ -101,7 +102,7 @@ export default function TriageQueue({ languageFilter, nicheFilter, onChanged, re
         <h2 className="text-sm font-semibold">Att besluta</h2>
         <Badge className="bg-amber-500">{total}</Badge>
         <p className="text-xs text-muted-foreground ml-2">
-          Sorterade efter köpvilja — lägst betyg först. Rött = riktiga brister som gör ägaren missnöjd. Grått = putsdetaljer som sällan säljer in en ny sajt.
+          Högst säljpotential först. 10 = starkaste möjligheten för en ny hemsida, 1 = nuvarande sida är redan mycket bra.
         </p>
 
         <Button size="sm" variant="ghost" className="ml-auto" onClick={load} disabled={loading}>
@@ -120,13 +121,22 @@ export default function TriageQueue({ languageFilter, nicheFilter, onChanged, re
               <div className="font-medium flex items-center gap-2 flex-wrap">
                 {l.company_name}
                 <Badge variant="outline">{(l.language ?? "sv").toUpperCase()}</Badge>
-                <Badge className="bg-slate-500">Köpvilja {l.audit_score ?? "—"}</Badge>
+                <Badge className="bg-slate-700">Säljpotential {auditScoreLabel(l.audit_score)}</Badge>
+                {l.audit_score != null && (
+                  <Badge variant="outline">Nuvarande sajtkvalitet {l.audit_score}/10</Badge>
+                )}
                 {l.audit_details?.borderline && (
                   <Badge className="bg-amber-500">Gränsfall</Badge>
                 )}
-                {!l.audit_details?.structural?.length && (
+                {(Array.isArray(l.audit_details?.structural) || Array.isArray(l.audit_details?.cosmetic))
+                  && !l.audit_details?.structural?.length && (
                   <Badge variant="outline" className="text-muted-foreground">Inga riktiga brister</Badge>
                 )}
+                {!Array.isArray(l.audit_details?.structural)
+                  && !Array.isArray(l.audit_details?.cosmetic)
+                  && !!l.audit_details?.weaknesses?.length && (
+                    <Badge variant="outline" className="text-amber-700">Äldre audit – brister ej klassificerade</Badge>
+                  )}
               </div>
               <div className="text-xs text-muted-foreground mt-1">
                 {l.category ?? l.niche ?? "—"} · {l.email ?? "ingen email"}

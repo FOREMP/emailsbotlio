@@ -24,7 +24,7 @@ import {
   selectBlockTemplateFamily,
   type BlockTemplateFamily,
   type BlockTemplateFamilyKey,
-} from '../process-site-jobs/block-templates.ts'
+} from '../_shared/block-templates.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -672,11 +672,11 @@ async function auditOne(
     throw error
   }
 
-  const nextStatus = result.unreadable && result.uncertain
-    ? 'needs_triage'
-    : result.score >= 7
-      ? 'site_good_enough'
-      : 'needs_site'
+  // Calibration mode: every completed audit must be reviewed by the operator.
+  // Do not let the model silently decide whether a site should be built or
+  // skipped until human decisions have validated the new screenshot-first
+  // rubric. Provider failures still return to pending_audit in the catch above.
+  const nextStatus = 'needs_triage'
   const { error: saveError } = await supabase.from('site_leads').update({
     status: nextStatus,
     audit_score: result.score,
@@ -687,6 +687,11 @@ async function auditOne(
       cosmetic: result.cosmetic.slice(0, 5),
       uncertain: result.uncertain,
       screenshot: result.screenshot,
+      evidence: {
+        screenshot_used: Boolean(result.screenshot),
+        scraped_text_characters: result.markdown.trim().length,
+        rubric_version: 'screenshot_text_v2',
+      },
     },
   }).eq('id', row.id)
   if (saveError) {

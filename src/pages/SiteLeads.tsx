@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogD
 import { FileSpreadsheet, Upload, Pencil, Trash2, Play, Pause, StopCircle, Wand2, RefreshCw } from "lucide-react";
 import * as XLSX from "xlsx";
 import TriageQueue from "@/components/site-leads/TriageQueue";
+import { auditScoreLabel } from "@/lib/site-audit-score";
 
 type Lead = {
   id: string;
@@ -716,8 +717,8 @@ export default function SiteLeads() {
             <SelectItem value="created_desc">Nyast först</SelectItem>
             <SelectItem value="created_asc">Äldst först</SelectItem>
             <SelectItem value="company">Företag A–Ö</SelectItem>
-            <SelectItem value="audit_asc">Sämst audit först</SelectItem>
-            <SelectItem value="audit_desc">Bäst audit först</SelectItem>
+            <SelectItem value="audit_asc">Högst säljpotential först</SelectItem>
+            <SelectItem value="audit_desc">Lägst säljpotential först</SelectItem>
             <SelectItem value="status">Status</SelectItem>
           </SelectContent>
         </Select>
@@ -773,7 +774,7 @@ export default function SiteLeads() {
               <th className="text-left p-3">Email</th>
               <th className="text-left p-3">Website</th>
               <th className="text-left p-3">Status</th>
-              <th className="text-left p-3">Audit</th>
+              <th className="text-left p-3">Säljpotential</th>
               <th className="text-left p-3">Demo</th>
               <th className="text-right p-3"></th>
             </tr>
@@ -801,7 +802,9 @@ export default function SiteLeads() {
                     {l.auto_send && <Badge variant="outline" className="text-[10px]">auto</Badge>}
                   </div>
                 </td>
-                <td className="p-3">{l.audit_score ?? "—"}</td>
+                <td className="p-3" title={l.audit_score == null ? undefined : `Nuvarande sajtkvalitet ${l.audit_score}/10`}>
+                  {auditScoreLabel(l.audit_score)}
+                </td>
                 <td className="p-3">
                   {l.demo_url ? <a href={l.demo_url} target="_blank" rel="noreferrer" className="underline">Öppna</a> : "—"}
                 </td>

@@ -96,6 +96,8 @@ export const SECTION_KIND: Record<string, SectionKind> = {
   trust_badges_premium: 'trust',
   service_groups_clear_cards: 'services',
   about_trust_story_split: 'intro',
+  process_clear_next_steps: 'process',
+  gallery_industry_relevant: 'gallery',
   contact_options_modern: 'contact',
   faq_layered_optional: 'faq',
   cta_direct_action_band: 'cta',
