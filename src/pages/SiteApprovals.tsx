@@ -1,15 +1,17 @@
 // Approve, regenerate or park generated demo sites for site leads.
 // Only leads with status = 'awaiting_approval' block outreach; also shows
 // in-flight, failed and reset rows so regenerations never seem to disappear.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
-import { ExternalLink, Check, RefreshCw, XCircle, RotateCw, Loader2 } from "lucide-react";
+import { ExternalLink, Check, RefreshCw, XCircle, RotateCw, Loader2, ChevronDown } from "lucide-react";
 
 type LeadRow = {
   id: string;
