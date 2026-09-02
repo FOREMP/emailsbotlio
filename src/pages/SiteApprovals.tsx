@@ -1,15 +1,17 @@
 // Approve, regenerate or park generated demo sites for site leads.
 // Only leads with status = 'awaiting_approval' block outreach; also shows
 // in-flight, failed and reset rows so regenerations never seem to disappear.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
-import { ExternalLink, Check, RefreshCw, XCircle, RotateCw, Loader2 } from "lucide-react";
+import { ExternalLink, Check, RefreshCw, XCircle, RotateCw, Loader2, ChevronDown } from "lucide-react";
 
 type LeadRow = {
   id: string;
@@ -56,7 +58,7 @@ export default function SiteApprovals() {
   const [rows, setRows] = useState<LeadRow[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [totalCount, setTotalCount] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [regen, setRegen] = useState<LeadRow | null>(null);
   const [feedback, setFeedback] = useState("");
   const [regenMode, setRegenMode] = useState<"keep" | "template" | "freeform">("keep");
@@ -65,6 +67,14 @@ export default function SiteApprovals() {
   const [filter, setFilter] = useState<string>("awaiting_approval");
   const [languageFilter, setLanguageFilter] = useState<string>("all");
   const [page, setPage] = useState(1);
+  // The lead list is heavy (two iframes per row), so it stays collapsed until
+  // asked for. The choice is remembered between visits.
+  const [listOpen, setListOpen] = useState(() => {
+    try { return localStorage.getItem("approvals-list-open") === "1"; } catch { return false; }
+  });
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const loadedKeyRef = useRef<string | null>(null);
+
 
   const loadCounts = async () => {
     const statusQueries = APPROVAL_STATUSES.map((status) => {
@@ -143,12 +153,31 @@ export default function SiteApprovals() {
     }
   };
 
+  const listKey = `${filter}|${languageFilter}|${page}`;
+
+  const runLoad = async () => {
+    loadedKeyRef.current = listKey;
+    await load();
+    setLastUpdated(new Date());
+  };
+
+  // Counts are cheap and drive the filter chips, so they load on open.
   useEffect(() => {
-    load();
-    // Poll every 30s so newly-live demos + status changes show up automatically
-    const t = setInterval(load, 30_000);
-    return () => clearInterval(t);
-  }, [filter, languageFilter, page]);
+    loadCounts();
+  }, [filter, languageFilter]);
+
+  // The list itself is only fetched once the section is expanded, and cached
+  // until filters/page change or you hit "Uppdatera".
+  useEffect(() => {
+    if (!listOpen) return;
+    if (loadedKeyRef.current === listKey) return;
+    runLoad();
+  }, [listKey, listOpen]);
+
+  useEffect(() => {
+    try { localStorage.setItem("approvals-list-open", listOpen ? "1" : "0"); } catch { /* ignore */ }
+  }, [listOpen]);
+
 
   useEffect(() => {
     setPage(1);
@@ -463,7 +492,38 @@ export default function SiteApprovals() {
         </Button>
       </div>
 
+      <Collapsible open={listOpen} onOpenChange={setListOpen} className="space-y-4">
+        <Card className="p-3 flex flex-wrap items-center gap-3">
+          <CollapsibleTrigger asChild>
+            <Button variant="ghost" className="gap-2 px-2">
+              <ChevronDown className={cn("h-4 w-4 transition-transform", listOpen && "rotate-180")} />
+              Leads att granska ({filter === "all"
+                ? Object.values(counts).reduce((sum, value) => sum + value, 0)
+                : counts[filter] ?? 0})
+            </Button>
+          </CollapsibleTrigger>
+          <span className="text-xs text-muted-foreground">
+            {listOpen
+              ? lastUpdated
+                ? `Senast uppdaterad ${lastUpdated.toLocaleTimeString("sv-SE")}`
+                : ""
+              : "Klicka för att visa listan"}
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-auto gap-2"
+            disabled={loading}
+            onClick={() => { setListOpen(true); runLoad(); }}
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            Uppdatera
+          </Button>
+        </Card>
+
+        <CollapsibleContent className="space-y-6">
       {loading && <div className="text-sm text-muted-foreground">Laddar…</div>}
+
 
       {!loading && rows.length === 0 && (
         <Card className="p-8 text-center text-muted-foreground">
@@ -563,6 +623,9 @@ export default function SiteApprovals() {
           </Button>
         </div>
       </Card>
+      </CollapsibleContent>
+      </Collapsible>
+
 
       <Dialog open={!!regen} onOpenChange={(o) => !o && setRegen(null)}>
         <DialogContent>

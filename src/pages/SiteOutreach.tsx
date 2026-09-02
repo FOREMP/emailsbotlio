@@ -11,7 +11,8 @@ import { toast } from "@/hooks/use-toast";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
-import { Loader2, StopCircle, Mail, Save, Eye, Gauge, BarChart3 } from "lucide-react";
+import { Loader2, StopCircle, Mail, Save, Eye, Gauge, BarChart3, ChevronDown, RefreshCw } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { VolumeTrendChart } from "@/components/analytics/VolumeTrendChart";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -61,6 +62,7 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 const STOCKHOLM_TZ = "Europe/Stockholm";
+const QUEUE_PAGE_SIZE = 20;
 const COUNTED_SEND_STATUSES = new Set(["queued", "sent", "bounced", "complained", "unsubscribed"]);
 
 const stockholmDateKey = (value: string | Date): string | null => {
@@ -88,6 +90,12 @@ export default function SiteOutreach() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [savingLimit, setSavingLimit] = useState(false);
   const [stepFilter, setStepFilter] = useState<StepFilter>("all");
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  // The queue table is long, so it stays collapsed until asked for.
+  const [queueOpen, setQueueOpen] = useState(() => {
+    try { return localStorage.getItem("outreach-queue-open") === "1"; } catch { return false; }
+  });
+  const [queuePage, setQueuePage] = useState(1);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -203,11 +211,30 @@ export default function SiteOutreach() {
     setLoading(false);
   }, [language]);
 
+  // No polling: the page only refreshes on open, on language switch, after an
+  // action, or when you press "Uppdatera".
   useEffect(() => {
-    load();
-    const t = setInterval(load, 30_000);
-    return () => clearInterval(t);
+    load().then(() => setLastUpdated(new Date()));
   }, [load]);
+
+  useEffect(() => {
+    try { localStorage.setItem("outreach-queue-open", queueOpen ? "1" : "0"); } catch { /* ignore */ }
+  }, [queueOpen]);
+
+  useEffect(() => { setQueuePage(1); }, [language, enrollments.length]);
+
+  const queuePageCount = Math.max(1, Math.ceil(enrollments.length / QUEUE_PAGE_SIZE));
+  const pagedEnrollments = useMemo(
+    () => enrollments.slice((queuePage - 1) * QUEUE_PAGE_SIZE, queuePage * QUEUE_PAGE_SIZE),
+    [enrollments, queuePage],
+  );
+
+  const refreshAll = async () => {
+    await load();
+    setLastUpdated(new Date());
+  };
+
+
 
   const sendNodes = useMemo(
     () => nodes.filter((n) => n.node_type === "send_email").sort((a, b) => a.position_y - b.position_y),
@@ -407,7 +434,18 @@ export default function SiteOutreach() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-bold">Demo Outreach</h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl font-bold">Demo Outreach</h1>
+          <Button size="sm" variant="outline" className="gap-2" disabled={loading} onClick={refreshAll}>
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            Uppdatera
+          </Button>
+          {lastUpdated && (
+            <span className="text-xs text-muted-foreground">
+              Senast uppdaterad {lastUpdated.toLocaleTimeString("sv-SE")}
+            </span>
+          )}
+        </div>
         <div className="flex gap-2 mt-3">
           <Button size="sm" variant={language === "sv" ? "default" : "outline"} onClick={() => setLanguage("sv")}>
             Svenska
@@ -528,12 +566,23 @@ export default function SiteOutreach() {
       </Card>
 
       <Card className="p-4">
-        <h2 className="text-lg font-semibold mb-3">Kö</h2>
+        <Collapsible open={queueOpen} onOpenChange={setQueueOpen}>
+          <div className="flex flex-wrap items-center gap-3 mb-3">
+            <CollapsibleTrigger asChild>
+              <Button variant="ghost" className="gap-2 px-2 text-lg font-semibold">
+                <ChevronDown className={`h-4 w-4 transition-transform ${queueOpen ? "rotate-180" : ""}`} />
+                Kö · {enrollments.length} i sekvensen
+              </Button>
+            </CollapsibleTrigger>
+            {!queueOpen && <span className="text-xs text-muted-foreground">Klicka för att visa kön</span>}
+          </div>
+          <CollapsibleContent>
         {enrollments.length === 0 ? (
           <div className="text-sm text-muted-foreground py-6 text-center">Ingen har enrollats än — godkänn en demo i Approvals.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
+
               <thead className="text-xs text-muted-foreground text-left border-b">
                 <tr>
                   <th className="py-2 pr-3">Företag</th>
@@ -547,7 +596,7 @@ export default function SiteOutreach() {
                 </tr>
               </thead>
               <tbody>
-                {enrollments.map((e) => {
+                {pagedEnrollments.map((e) => {
                   const company = e.contact?.custom_fields?.company_name ?? "—";
                   return (
                     <tr key={e.id} className="border-b border-border/60">
@@ -576,9 +625,27 @@ export default function SiteOutreach() {
                 })}
               </tbody>
             </table>
+            <div className="flex items-center justify-between gap-3 pt-3 mt-2 border-t">
+              <div className="text-xs text-muted-foreground">
+                Sida {queuePage} av {queuePageCount} · Visar {pagedEnrollments.length} av {enrollments.length}
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" disabled={queuePage <= 1}
+                  onClick={() => setQueuePage((p) => Math.max(1, p - 1))}>
+                  Föregående
+                </Button>
+                <Button size="sm" variant="outline" disabled={queuePage >= queuePageCount}
+                  onClick={() => setQueuePage((p) => Math.min(queuePageCount, p + 1))}>
+                  Nästa
+                </Button>
+              </div>
+            </div>
           </div>
-        )}
+            )}
+          </CollapsibleContent>
+        </Collapsible>
       </Card>
+
 
       <Card className="p-4">
         <h2 className="text-lg font-semibold mb-3 flex items-center gap-2"><Mail className="h-4 w-4" /> Senaste 5 skickade mail</h2>
