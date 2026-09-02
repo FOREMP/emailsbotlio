@@ -490,7 +490,38 @@ export default function SiteApprovals() {
         </Button>
       </div>
 
+      <Collapsible open={listOpen} onOpenChange={setListOpen} className="space-y-4">
+        <Card className="p-3 flex flex-wrap items-center gap-3">
+          <CollapsibleTrigger asChild>
+            <Button variant="ghost" className="gap-2 px-2">
+              <ChevronDown className={cn("h-4 w-4 transition-transform", listOpen && "rotate-180")} />
+              Leads att granska ({filter === "all"
+                ? Object.values(counts).reduce((sum, value) => sum + value, 0)
+                : counts[filter] ?? 0})
+            </Button>
+          </CollapsibleTrigger>
+          <span className="text-xs text-muted-foreground">
+            {listOpen
+              ? lastUpdated
+                ? `Senast uppdaterad ${lastUpdated.toLocaleTimeString("sv-SE")}`
+                : ""
+              : "Klicka för att visa listan"}
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-auto gap-2"
+            disabled={loading}
+            onClick={() => { setListOpen(true); runLoad(); }}
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            Uppdatera
+          </Button>
+        </Card>
+
+        <CollapsibleContent className="space-y-6">
       {loading && <div className="text-sm text-muted-foreground">Laddar…</div>}
+
 
       {!loading && rows.length === 0 && (
         <Card className="p-8 text-center text-muted-foreground">
