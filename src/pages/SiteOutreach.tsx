@@ -434,7 +434,18 @@ export default function SiteOutreach() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-bold">Demo Outreach</h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl font-bold">Demo Outreach</h1>
+          <Button size="sm" variant="outline" className="gap-2" disabled={loading} onClick={refreshAll}>
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            Uppdatera
+          </Button>
+          {lastUpdated && (
+            <span className="text-xs text-muted-foreground">
+              Senast uppdaterad {lastUpdated.toLocaleTimeString("sv-SE")}
+            </span>
+          )}
+        </div>
         <div className="flex gap-2 mt-3">
           <Button size="sm" variant={language === "sv" ? "default" : "outline"} onClick={() => setLanguage("sv")}>
             Svenska
