@@ -554,7 +554,7 @@ export default function SiteOutreach() {
                 </tr>
               </thead>
               <tbody>
-                {enrollments.map((e) => {
+                {pagedEnrollments.map((e) => {
                   const company = e.contact?.custom_fields?.company_name ?? "—";
                   return (
                     <tr key={e.id} className="border-b border-border/60">
