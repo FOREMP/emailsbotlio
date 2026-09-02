@@ -38,6 +38,16 @@ export interface ScrapeResult {
   blocked: boolean
 }
 
+export function guardedAuditScore(
+  rawScore: unknown,
+  options: { hasScreenshot: boolean; hasStructuralIssues: boolean },
+): number {
+  let score = Math.max(1, Math.min(10, Math.round(Number(rawScore) || 5)))
+  if (!options.hasScreenshot) score = Math.min(6, Math.max(4, score))
+  if (!options.hasStructuralIssues) score = Math.max(5, score)
+  return score
+}
+
 /**
  * Raised when Firecrawl itself failed (out of credits, auth, rate limit) rather
  * than the lead's site being unreadable. Callers must NOT score a lead from
@@ -294,13 +304,13 @@ export async function auditWebsite(
     ? clean(parsed.cosmetic)
     : clean(parsed.weaknesses)
 
-  let score = Math.max(1, Math.min(10, Math.round(Number(parsed.score) || 5)))
-  // Without a screenshot the model has no design signal — never let it bottom
-  // out on text alone.
-  if (!scraped.screenshot) score = Math.max(4, score)
-  // Enforce the rule the prompt states: polish nits alone are not a reason to
-  // rebuild, so a site with no structural problems cannot score below 5.
-  if (structural.length === 0) score = Math.max(5, score)
+  // Without a screenshot the model has no reliable design signal. Keep the
+  // result in the manual-review band. Cosmetic issues alone also cannot make a
+  // functioning site look like a structural rebuild case.
+  const score = guardedAuditScore(parsed.score, {
+    hasScreenshot: Boolean(scraped.screenshot),
+    hasStructuralIssues: structural.length > 0,
+  })
 
   return {
     score,

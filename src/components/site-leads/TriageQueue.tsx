@@ -50,6 +50,8 @@ export default function TriageQueue({ languageFilter, nicheFilter, onChanged, re
       .from("site_leads")
       .select("id, company_name, language, email, website, category, niche, audit_score, audit_reason, audit_details", { count: "exact" })
       .eq("status", "needs_triage")
+      // Defensive guard for older rows created before the backend threshold.
+      .or("audit_score.lt.7,audit_score.is.null")
       .order("audit_score", { ascending: true, nullsFirst: false })
       .limit(PAGE);
     if (languageFilter !== "all") query = query.eq("language", languageFilter);
@@ -102,7 +104,7 @@ export default function TriageQueue({ languageFilter, nicheFilter, onChanged, re
         <h2 className="text-sm font-semibold">Att besluta</h2>
         <Badge className="bg-amber-500">{total}</Badge>
         <p className="text-xs text-muted-foreground ml-2">
-          Högst säljpotential först. 10 = starkaste möjligheten för en ny hemsida, 1 = nuvarande sida är redan mycket bra.
+          Bara sajtkvalitet 1–6 visas här. Sajter med 7–10 parkeras automatiskt som bra nog.
         </p>
 
         <Button size="sm" variant="ghost" className="ml-auto" onClick={load} disabled={loading}>

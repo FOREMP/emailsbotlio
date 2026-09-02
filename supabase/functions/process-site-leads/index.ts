@@ -672,13 +672,16 @@ async function auditOne(
     throw error
   }
 
-  // Calibration mode: every completed audit must be reviewed by the operator.
-  // Do not let the model silently decide whether a site should be built or
-  // skipped until human decisions have validated the new screenshot-first
-  // rubric. Provider failures still return to pending_audit in the catch above.
-  const nextStatus = 'needs_triage'
+  // audit_score measures the quality of the CURRENT website. A score of 7+
+  // means it is modern enough that a full rebuild is difficult to justify, so
+  // park it automatically. Scores 1-6 stay in human triage. Screenshot-less
+  // audits are capped at 6 by the shared scorer and can never be auto-parked.
+  const autoPark = result.score >= 7
+  const nextStatus = autoPark ? 'site_good_enough' : 'needs_triage'
   const { error: saveError } = await supabase.from('site_leads').update({
     status: nextStatus,
+    auto_send: false,
+    triaged_at: autoPark ? new Date().toISOString() : null,
     audit_score: result.score,
     audit_reason: result.reason.slice(0, 500),
     audit_details: {
@@ -691,6 +694,10 @@ async function auditOne(
         screenshot_used: Boolean(result.screenshot),
         scraped_text_characters: result.markdown.trim().length,
         rubric_version: 'screenshot_text_v2',
+      },
+      decision: {
+        auto_parked: autoPark,
+        quality_threshold: 7,
       },
     },
   }).eq('id', row.id)

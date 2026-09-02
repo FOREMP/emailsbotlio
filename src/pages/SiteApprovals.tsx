@@ -467,7 +467,7 @@ export default function SiteApprovals() {
         {[
           { key: "awaiting_approval", label: "Väntar godkännande" },
           { key: "approved", label: "Godkända" },
-          { key: "site_good_enough", label: "Nekade / behövs ej" },
+          { key: "site_good_enough", label: "Bra nog / auto-parkerade" },
           { key: "generating", label: "Genererar / regenereras" },
           { key: "needs_site", label: "Behöver byggas om" },
           { key: "failed", label: "Misslyckade" },
