@@ -590,6 +590,9 @@ export default function SiteApprovals() {
           </Button>
         </div>
       </Card>
+      </CollapsibleContent>
+      </Collapsible>
+
 
       <Dialog open={!!regen} onOpenChange={(o) => !o && setRegen(null)}>
         <DialogContent>
