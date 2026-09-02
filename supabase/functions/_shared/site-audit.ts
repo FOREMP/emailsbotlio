@@ -196,6 +196,7 @@ export async function auditWebsite(
   companyName: string,
   fcKey: string,
   openrouterKey: string,
+  language: 'sv' | 'en' = 'sv',
 ): Promise<AuditResult> {
   const url = normaliseUrl(rawUrl)
   const scraped = await scrapeForAudit(url, fcKey)
@@ -246,6 +247,10 @@ export async function auditWebsite(
     userContent.push({ type: 'image_url', image_url: { url: scraped.screenshot } })
   }
 
+  const outputLanguageRule = language === 'en'
+    ? 'Return reason, structural and cosmetic text in natural English. Keep the JSON keys unchanged.'
+    : 'Skriv reason, structural och cosmetic på naturlig svenska. Behåll JSON-nycklarna oförändrade.'
+
   const aiResp = await fetch(OPENROUTER_URL, {
     method: 'POST',
     headers: {
@@ -260,7 +265,7 @@ export async function auditWebsite(
       top_p: 1,
       seed: 42,
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: `${SYSTEM_PROMPT}\n\n${outputLanguageRule}` },
         { role: 'user', content: userContent },
       ],
       response_format: { type: 'json_object' },
@@ -305,4 +310,3 @@ export async function auditWebsite(
     screenshot: scraped.screenshot,
   }
 }
-

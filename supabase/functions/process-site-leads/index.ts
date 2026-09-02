@@ -3,13 +3,11 @@
 //   1. RECONCILE — advance in-flight generated_sites through scraped → queued
 //      → generated → live, mirror status onto site_leads (awaiting_approval
 //      when live, failed when the site pipeline errored).
-//   2. AUDIT — for up to AUDIT_PER_TICK pending_audit leads: scrape with
-//      Firecrawl, score 1-10 with Gemini, extract 2-3 concrete weaknesses.
-//      Score ≥ 7 → site_good_enough (no outreach). Else → needs_site.
-//   3. GENERATE — enforce daily cap DAILY_GEN_CAP by counting leads that
-//      already moved into generating/awaiting_approval/approved today. If
-//      capacity is left, take exactly GEN_PER_TICK needs_site leads, create a
-//      synthetic contact + generated_sites row and kick scrape-lead-data.
+//   2. GENERATE — derive independent SV/EN build targets from each outreach
+//      sequence's throttle (2x daily first-mail capacity), atomically claim
+//      leads, then create generated_sites jobs without cross-language starvation.
+//   3. AUDIT — atomically claim up to AUDIT_PER_TICK pending leads and score
+//      their screenshots through the shared Firecrawl + OpenRouter audit.
 // The whole file uses the service role; cron sends the anon key just so
 // pg_net can hit the function endpoint (verify_jwt is off).
 import { createClient } from 'npm:@supabase/supabase-js@2'
@@ -18,6 +16,7 @@ import {
   pipelinePausedPayload,
   recordPipelineFailure,
 } from '../_shared/site-pipeline-health.ts'
+import { auditWebsite, ScrapeProviderError } from '../_shared/site-audit.ts'
 import { classifyNiche, templateForNiche, type NicheKey } from '../_shared/niche.ts'
 import {
   blockTemplateFamilyCatalog,
@@ -32,14 +31,22 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const FIRECRAWL_V2 = 'https://api.firecrawl.dev/v2'
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
+// Template selection still uses the existing Lovable gateway. Website audits
+// use OpenRouter through the shared scorer below.
 const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
 
 const AUDIT_PER_TICK = 3    // Firecrawl+Gemini per invocation — keep memory low
 const GEN_PER_TICK = 6      // how many new pipelines may START per tick
 const MAX_CONCURRENT_GEN = 24 // how many leads may be mid-pipeline at once
-const DAILY_GEN_CAP_FALLBACK = 16  // used only if we can't read sender limits
-const OUTREACH_DOMAINS = ['foremp.email', 'foremp.eu'] as const
+const BUILD_BUFFER_MULTIPLIER = 2
+const BUILD_ATTEMPT_BUFFER_RATIO = 0.25
+const PIPELINE_LANGUAGES = ['sv', 'en'] as const
+type PipelineLanguage = typeof PIPELINE_LANGUAGES[number]
+const OUTREACH_SEQUENCES: Record<PipelineLanguage, { name: string; fallbackDailyLimit: number }> = {
+  sv: { name: 'Site Demo Outreach', fallbackDailyLimit: 24 },
+  en: { name: 'Site Demo Outreach EN', fallbackDailyLimit: 10 },
+}
 const GHOST_LIST_NAME = 'Site Leads (auto)'
 
 function isCanonicalDemoUrl(value?: string | null): boolean {
@@ -58,13 +65,45 @@ const STALE_PIPELINE_MINUTES = 180 // queued work may legitimately wait; don't f
 const ORPHAN_GRACE_MINUTES = 10   // 'generating' with no generated_sites row = dead job
 const TEMPLATE_PICKER_MODEL = 'deepseek/deepseek-chat-v3.1'
 
+type LanguageBudget = {
+  language: PipelineLanguage
+  emailLimit: number
+  target: number
+  productive: number
+  completed: number
+  inFlight: number
+  attempts: number
+  remaining: number
+  attemptRemaining: number
+}
+
+type PipelineReport = {
+  reconciled: number
+  recovered: number
+  audited: number
+  generated: number
+  capacity: number
+  budgets: Record<PipelineLanguage, LanguageBudget> | null
+  errors: string[]
+}
+
+type SupabaseAdmin = ReturnType<typeof createClient<any>>
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   const supabase = createClient(supabaseUrl, serviceKey)
 
-  const report = { reconciled: 0, recovered: 0, audited: 0, generated: 0, capacity: 0, errors: [] as string[] }
+  const report: PipelineReport = {
+    reconciled: 0,
+    recovered: 0,
+    audited: 0,
+    generated: 0,
+    capacity: 0,
+    budgets: null,
+    errors: [],
+  }
 
   // Manual override from the Site Leads UI: build these leads right now,
   // ignoring the automation switch and the daily cap.
@@ -115,83 +154,72 @@ Deno.serve(async (req) => {
       return json({ ok: true, ...report })
     }
 
-    // ---------------- 2. AUDIT --------------------
-    const { data: auditRows } = await supabase
+    // ---------------- 2. GENERATE -----------------
+    // Swedish and English outreach are independent products with independent
+    // send limits. Each language keeps a two-day inventory buffer, and one
+    // language can never consume the other language's build allowance.
+    const budgets = await calculateLanguageBudgets(supabase)
+    report.budgets = budgets
+    report.capacity = PIPELINE_LANGUAGES.reduce((sum, language) => sum + budgets[language].remaining, 0)
+
+    const { count: generatingCount } = await supabase
       .from('site_leads')
-      .select('id, user_id, website, email, company_name, language')
-      .eq('status', 'pending_audit')
-      .not('website', 'is', null)
-      .order('created_at', { ascending: true })
-      .limit(AUDIT_PER_TICK)
-
-    for (const row of auditRows ?? []) {
-      try {
-        await auditOne(supabase, row as any)
-        report.audited++
-      } catch (e) {
-        report.errors.push(`audit ${row.id}: ${(e as Error).message}`)
-      }
-    }
-
-    // ---------------- 3. GENERATE -----------------
-    // Daily generation cap = today's outreach send capacity (sum of active
-    // sender daily_limits on the outreach domain). Keeps sites-created/day in
-    // lockstep with contacts-emailed/day so we never build stock we can't send.
-    const { data: dailySenders } = await supabase
-      .from('senders')
-      .select('daily_limit, from_email')
-      .eq('is_active', true)
-    const dailyCap = (dailySenders ?? [])
-      .filter((r: any) => OUTREACH_DOMAINS.some((domain) => String(r.from_email ?? '').toLowerCase().endsWith(`@${domain}`)))
-      .reduce((s: number, r: any) => s + (r.daily_limit ?? 0), 0)
-      || DAILY_GEN_CAP_FALLBACK
-
-    // Count builds actually STARTED today. Using site_leads.updated_at made
-    // approvals of older leads eat today's quota, starving generation.
-    const today = new Date().toISOString().slice(0, 10)
-    const { count: doneToday } = await supabase
-      .from('generated_sites')
       .select('id', { count: 'exact', head: true })
-      .gte('created_at', `${today}T00:00:00Z`)
-    const capacity = Math.max(0, dailyCap - (doneToday ?? 0))
-    report.capacity = capacity
+      .eq('status', 'generating')
+    const slots = Math.max(0, MAX_CONCURRENT_GEN - (generatingCount ?? 0))
 
-    if (capacity > 0) {
-      // Bounded-concurrency pipeline: keep up to MAX_CONCURRENT_GEN leads
-      // mid-flight so the daily quota can actually be reached, instead of the
-      // old strictly-serial gate where one lead blocked the whole queue.
-      const { count: inFlight } = await supabase
-        .from('site_leads')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'generating')
+    if (slots === 0) {
+      report.errors.push(`skip generate: ${generatingCount} lead(s) still in flight`)
+    } else {
+      const allocations = allocateGenerationSlots(budgets, Math.min(GEN_PER_TICK, slots))
+      for (const language of PIPELINE_LANGUAGES) {
+        const take = allocations[language]
+        if (take <= 0) continue
 
-      const slots = Math.max(0, MAX_CONCURRENT_GEN - (inFlight ?? 0))
-      if (slots === 0) {
-        report.errors.push(`skip generate: ${inFlight} lead(s) still in flight`)
-      } else {
-        const take = Math.min(GEN_PER_TICK, capacity, slots)
-        const { data: needsSite } = await supabase
-          .from('site_leads')
-          .select('id, user_id, company_name, website, email, phone, address, category, niche, rating, review_snippets, audit_reason, audit_details, feedback, language')
-          .eq('status', 'needs_site')
-          .not('website', 'is', null)
-          .not('email', 'is', null)
-          .order('audit_score', { ascending: true, nullsFirst: false })
-          .limit(take)
-
-        if (!needsSite?.length) {
-          // Nothing to build right now — the tick simply idles and picks up
-          // new needs_site leads as soon as the audit phase produces them.
-          report.errors.push('idle: no needs_site leads ready')
+        const { data: claimed, error: claimError } = await supabase.rpc('claim_site_leads_for_generation', {
+          p_language: language,
+          p_limit: take,
+        })
+        if (claimError) {
+          report.errors.push(`claim ${language} generation: ${claimError.message}`)
+          continue
         }
 
-        for (const lead of needsSite ?? []) {
+        for (const lead of claimed ?? []) {
           try {
             await startGeneration(supabase, supabaseUrl, serviceKey, lead as any)
             report.generated++
           } catch (e) {
-            report.errors.push(`gen ${lead.id}: ${(e as Error).message}`)
+            await releaseGenerationClaim(supabase, lead.id)
+            report.errors.push(`gen ${language} ${lead.id}: ${(e as Error).message}`)
           }
+        }
+      }
+    }
+
+    // ---------------- 3. AUDIT --------------------
+    // Claim audit work atomically after generation. This ensures an existing
+    // needs_site backlog is used before spending more Firecrawl credits.
+    const auditAllocations = await allocateAuditSlots(supabase, budgets, AUDIT_PER_TICK)
+    for (const language of PIPELINE_LANGUAGES) {
+      const take = auditAllocations[language]
+      if (take <= 0) continue
+
+      const { data: auditRows, error: claimError } = await supabase.rpc('claim_site_leads_for_audit', {
+        p_language: language,
+        p_limit: take,
+      })
+      if (claimError) {
+        report.errors.push(`claim ${language} audit: ${claimError.message}`)
+        continue
+      }
+
+      for (const row of auditRows ?? []) {
+        try {
+          await auditOne(supabase, row as any)
+          report.audited++
+        } catch (e) {
+          report.errors.push(`audit ${language} ${row.id}: ${(e as Error).message}`)
         }
       }
     }
@@ -204,13 +232,203 @@ Deno.serve(async (req) => {
   }
 })
 
+function normaliseLanguage(value: unknown): PipelineLanguage {
+  return value === 'en' ? 'en' : 'sv'
+}
+
+function timeZoneOffsetMs(date: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date)
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+  const representedAsUtc = Date.UTC(
+    Number(values.year),
+    Number(values.month) - 1,
+    Number(values.day),
+    Number(values.hour),
+    Number(values.minute),
+    Number(values.second),
+  )
+  return representedAsUtc - date.getTime()
+}
+
+function stockholmDayBounds(now = new Date()): { start: string; end: string } {
+  const timeZone = 'Europe/Stockholm'
+  const localParts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now)
+  const values = Object.fromEntries(localParts.map((part) => [part.type, part.value]))
+  const localMidnightAsUtc = Date.UTC(Number(values.year), Number(values.month) - 1, Number(values.day))
+  const startGuess = new Date(localMidnightAsUtc)
+  const start = new Date(localMidnightAsUtc - timeZoneOffsetMs(startGuess, timeZone))
+
+  const nextLocalMidnightAsUtc = Date.UTC(Number(values.year), Number(values.month) - 1, Number(values.day) + 1)
+  const endGuess = new Date(nextLocalMidnightAsUtc)
+  const end = new Date(nextLocalMidnightAsUtc - timeZoneOffsetMs(endGuess, timeZone))
+  return { start: start.toISOString(), end: end.toISOString() }
+}
+
+async function calculateLanguageBudgets(
+  supabase: SupabaseAdmin,
+): Promise<Record<PipelineLanguage, LanguageBudget>> {
+  const sequenceNames = PIPELINE_LANGUAGES.map((language) => OUTREACH_SEQUENCES[language].name)
+  const { data: sequences } = await supabase
+    .from('sequences')
+    .select('id, name')
+    .in('name', sequenceNames)
+    .eq('status', 'active')
+
+  const sequenceIds = (sequences ?? []).map((row: any) => row.id)
+  const { data: throttleNodes } = sequenceIds.length
+    ? await supabase
+      .from('sequence_nodes')
+      .select('sequence_id, config')
+      .in('sequence_id', sequenceIds)
+      .eq('node_type', 'throttle')
+    : { data: [] as any[] }
+
+  const sequenceByName = new Map((sequences ?? []).map((row: any) => [row.name, row.id]))
+  const limitBySequence = new Map<string, number>()
+  for (const row of throttleNodes ?? []) {
+    const value = Number((row.config as any)?.max_per_day)
+    if (Number.isFinite(value) && value > 0) limitBySequence.set(row.sequence_id, Math.floor(value))
+  }
+
+  const { start, end } = stockholmDayBounds()
+  const { data: generatedRows, error } = await supabase
+    .from('generated_sites')
+    .select('id, site_lead_id, language, status')
+    .gte('created_at', start)
+    .lt('created_at', end)
+  if (error) throw new Error(`daily build usage: ${error.message}`)
+
+  const completedStatuses = new Set(['live'])
+  const productiveStatuses = new Set(['pending', 'scraping', 'scraped', 'queued', 'processing', 'generated', 'deploying', 'live'])
+  const rowsByLanguage: Record<PipelineLanguage, any[]> = { sv: [], en: [] }
+  for (const row of generatedRows ?? []) rowsByLanguage[normaliseLanguage(row.language)].push(row)
+
+  const result = {} as Record<PipelineLanguage, LanguageBudget>
+  for (const language of PIPELINE_LANGUAGES) {
+    const config = OUTREACH_SEQUENCES[language]
+    const sequenceId = sequenceByName.get(config.name)
+    const emailLimit = (sequenceId && limitBySequence.get(sequenceId)) || config.fallbackDailyLimit
+    const target = emailLimit * BUILD_BUFFER_MULTIPLIER
+    const rows = rowsByLanguage[language]
+    const productiveIds = new Set<string>()
+    const completedIds = new Set<string>()
+    const inFlightIds = new Set<string>()
+
+    for (const row of rows) {
+      const leadId = String(row.site_lead_id ?? row.id)
+      if (completedStatuses.has(row.status)) completedIds.add(leadId)
+      if (productiveStatuses.has(row.status)) {
+        productiveIds.add(leadId)
+        if (!completedStatuses.has(row.status)) inFlightIds.add(leadId)
+      }
+    }
+
+    const attemptCap = target + Math.max(5, Math.ceil(target * BUILD_ATTEMPT_BUFFER_RATIO))
+    const attemptRemaining = Math.max(0, attemptCap - rows.length)
+    const targetRemaining = Math.max(0, target - productiveIds.size)
+    result[language] = {
+      language,
+      emailLimit,
+      target,
+      productive: productiveIds.size,
+      completed: completedIds.size,
+      inFlight: inFlightIds.size,
+      attempts: rows.length,
+      remaining: Math.min(targetRemaining, attemptRemaining),
+      attemptRemaining,
+    }
+  }
+  return result
+}
+
+function allocateGenerationSlots(
+  budgets: Record<PipelineLanguage, LanguageBudget>,
+  slots: number,
+): Record<PipelineLanguage, number> {
+  const allocations: Record<PipelineLanguage, number> = { sv: 0, en: 0 }
+  for (let i = 0; i < slots; i++) {
+    const candidates = PIPELINE_LANGUAGES
+      .filter((language) => allocations[language] < budgets[language].remaining)
+      .sort((a, b) => {
+        const aProgress = (budgets[a].productive + allocations[a]) / Math.max(1, budgets[a].target)
+        const bProgress = (budgets[b].productive + allocations[b]) / Math.max(1, budgets[b].target)
+        return aProgress - bProgress || a.localeCompare(b)
+      })
+    if (!candidates.length) break
+    allocations[candidates[0]]++
+  }
+  return allocations
+}
+
+async function allocateAuditSlots(
+  supabase: SupabaseAdmin,
+  budgets: Record<PipelineLanguage, LanguageBudget>,
+  slots: number,
+): Promise<Record<PipelineLanguage, number>> {
+  const pending: Record<PipelineLanguage, number> = { sv: 0, en: 0 }
+  const ready: Record<PipelineLanguage, number> = { sv: 0, en: 0 }
+  await Promise.all(PIPELINE_LANGUAGES.flatMap((language) => [
+    supabase.from('site_leads').select('id', { count: 'exact', head: true })
+      .eq('status', 'pending_audit').eq('language', language)
+      .then(({ count }) => { pending[language] = count ?? 0 }),
+    supabase.from('site_leads').select('id', { count: 'exact', head: true })
+      .eq('status', 'needs_site').eq('language', language)
+      .then(({ count }) => { ready[language] = count ?? 0 }),
+  ]))
+
+  const allocations: Record<PipelineLanguage, number> = { sv: 0, en: 0 }
+  for (let i = 0; i < slots; i++) {
+    const candidates = PIPELINE_LANGUAGES
+      .filter((language) => allocations[language] < pending[language])
+      .sort((a, b) => {
+        const aShort = ready[a] + allocations[a] < budgets[a].remaining ? 0 : 1
+        const bShort = ready[b] + allocations[b] < budgets[b].remaining ? 0 : 1
+        if (aShort !== bShort) return aShort - bShort
+        if (aShort === 0) {
+          const aRatio = (ready[a] + allocations[a]) / Math.max(1, budgets[a].remaining)
+          const bRatio = (ready[b] + allocations[b]) / Math.max(1, budgets[b].remaining)
+          if (aRatio !== bRatio) return aRatio - bRatio
+        }
+        return (pending[b] - allocations[b]) - (pending[a] - allocations[a])
+      })
+    if (!candidates.length) break
+    allocations[candidates[0]]++
+  }
+  return allocations
+}
+
+async function releaseGenerationClaim(
+  supabase: SupabaseAdmin,
+  leadId: string,
+): Promise<void> {
+  await supabase
+    .from('site_leads')
+    .update({ status: 'needs_site', generated_site_id: null, updated_at: new Date().toISOString() })
+    .eq('id', leadId)
+    .eq('status', 'generating')
+}
+
 // ---------------------------------------------------------------------------
 // RECOVER — site generation is intentionally serial, so one old row stuck in
 // scraping/processing/deploying can block every new lead. This watchdog moves
 // deterministic states forward and resets dead transient states for retry.
 // ---------------------------------------------------------------------------
 async function recoverStuckGenerations(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseAdmin,
   supabaseUrl: string,
   serviceKey: string,
   report: { errors: string[] },
@@ -354,7 +572,7 @@ async function recoverStuckGenerations(
 // push the site through the next pipeline step when possible.
 // ---------------------------------------------------------------------------
 async function reconcile(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseAdmin,
   supabaseUrl: string,
   serviceKey: string,
   report: { errors: string[] },
@@ -419,118 +637,62 @@ async function reconcile(
 }
 
 // ---------------------------------------------------------------------------
-// AUDIT — Firecrawl (markdown only) + Gemini (deterministic scoring).
-// Also asks for 2-3 concrete weaknesses to reuse in outreach emails later.
+// AUDIT — shared screenshot-first Firecrawl + OpenRouter scorer. Keeping this
+// in one shared implementation prevents cron and manual audits from disagreeing.
 // ---------------------------------------------------------------------------
 async function auditOne(
-  supabase: ReturnType<typeof createClient>,
-  row: { id: string; website: string; company_name: string },
+  supabase: SupabaseAdmin,
+  row: { id: string; website: string; company_name: string; language?: string | null },
 ) {
   const breakers = await activePipelineBreakers(supabase)
   if (breakers.length) throw new Error(`pipeline paused: ${breakers.map((breaker) => breaker.provider).join(', ')}`)
 
   const fcKey = Deno.env.get('FIRECRAWL_API_KEY')
-  const lovableKey = Deno.env.get('LOVABLE_API_KEY')
-  if (!fcKey || !lovableKey) throw new Error('missing FIRECRAWL_API_KEY or LOVABLE_API_KEY')
+  const openrouterKey = Deno.env.get('OPENROUTER_API_KEY')
+  if (!fcKey || !openrouterKey) {
+    await supabase.from('site_leads').update({ status: 'pending_audit' }).eq('id', row.id)
+    throw new Error('missing FIRECRAWL_API_KEY or OPENROUTER_API_KEY')
+  }
 
-  await supabase.from('site_leads').update({ status: 'auditing' }).eq('id', row.id)
-
-  const url = normaliseUrl(row.website)
-  let markdown = ''
-  let title = ''
-  let unreachable = false
-
+  const language = normaliseLanguage(row.language)
+  let result
   try {
-    const fcResp = await fetch(`${FIRECRAWL_V2}/scrape`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: true }),
-    })
-    const fcData = await fcResp.json()
-    if (!fcResp.ok) {
-      if ([401, 402, 429].includes(fcResp.status) || fcResp.status >= 500) {
-        const message = String(fcData?.error ?? fcData?.message ?? `Firecrawl API failed with HTTP ${fcResp.status}`)
-        await recordPipelineFailure(supabase, {
-          provider: 'firecrawl', sourceFunction: 'process-site-leads:audit', message,
-          httpStatus: fcResp.status, siteLeadId: row.id,
-        })
-        await supabase.from('site_leads').update({ status: 'pending_audit' }).eq('id', row.id)
-        throw new Error(`Firecrawl provider error (${fcResp.status}): ${message}`)
-      }
-      unreachable = true
-    } else {
-      markdown = fcData.data?.markdown ?? fcData.markdown ?? ''
-      title = fcData.data?.metadata?.title ?? fcData.metadata?.title ?? ''
-    }
+    result = await auditWebsite(row.website, row.company_name ?? '', fcKey, openrouterKey, language)
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith('Firecrawl provider error')) throw error
-    unreachable = true
+    const provider = error instanceof ScrapeProviderError ? 'firecrawl' : 'openrouter'
+    const httpStatus = error instanceof ScrapeProviderError ? error.status : undefined
+    await recordPipelineFailure(supabase, {
+      provider,
+      sourceFunction: 'process-site-leads:audit',
+      message: (error as Error).message,
+      httpStatus,
+      siteLeadId: row.id,
+    })
+    await supabase.from('site_leads').update({ status: 'pending_audit' }).eq('id', row.id)
+    throw error
   }
 
-  if (unreachable || !markdown) {
-    await supabase.from('site_leads').update({
-      status: 'needs_site',
-      audit_score: 1,
-      audit_reason: unreachable ? 'Could not reach existing website.' : 'Site returned empty content.',
-      audit_details: { weaknesses: ['Ingen nåbar eller läsbar hemsida idag.'] },
-    }).eq('id', row.id)
-    return
-  }
-
-  const aiResp = await fetch(`${AI_GATEWAY}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Lovable-API-Key': lovableKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'google/gemini-3-flash-preview',
-      temperature: 0,
-      top_p: 1,
-      seed: 42,
-      messages: [
-        {
-          role: 'system',
-          content: [
-            'Du auditerar små företags hemsidor och betygsätter dem 1-10 för hur moderna, förtroendeingivande och konverterande de ser ut.',
-            'Var STRIKT, KONSEKVENT och DETERMINISTISK — samma input MÅSTE ge samma svar.',
-            '',
-            'Rubrik för poäng:',
-            '  1  = trasig, tom, parkerad domän',
-            '  2-3 = extremt föråldrad (pre-2010), ingen mobil, tunt innehåll',
-            '  4  = daterad men fungerande, ful typografi/layout',
-            '  5  = genomsnittlig småföretagssajt, generisk, tunn hero',
-            '  6  = hyfsad modern-ish, tydliga tjänster + kontakt',
-            '  7  = klart modern, responsiv, tydlig hierarki, tydliga CTA',
-            '  8  = polerad, on-brand, trust signals',
-            '  9-10 = förstklassig, inget meningsfullt att förbättra',
-            '',
-            'Om innehållet är väldigt tunt (<300 tecken riktig copy) — cap 4.',
-            '',
-            'Svara ENDAST med strikt JSON:',
-            '{"score": <heltal 1-10>, "reason": "<max 200 tecken, konkret evidens>", "weaknesses": ["<konkret svaghet 1>", "<konkret svaghet 2>", "<konkret svaghet 3>"]}',
-            'Svagheterna ska vara på svenska, konkreta (t.ex. "generisk stock-hero", "ingen mobil-nav", "saknar priser", "gammal design 2015-typ"), och användbara i ett kallmail som argument för varför de behöver ny hemsida.',
-          ].join('\n'),
-        },
-        {
-          role: 'user',
-          content: `URL: ${url}\nFöretag: ${row.company_name}\nTitel: ${title}\n\nInnehåll:\n${markdown.slice(0, 3000)}`,
-        },
-      ],
-      response_format: { type: 'json_object' },
-    }),
-  })
-  const aiData = await aiResp.json()
-  if (!aiResp.ok) throw new Error(`AI audit ${aiResp.status}: ${JSON.stringify(aiData).slice(0, 200)}`)
-
-  let parsed: { score: number; reason: string; weaknesses?: string[] } = { score: 5, reason: 'unparsed' }
-  try { parsed = JSON.parse(aiData.choices?.[0]?.message?.content ?? '{}') } catch (_) { /* keep default */ }
-  const score = Math.max(1, Math.min(10, Math.round(parsed.score)))
-  const nextStatus = score >= 7 ? 'site_good_enough' : 'needs_site'
-
-  await supabase.from('site_leads').update({
+  const nextStatus = result.unreadable && result.uncertain
+    ? 'needs_triage'
+    : result.score >= 7
+      ? 'site_good_enough'
+      : 'needs_site'
+  const { error: saveError } = await supabase.from('site_leads').update({
     status: nextStatus,
-    audit_score: score,
-    audit_reason: (parsed.reason ?? '').slice(0, 500),
-    audit_details: { weaknesses: (parsed.weaknesses ?? []).slice(0, 5) },
+    audit_score: result.score,
+    audit_reason: result.reason.slice(0, 500),
+    audit_details: {
+      weaknesses: result.weaknesses.slice(0, 6),
+      structural: result.structural.slice(0, 5),
+      cosmetic: result.cosmetic.slice(0, 5),
+      uncertain: result.uncertain,
+      screenshot: result.screenshot,
+    },
   }).eq('id', row.id)
+  if (saveError) {
+    await supabase.from('site_leads').update({ status: 'pending_audit' }).eq('id', row.id)
+    throw new Error(`save audit: ${saveError.message}`)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -539,7 +701,7 @@ async function auditOne(
 // 'freeform' = AI builds the whole site). Env var is a hard override.
 let cachedGenerationMode: 'template' | 'freeform' | null = null
 async function resolveGenerationMode(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseAdmin,
 ): Promise<'template' | 'freeform'> {
   const envMode = Deno.env.get('SITE_GENERATION_MODE')
   if (envMode === 'freeform' || envMode === 'template') return envMode
@@ -643,7 +805,7 @@ async function chooseTemplateFamilyForLead(lead: any): Promise<{
 // scrape-lead-data. The reconciler above then walks the pipeline forward.
 // ---------------------------------------------------------------------------
 async function startGeneration(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseAdmin,
   supabaseUrl: string,
   serviceKey: string,
   lead: any,
@@ -795,6 +957,10 @@ async function startGeneration(
     const body = await scrapeResp.text().catch(() => '')
     let providerFailure = false
     try { providerFailure = JSON.parse(body)?.provider === 'firecrawl' } catch { /* plain error body */ }
+    await supabase.from('generated_sites').update({
+      status: 'failed',
+      error_message: `Scrape failed (${scrapeResp.status}): ${body.slice(0, 400)}`,
+    }).eq('id', gs.id)
     await supabase.from('site_leads').update({
       status: providerFailure || scrapeResp.status === 423 ? 'needs_site' : 'failed',
       generated_site_id: providerFailure || scrapeResp.status === 423 ? null : gs.id,
@@ -809,6 +975,10 @@ async function startGeneration(
   const generateResp = await invokeFn(supabaseUrl, serviceKey, 'generate-site', { generated_site_id: gs.id })
   if (!generateResp.ok) {
     const body = await generateResp.text().catch(() => '')
+    await supabase.from('generated_sites').update({
+      status: 'failed',
+      error_message: `Generate queue failed (${generateResp.status}): ${body.slice(0, 400)}`,
+    }).eq('id', gs.id)
     await supabase.from('site_leads').update({
       status: 'failed',
       feedback: `Generate queue failed: ${body.slice(0, 400)}`,

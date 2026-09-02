@@ -1170,6 +1170,14 @@ export type Database = {
     }
     Functions: {
       _json_string_escape: { Args: { value: string }; Returns: string }
+      claim_site_leads_for_audit: {
+        Args: { p_language: string; p_limit?: number }
+        Returns: Database["public"]["Tables"]["site_leads"]["Row"][]
+      }
+      claim_site_leads_for_generation: {
+        Args: { p_language: string; p_limit?: number }
+        Returns: Database["public"]["Tables"]["site_leads"]["Row"][]
+      }
       next_sequence_schedule_slot: {
         Args: { base_at?: string; config: Json }
         Returns: string

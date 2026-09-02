@@ -297,7 +297,15 @@ export default function SiteLeads() {
     try {
       const { data, error } = await supabase.functions.invoke("process-site-leads", { body: {} });
       if (error) throw error;
-      toast({ title: "Pipeline körd", description: `Auditerade ${data?.audited ?? 0}, startade ${data?.generated ?? 0} bygg.` });
+      const sv = data?.budgets?.sv;
+      const en = data?.budgets?.en;
+      const budgetSummary = sv && en
+        ? ` SV: ${sv.completed}/${sv.target} klara, ${sv.remaining} platser kvar. EN: ${en.completed}/${en.target} klara, ${en.remaining} platser kvar.`
+        : "";
+      toast({
+        title: "Pipeline körd",
+        description: `Auditerade ${data?.audited ?? 0}, startade ${data?.generated ?? 0} bygg.${budgetSummary}`,
+      });
       await load();
     } catch (err) {
       toast({ title: "Pipeline misslyckades", description: (err as Error).message, variant: "destructive" });
