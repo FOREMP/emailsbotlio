@@ -203,11 +203,12 @@ export default function SiteOutreach() {
     setLoading(false);
   }, [language]);
 
+  // No polling: the page only refreshes on open, on language switch, after an
+  // action, or when you press "Uppdatera".
   useEffect(() => {
-    load();
-    const t = setInterval(load, 30_000);
-    return () => clearInterval(t);
+    load().then(() => setLastUpdated(new Date()));
   }, [load]);
+
 
   const sendNodes = useMemo(
     () => nodes.filter((n) => n.node_type === "send_email").sort((a, b) => a.position_y - b.position_y),
