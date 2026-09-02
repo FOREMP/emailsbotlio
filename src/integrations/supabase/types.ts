@@ -1143,6 +1143,99 @@ export type Database = {
           },
         ]
       }
+      site_pipeline_breakers: {
+        Row: {
+          error_code: string | null
+          error_count: number
+          error_message: string | null
+          ignored_count: number
+          is_paused: boolean
+          last_error_at: string | null
+          paused_at: string | null
+          provider: string
+          resumed_at: string | null
+          updated_at: string
+          window_started_at: string | null
+        }
+        Insert: {
+          error_code?: string | null
+          error_count?: number
+          error_message?: string | null
+          ignored_count?: number
+          is_paused?: boolean
+          last_error_at?: string | null
+          paused_at?: string | null
+          provider: string
+          resumed_at?: string | null
+          updated_at?: string
+          window_started_at?: string | null
+        }
+        Update: {
+          error_code?: string | null
+          error_count?: number
+          error_message?: string | null
+          ignored_count?: number
+          is_paused?: boolean
+          last_error_at?: string | null
+          paused_at?: string | null
+          provider?: string
+          resumed_at?: string | null
+          updated_at?: string
+          window_started_at?: string | null
+        }
+        Relationships: []
+      }
+      site_pipeline_error_events: {
+        Row: {
+          created_at: string
+          error_code: string
+          error_message: string
+          generated_site_id: string | null
+          http_status: number | null
+          id: number
+          provider: string
+          site_lead_id: string | null
+          source_function: string
+        }
+        Insert: {
+          created_at?: string
+          error_code: string
+          error_message: string
+          generated_site_id?: string | null
+          http_status?: number | null
+          id?: number
+          provider: string
+          site_lead_id?: string | null
+          source_function: string
+        }
+        Update: {
+          created_at?: string
+          error_code?: string
+          error_message?: string
+          generated_site_id?: string | null
+          http_status?: number | null
+          id?: number
+          provider?: string
+          site_lead_id?: string | null
+          source_function?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "site_pipeline_error_events_generated_site_id_fkey"
+            columns: ["generated_site_id"]
+            isOneToOne: false
+            referencedRelation: "generated_sites"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "site_pipeline_error_events_site_lead_id_fkey"
+            columns: ["site_lead_id"]
+            isOneToOne: false
+            referencedRelation: "site_leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       suppressed_emails: {
         Row: {
           created_at: string
@@ -1182,6 +1275,21 @@ export type Database = {
           id: string
           is_first: boolean
           user_id: string
+        }[]
+      }
+      record_site_pipeline_failure: {
+        Args: {
+          p_error_code: string
+          p_error_message: string
+          p_generated_site_id?: string
+          p_http_status?: number
+          p_provider: string
+          p_site_lead_id?: string
+          p_source_function: string
+        }
+        Returns: {
+          error_count: number
+          is_paused: boolean
         }[]
       }
       seed_default_senders: { Args: never; Returns: number }
