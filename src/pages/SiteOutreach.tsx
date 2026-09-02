@@ -535,12 +535,23 @@ export default function SiteOutreach() {
       </Card>
 
       <Card className="p-4">
-        <h2 className="text-lg font-semibold mb-3">Kö</h2>
+        <Collapsible open={queueOpen} onOpenChange={setQueueOpen}>
+          <div className="flex flex-wrap items-center gap-3 mb-3">
+            <CollapsibleTrigger asChild>
+              <Button variant="ghost" className="gap-2 px-2 text-lg font-semibold">
+                <ChevronDown className={`h-4 w-4 transition-transform ${queueOpen ? "rotate-180" : ""}`} />
+                Kö · {enrollments.length} i sekvensen
+              </Button>
+            </CollapsibleTrigger>
+            {!queueOpen && <span className="text-xs text-muted-foreground">Klicka för att visa kön</span>}
+          </div>
+          <CollapsibleContent>
         {enrollments.length === 0 ? (
           <div className="text-sm text-muted-foreground py-6 text-center">Ingen har enrollats än — godkänn en demo i Approvals.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
+
               <thead className="text-xs text-muted-foreground text-left border-b">
                 <tr>
                   <th className="py-2 pr-3">Företag</th>
