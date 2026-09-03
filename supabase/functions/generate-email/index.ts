@@ -42,7 +42,13 @@ function interpolate(tpl: string, vars: Record<string, any>): string {
   });
 }
 
-async function callOpenAI(apiKey: string, model: string, system: string, user: string): Promise<string> {
+async function callOpenAI(
+  apiKey: string,
+  model: string,
+  system: string,
+  user: string,
+  temperature = 0.65,
+): Promise<string> {
   const r = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
@@ -52,7 +58,7 @@ async function callOpenAI(apiKey: string, model: string, system: string, user: s
         { role: "system", content: system },
         { role: "user", content: user },
       ],
-      temperature: 0.8,
+      temperature,
     }),
   });
   if (!r.ok) {
@@ -104,7 +110,7 @@ Deno.serve(async (req) => {
     const interpolatedSubjectPrompt = subjectPromptRaw ? interpolate(subjectPromptRaw, vars) : "";
 
     const followupClause = is_followup
-      ? " This is a SHORT follow-up to a previous email to the same person. Acknowledge the prior message implicitly (e.g. 'circling back', 'wanted to follow up'), keep it under 80 words, and end with a single concrete ask."
+      ? " This is a follow-up in an existing email thread. Do not repeat the original introduction. Follow the requested word limit and ending exactly; the final message may intentionally have no question or call to action."
       : "";
 
     // ---- BODY CALL ----
@@ -131,7 +137,7 @@ Do NOT include any closing signature, sign-off, "Best regards", "Vänliga hälsn
       const subjectSystem = `You are writing ONLY the subject line of a single email. Follow the user's instructions below EXACTLY.
 Return ONLY the subject line as plain text — no quotes, no "Subject:" prefix, no extra explanation, no multiple options. Output exactly one line.`;
       try {
-        const raw = await callOpenAI(apiKey, model, subjectSystem, interpolatedSubjectPrompt);
+        const raw = await callOpenAI(apiKey, model, subjectSystem, interpolatedSubjectPrompt, 0.8);
         subjectText = cleanSubjectLine(raw);
       } catch (e) {
         console.error("[generate-email] subject call failed:", (e as Error).message);

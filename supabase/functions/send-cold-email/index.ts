@@ -274,7 +274,9 @@ Deno.serve(async (req) => {
       body: {
         contact,
         prompt,
-        subject_prompt: subject_prompt ?? subject_hint ?? '',
+        // Follow-ups reuse the original subject below. Avoid paying for a subject
+        // generation that will immediately be discarded.
+        subject_prompt: subject_override ? '' : (subject_prompt ?? subject_hint ?? ''),
         subject_hint, // legacy fallback for older deployments
         is_followup: !!is_followup,
         model,
