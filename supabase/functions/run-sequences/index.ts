@@ -1,4 +1,4 @@
-import { createClient } from 'npm:@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -171,7 +171,7 @@ function senderFollowupQuota(sender: any): number {
 }
 
 async function countSequenceFirstTouchesToday(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient<any, any, any>,
   sequenceId: string,
   cache: Map<string, number>,
 ): Promise<number> {
@@ -207,7 +207,7 @@ async function countSequenceFirstTouchesToday(
       .in('status', COUNTED_SEND_STATUSES)
       .gte('sent_at', dayStartIso)
     if (error) throw new Error(`today sequence sends read failed: ${error.message}`)
-    for (const row of data ?? []) {
+    for (const row of (data ?? []) as any[]) {
       if (row.enrollment_id) touchedToday.add(row.enrollment_id as string)
     }
   }
@@ -228,7 +228,7 @@ async function countSequenceFirstTouchesToday(
       .in('status', COUNTED_SEND_STATUSES)
       .lt('sent_at', dayStartIso)
     if (error) throw new Error(`historical send read failed: ${error.message}`)
-    for (const row of data ?? []) {
+    for (const row of (data ?? []) as any[]) {
       if (row.enrollment_id) hadEarlierSend.add(row.enrollment_id as string)
     }
   }
@@ -250,11 +250,11 @@ Deno.serve(async (req) => {
   // Cheap pre-check: are there ANY due enrollments? If not, skip everything.
   const dueProbe = await supabase
     .from('enrollments')
-    .select('id', { head: true, count: 'exact' })
+    .select('id')
     .in('status', ['active', 'waiting_capacity'])
     .or(`next_send_at.is.null,next_send_at.lte.${nowIso}`)
     .limit(1)
-  if (!dueProbe.error && (dueProbe.count ?? 0) === 0) {
+  if (!dueProbe.error && (dueProbe.data?.length ?? 0) === 0) {
     return new Response(JSON.stringify({ ok: true, idle: true }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
@@ -303,6 +303,73 @@ Deno.serve(async (req) => {
 
   const due = [...(passA.data ?? []), ...passBData]
   console.log(`[run-sequences] picked ${due.length} due (followups=${passA.data?.length ?? 0}, new=${passBData.length})`)
+
+  // Snapshot the small due batch in a few set-based reads. Previously every
+  // enrollment repeated its own contact, suppression and send-history queries.
+  // The atomic update below is still performed per enrollment and remains the
+  // source of truth preventing duplicate concurrent sends.
+  const dueEnrollmentIds = due.map((row: any) => row.id as string)
+  const dueContactIds = Array.from(new Set(due.map((row: any) => row.contact_id as string).filter(Boolean)))
+  const dueUserIds = Array.from(new Set(due.map((row: any) => row.user_id as string).filter(Boolean)))
+
+  const [contactsResult, sendHistoryResult, sendersResult] = await Promise.all([
+    dueContactIds.length
+      ? supabase.from('contacts').select('*').in('id', dueContactIds)
+      : Promise.resolve({ data: [], error: null }),
+    dueEnrollmentIds.length
+      ? supabase
+          .from('sent_emails')
+          .select('enrollment_id, status, subject, sent_at')
+          .in('enrollment_id', dueEnrollmentIds)
+          .in('status', COUNTED_SEND_STATUSES)
+          .order('sent_at', { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
+    dueUserIds.length
+      ? supabase
+          .from('senders')
+          .select('id, user_id, from_email')
+          .in('user_id', dueUserIds)
+          .eq('is_active', true)
+      : Promise.resolve({ data: [], error: null }),
+  ])
+
+  if (contactsResult.error) throw new Error(`due contacts preload failed: ${contactsResult.error.message}`)
+  if (sendHistoryResult.error) throw new Error(`due send history preload failed: ${sendHistoryResult.error.message}`)
+  if (sendersResult.error) throw new Error(`active senders preload failed: ${sendersResult.error.message}`)
+
+  const contactById = new Map((contactsResult.data ?? []).map((row: any) => [row.id as string, row]))
+  const sendHistoryByEnrollment = new Map<string, any[]>()
+  for (const row of sendHistoryResult.data ?? []) {
+    if (!row.enrollment_id) continue
+    const history = sendHistoryByEnrollment.get(row.enrollment_id as string) ?? []
+    history.push(row)
+    sendHistoryByEnrollment.set(row.enrollment_id as string, history)
+  }
+  const activeSendersByUser = new Map<string, any[]>()
+  for (const row of sendersResult.data ?? []) {
+    const list = activeSendersByUser.get(row.user_id as string) ?? []
+    list.push(row)
+    activeSendersByUser.set(row.user_id as string, list)
+  }
+
+  const dueEmails = Array.from(new Set(
+    (contactsResult.data ?? [])
+      .map((row: any) => String(row.email ?? '').trim().toLowerCase())
+      .filter(Boolean),
+  ))
+  const dncKeys = new Set<string>()
+  const suppressedEmails = new Set<string>()
+  for (let from = 0; from < dueEmails.length; from += 100) {
+    const emails = dueEmails.slice(from, from + 100)
+    const [{ data: dncRows, error: dncError }, { data: suppressedRows, error: suppressedError }] = await Promise.all([
+      supabase.from('do_not_contact').select('user_id, email').in('email', emails),
+      supabase.from('suppressed_emails').select('email').in('email', emails),
+    ])
+    if (dncError) throw new Error(`do-not-contact preload failed: ${dncError.message}`)
+    if (suppressedError) throw new Error(`suppression preload failed: ${suppressedError.message}`)
+    for (const row of dncRows ?? []) dncKeys.add(`${row.user_id}:${String(row.email).toLowerCase()}`)
+    for (const row of suppressedRows ?? []) suppressedEmails.add(String(row.email).toLowerCase())
+  }
 
   const MAX_ATTEMPTS = 5
 
@@ -371,15 +438,6 @@ Deno.serve(async (req) => {
     return g
   }
 
-  async function getEnrollmentSendCount(enrollmentId: string): Promise<number> {
-    const { count } = await supabase
-      .from('sent_emails')
-      .select('id', { count: 'exact', head: true })
-      .eq('enrollment_id', enrollmentId)
-      .in('status', COUNTED_SEND_STATUSES)
-    return count ?? 0
-  }
-
   for (const enr of due ?? []) {
     processed++
     try {
@@ -403,7 +461,8 @@ Deno.serve(async (req) => {
       const graph = await getSequenceGraph(enr.sequence_id)
       const nodes = graph.nodes
       const edges = graph.edges
-      let sentCount = await getEnrollmentSendCount(enr.id)
+      const enrollmentHistory = sendHistoryByEnrollment.get(enr.id) ?? []
+      const sentCount = enrollmentHistory.length
 
       if (sentCount >= 4) {
         await supabase.from('enrollments').update({
@@ -418,7 +477,7 @@ Deno.serve(async (req) => {
         continue
       }
 
-      const { data: contact } = await supabase.from('contacts').select('*').eq('id', enr.contact_id).maybeSingle()
+      const contact = contactById.get(enr.contact_id)
 
       if (!contact) {
         console.warn(`[enr ${enr.id}] contact missing → failed`)
@@ -429,11 +488,7 @@ Deno.serve(async (req) => {
       // Stop sequence if contact has unsubscribed (DNC list or global suppression)
       if (contact.email) {
         const emailLower = contact.email.toLowerCase()
-        const [{ data: dnc }, { data: supp }] = await Promise.all([
-          supabase.from('do_not_contact').select('id').eq('user_id', enr.user_id).eq('email', emailLower).maybeSingle(),
-          supabase.from('suppressed_emails').select('id').eq('email', emailLower).maybeSingle(),
-        ])
-        if (dnc || supp) {
+        if (dncKeys.has(`${enr.user_id}:${emailLower}`) || suppressedEmails.has(emailLower)) {
           await supabase.from('enrollments').update({ status: 'unsubscribed' }).eq('id', enr.id)
           console.log(`[enr ${enr.id}] contact unsubscribed → cancelled`)
           continue
@@ -623,11 +678,7 @@ Deno.serve(async (req) => {
         let preSenderId: string | null = null
 
         // Fail fast if user has zero active senders (instead of silent indefinite defer)
-        const { data: anyActive } = await supabase
-          .from('senders')
-          .select('id, from_email')
-          .eq('user_id', enr.user_id)
-          .eq('is_active', true)
+        const anyActive = activeSendersByUser.get(enr.user_id) ?? []
         if (!anyActive || anyActive.length === 0) {
           console.warn(`[enr ${enr.id}] user has no active senders → failed`)
           await supabase.from('enrollments').update({
@@ -863,16 +914,13 @@ Deno.serve(async (req) => {
         if (isFollowup) {
           // updated_at is rewritten by housekeeping changes (throttle/status),
           // so it is not a safe marker for whether an earlier send existed.
-          const sinceIso = enr.created_at ?? new Date(0).toISOString()
-          const { data: priors } = await supabase
-            .from('sent_emails')
-            .select('subject, sent_at')
-            .eq('enrollment_id', enr.id)
-            .eq('status', 'sent')
-            .gte('sent_at', sinceIso)
-            .order('sent_at', { ascending: false })
-            .limit(20)
-          const original = (priors ?? []).find((p: any) => p.subject && !/^re:\s*/i.test(p.subject))
+          const sinceTime = new Date(enr.created_at ?? 0).getTime()
+          const original = enrollmentHistory.find((p: any) =>
+            p.status === 'sent'
+            && new Date(p.sent_at).getTime() >= sinceTime
+            && p.subject
+            && !/^re:\s*/i.test(p.subject)
+          )
           if (original?.subject) {
             subjectOverride = original.subject
           }

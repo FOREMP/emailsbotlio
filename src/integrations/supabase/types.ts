@@ -1271,6 +1271,54 @@ export type Database = {
         Args: { p_language: string; p_limit?: number }
         Returns: Database["public"]["Tables"]["site_leads"]["Row"][]
       }
+      get_site_outreach_queue_counts: {
+        Args: { p_sequence_id: string }
+        Returns: {
+          active: number
+          completed: number
+          new_last_24h: number
+          stopped: number
+          total: number
+          waiting_first: number
+          waiting_followup: number
+        }[]
+      }
+      get_site_outreach_recent: {
+        Args: { p_limit?: number; p_sequence_id: string }
+        Returns: {
+          body: string | null
+          contact_id: string | null
+          enrollment_id: string | null
+          id: string
+          open_count: number
+          opened_at: string | null
+          recipient_email: string
+          sent_at: string
+          status: string
+          subject: string | null
+          tracking_enabled: boolean
+          tracking_route: string
+          tracking_url: string | null
+        }[]
+      }
+      get_site_outreach_stats: {
+        Args: { p_sequence_id: string; p_since: string }
+        Returns: {
+          bounced: number
+          complained: number
+          day: string
+          delivered: number
+          opened: number
+          replied: number
+          sent: number
+          step_index: number
+          trackable: number
+        }[]
+      }
+      insert_site_leads_batch: {
+        Args: { p_rows: Json }
+        Returns: number
+      }
       next_sequence_schedule_slot: {
         Args: { base_at?: string; config: Json }
         Returns: string

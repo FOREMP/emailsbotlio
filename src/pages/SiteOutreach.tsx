@@ -15,14 +15,7 @@ import { Loader2, StopCircle, Mail, Save, Eye, Gauge, BarChart3, ChevronDown, Re
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { VolumeTrendChart } from "@/components/analytics/VolumeTrendChart";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import {
-  annotateSteps,
-  computeDailySeries,
-  computeKpis,
-  filterByStep,
-  type StepFilter,
-  type SentEmailRow,
-} from "@/hooks/useAnalytics";
+import { type StepFilter, type SentEmailRow } from "@/hooks/useAnalytics";
 
 type Seq = { id: string; contact_list_id: string | null };
 type Node = { id: string; node_type: string; position_y: number; config: any };
@@ -50,6 +43,26 @@ type SentRow = {
   tracking_enabled?: boolean | null;
   tracking_route?: "none" | "custom" | "supabase" | null;
   tracking_url?: string | null;
+};
+type OutreachStatRow = {
+  day: string;
+  step_index: number;
+  sent: number;
+  delivered: number;
+  trackable: number;
+  opened: number;
+  replied: number;
+  bounced: number;
+  complained: number;
+};
+type QueueCounts = {
+  total: number;
+  active: number;
+  waiting_first: number;
+  waiting_followup: number;
+  completed: number;
+  stopped: number;
+  new_last_24h: number;
 };
 
 const STATUS_COLOR: Record<string, string> = {
@@ -82,7 +95,8 @@ export default function SiteOutreach() {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [enrollments, setEnrollments] = useState<EnrollRow[]>([]);
   const [recent, setRecent] = useState<SentRow[]>([]);
-  const [statsRows, setStatsRows] = useState<SentEmailRow[]>([]);
+  const [statsRows, setStatsRows] = useState<OutreachStatRow[]>([]);
+  const [queueCounts, setQueueCounts] = useState<QueueCounts | null>(null);
   const [allSentRows, setAllSentRows] = useState<SentEmailRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [preview, setPreview] = useState<SentRow | null>(null);
@@ -104,6 +118,7 @@ export default function SiteOutreach() {
     setEnrollments([]);
     setRecent([]);
     setStatsRows([]);
+    setQueueCounts(null);
     setAllSentRows([]);
     setDirty({});
 
@@ -125,7 +140,14 @@ export default function SiteOutreach() {
     }
     setSeq(s as Seq);
 
-    const [{ data: ns }, { data: enrsRaw }] = await Promise.all([
+    const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const [
+      { data: ns },
+      { data: enrsRaw },
+      statsResult,
+      queueCountsResult,
+      recentResult,
+    ] = await Promise.all([
       supabase.from("sequence_nodes").select("id, node_type, position_y, config").eq("sequence_id", s.id).order("position_y"),
       supabase
         .from("enrollments")
@@ -133,7 +155,14 @@ export default function SiteOutreach() {
         .eq("sequence_id", s.id)
         .order("updated_at", { ascending: false })
         .limit(200),
+      supabase.rpc("get_site_outreach_stats", { p_sequence_id: s.id, p_since: since30 }),
+      supabase.rpc("get_site_outreach_queue_counts", { p_sequence_id: s.id }),
+      supabase.rpc("get_site_outreach_recent", { p_sequence_id: s.id, p_limit: 5 }),
     ]);
+
+    if (statsResult.error) toast({ title: "Kunde inte ladda statistik", description: statsResult.error.message, variant: "destructive" });
+    if (queueCountsResult.error) toast({ title: "Kunde inte ladda köstatistik", description: queueCountsResult.error.message, variant: "destructive" });
+    if (recentResult.error) toast({ title: "Kunde inte ladda senaste mail", description: recentResult.error.message, variant: "destructive" });
 
     const enrs = enrsRaw ?? [];
     const contactIds = Array.from(new Set(enrs.map((e: any) => e.contact_id).filter(Boolean)));
@@ -143,7 +172,6 @@ export default function SiteOutreach() {
     const contactMap = new Map((contactRows ?? []).map((c: any) => [c.id, c]));
     const enrsWithContact = enrs.map((e: any) => ({ ...e, contact: contactMap.get(e.contact_id) ?? null }));
 
-    const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     const visibleEnrollmentIds = enrs.map((row: any) => row.id as string);
     const visibleSent: SentEmailRow[] = [];
     for (let i = 0; i < visibleEnrollmentIds.length; i += 200) {
@@ -160,53 +188,30 @@ export default function SiteOutreach() {
       }
     }
 
-    // Supabase REST responses are capped, so page through every enrollment id.
-    const allEnrIds: string[] = [];
-    for (let from = 0; ; from += 1000) {
-      const { data, error } = await supabase
-        .from("enrollments")
-        .select("id")
-        .eq("sequence_id", s.id)
-        .order("id", { ascending: true })
-        .range(from, from + 999);
-      if (error) {
-        toast({ title: "Kunde inte ladda sekvensstatistik", description: error.message, variant: "destructive" });
-        break;
-      }
-      const page = data ?? [];
-      allEnrIds.push(...page.map((row: any) => row.id as string));
-      if (page.length < 1000) break;
-    }
-
-    // The query below selects the analytics columns plus the extra ones the
-    // preview list needs (body, open_count, contact_id), so rows satisfy both.
-    const stats: (SentEmailRow & SentRow)[] = [];
-    for (let i = 0; i < allEnrIds.length; i += 200) {
-      const chunk = allEnrIds.slice(i, i + 200);
-      const { data, error } = await supabase
-        .from("sent_emails")
-        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject, body, open_count, contact_id, tracking_enabled, tracking_route, tracking_url")
-        .in("enrollment_id", chunk)
-        .gte("sent_at", since30)
-        .order("sent_at", { ascending: false })
-        .limit(5000);
-      if (error) {
-        toast({ title: "Kunde inte ladda 30-dagarsstatistik", description: error.message, variant: "destructive" });
-      } else if (data) {
-        stats.push(...(data as unknown as (SentEmailRow & SentRow)[]));
-      }
-    }
-
-    const sent: SentRow[] = stats
-      .slice()
-      .sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime())
-      .slice(0, 5);
-
-
     setNodes((ns ?? []) as Node[]);
     setEnrollments(enrsWithContact as any);
-    setRecent(sent);
-    setStatsRows(stats);
+    setRecent((recentResult.data ?? []) as SentRow[]);
+    setStatsRows((statsResult.data ?? []).map((row) => ({
+      ...row,
+      step_index: Number(row.step_index),
+      sent: Number(row.sent),
+      delivered: Number(row.delivered),
+      trackable: Number(row.trackable),
+      opened: Number(row.opened),
+      replied: Number(row.replied),
+      bounced: Number(row.bounced),
+      complained: Number(row.complained),
+    })));
+    const queueRow = queueCountsResult.data?.[0];
+    setQueueCounts(queueRow ? {
+      total: Number(queueRow.total),
+      active: Number(queueRow.active),
+      waiting_first: Number(queueRow.waiting_first),
+      waiting_followup: Number(queueRow.waiting_followup),
+      completed: Number(queueRow.completed),
+      stopped: Number(queueRow.stopped),
+      new_last_24h: Number(queueRow.new_last_24h),
+    } : null);
     setAllSentRows(visibleSent);
     setLoading(false);
   }, [language]);
@@ -275,37 +280,29 @@ export default function SiteOutreach() {
 
   const counts = useMemo(() => {
     const todayKey = stockholmDateKey(new Date());
-    const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
-    const queuedRows = enrollments.filter((e) => e.status === "active" || e.status === "waiting_capacity");
-    const active = queuedRows.length;
-    const waiting = queuedRows.length;
-    const waitingFirst = queuedRows.filter((e) => (sentCountByEnrollment.get(e.id) ?? 0) === 0).length;
-    const waitingFollowup = waiting - waitingFirst;
-    const completed = enrollments.filter((e) => e.status === "completed").length;
-    const stopped = enrollments.filter((e) => e.status === "stopped" || e.status === "unsubscribed").length;
-    const newLast24h = enrollments.filter((e) => e.created_at && new Date(e.created_at).getTime() >= dayAgo).length;
+    const todayRows = statsRows.filter((row) => row.day === todayKey);
+    const sentFirstToday = todayRows
+      .filter((row) => row.step_index === 1)
+      .reduce((sum, row) => sum + row.sent, 0);
+    const sentFollowupToday = todayRows
+      .filter((row) => row.step_index > 1)
+      .reduce((sum, row) => sum + row.sent, 0);
 
-    let sentFirstToday = 0;
-    let sentFollowupToday = 0;
-    for (const r of annotateSteps(statsRows)) {
-      if (stockholmDateKey(r.sent_at) !== todayKey) continue;
-      if (r.tracking_enabled || r.stepIndex > 1) sentFollowupToday += 1;
-      else sentFirstToday += 1;
-    }
+    const queuedRows = enrollments.filter((e) => e.status === "active" || e.status === "waiting_capacity");
+    const fallbackWaitingFirst = queuedRows.filter((e) => (sentCountByEnrollment.get(e.id) ?? 0) === 0).length;
 
     return {
-      active,
-      waiting,
-      waitingFirst,
-      waitingFollowup,
-      completed,
-      stopped,
-      newLast24h,
+      active: queueCounts?.active ?? queuedRows.length,
+      waitingFirst: queueCounts?.waiting_first ?? fallbackWaitingFirst,
+      waitingFollowup: queueCounts?.waiting_followup ?? (queuedRows.length - fallbackWaitingFirst),
+      completed: queueCounts?.completed ?? enrollments.filter((e) => e.status === "completed").length,
+      stopped: queueCounts?.stopped ?? enrollments.filter((e) => e.status === "stopped" || e.status === "unsubscribed").length,
+      newLast24h: queueCounts?.new_last_24h ?? 0,
       sentFirstToday,
       sentFollowupToday,
       sentToday: sentFirstToday + sentFollowupToday,
     };
-  }, [enrollments, sentCountByEnrollment, statsRows]);
+  }, [enrollments, queueCounts, sentCountByEnrollment, statsRows]);
 
   const stopEnrollment = async (id: string, reason: string) => {
     if (!confirm(`Stoppa denna kontakt från fler mail? (${reason})`)) return;
@@ -400,19 +397,62 @@ export default function SiteOutreach() {
     setDirty((d) => ({ ...d, [nodeId]: { ...(d[nodeId] ?? {}), [key]: value } }));
   };
 
-  const steppedStats = useMemo(() => annotateSteps(statsRows), [statsRows]);
-  const filteredStats = useMemo(() => filterByStep(steppedStats, stepFilter), [steppedStats, stepFilter]);
+  const filteredStats = useMemo(() => statsRows.filter((row) => {
+    if (stepFilter === "all") return true;
+    if (stepFilter === "first") return row.step_index === 1;
+    if (stepFilter === "followups") return row.step_index > 1;
+    return row.step_index === Number(stepFilter.replace("step-", ""));
+  }), [statsRows, stepFilter]);
+
+  const filteredKpis = useMemo(() => {
+    const sent = filteredStats.reduce((sum, row) => sum + row.sent, 0);
+    const delivered = filteredStats.reduce((sum, row) => sum + row.delivered, 0);
+    const trackable = filteredStats.reduce((sum, row) => sum + row.trackable, 0);
+    const opened = filteredStats.reduce((sum, row) => sum + row.opened, 0);
+    const replied = filteredStats.reduce((sum, row) => sum + row.replied, 0);
+    const bounced = filteredStats.reduce((sum, row) => sum + row.bounced, 0);
+    const complained = filteredStats.reduce((sum, row) => sum + row.complained, 0);
+    return {
+      sent,
+      delivered,
+      trackable,
+      untracked: Math.max(0, delivered - trackable),
+      opened,
+      replied,
+      bounced,
+      complained,
+      openRate: trackable ? opened / trackable : 0,
+    };
+  }, [filteredStats]);
+
+  const dailySeries = useMemo(() => {
+    const todayKey = stockholmDateKey(new Date());
+    if (!todayKey) return [];
+    const [year, month, day] = todayKey.split("-").map(Number);
+    const buckets = new Map<string, { date: string; sent: number; opened: number; replied: number }>();
+    for (let i = 29; i >= 0; i--) {
+      const key = stockholmDateKey(new Date(Date.UTC(year, month - 1, day - i, 12)));
+      if (key) buckets.set(key, { date: key, sent: 0, opened: 0, replied: 0 });
+    }
+    for (const row of filteredStats) {
+      const bucket = buckets.get(row.day);
+      if (!bucket) continue;
+      bucket.sent += row.sent;
+      bucket.opened += row.opened;
+      bucket.replied += row.replied;
+    }
+    return Array.from(buckets.values());
+  }, [filteredStats]);
+
   const stepBreakdown = useMemo(() => {
     const map = new Map<number, { step: number; sent: number; trackable: number; opened: number; replied: number }>();
     for (const row of filteredStats) {
-      const step = Math.min(row.stepIndex, 4);
+      const step = Math.min(row.step_index, 4);
       const entry = map.get(step) ?? { step, sent: 0, trackable: 0, opened: 0, replied: 0 };
-      entry.sent += 1;
-      if (row.tracking_enabled) {
-        entry.trackable += 1;
-        if (row.opened_at) entry.opened += 1;
-      }
-      if (row.replied_at) entry.replied += 1;
+      entry.sent += row.sent;
+      entry.trackable += row.trackable;
+      entry.opened += row.opened;
+      entry.replied += row.replied;
       map.set(step, entry);
     }
     return Array.from(map.values()).sort((a, b) => a.step - b.step);
@@ -519,7 +559,7 @@ export default function SiteOutreach() {
               </SelectContent>
             </Select>
             {(() => {
-              const k = computeKpis(filteredStats);
+              const k = filteredKpis;
               return (
                 <div className="flex gap-4 text-xs">
                   <div><div className="text-muted-foreground">Skickade</div><div className="text-base font-semibold">{k.sent}</div></div>
@@ -533,7 +573,7 @@ export default function SiteOutreach() {
             })()}
           </div>
         </div>
-        <VolumeTrendChart data={computeDailySeries(filteredStats, 30)} />
+        <VolumeTrendChart data={dailySeries} />
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="text-xs text-muted-foreground text-left border-b">
@@ -571,7 +611,7 @@ export default function SiteOutreach() {
             <CollapsibleTrigger asChild>
               <Button variant="ghost" className="gap-2 px-2 text-lg font-semibold">
                 <ChevronDown className={`h-4 w-4 transition-transform ${queueOpen ? "rotate-180" : ""}`} />
-                Kö · {enrollments.length} i sekvensen
+                Kö · {queueCounts?.total ?? enrollments.length} i sekvensen
               </Button>
             </CollapsibleTrigger>
             {!queueOpen && <span className="text-xs text-muted-foreground">Klicka för att visa kön</span>}
@@ -627,7 +667,8 @@ export default function SiteOutreach() {
             </table>
             <div className="flex items-center justify-between gap-3 pt-3 mt-2 border-t">
               <div className="text-xs text-muted-foreground">
-                Sida {queuePage} av {queuePageCount} · Visar {pagedEnrollments.length} av {enrollments.length}
+                Sida {queuePage} av {queuePageCount} · Visar {pagedEnrollments.length} av {queueCounts?.total ?? enrollments.length}
+                {(queueCounts?.total ?? 0) > enrollments.length ? " (senaste 200 i kön)" : ""}
               </div>
               <div className="flex gap-2">
                 <Button size="sm" variant="outline" disabled={queuePage <= 1}

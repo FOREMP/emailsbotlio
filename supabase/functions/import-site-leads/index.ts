@@ -101,10 +101,11 @@ Deno.serve(async (req) => {
     }
 
 
-    // Dedupe-insert
-    let inserted = 0, skipped_no_contact = 0, duplicates = 0, invalid = 0
-    let failed = 0
-    let firstError: string | null = null
+    // Build one database batch. The database function performs one INSERT .. SELECT
+    // with ON CONFLICT DO NOTHING, so existing leads are never overwritten and a
+    // 25-row browser batch no longer creates 25 separate transactions.
+    const insertRows: Record<string, unknown>[] = []
+    let skipped_no_contact = 0, invalid = 0
     for (const n of normalized) {
       const name = (n.company_name ?? '').trim()
       if (!name) { invalid++; continue }
@@ -116,7 +117,7 @@ Deno.serve(async (req) => {
       const hasEmail = !!email
       const status = (hasWebsite && hasEmail) ? 'pending_audit' : 'skipped_no_contact'
       if (status === 'skipped_no_contact') skipped_no_contact++
-      const { error } = await supabase.from('site_leads').insert({
+      insertRows.push({
         user_id: userId,
         company_name: name,
         company_name_normalized: normalizeName(name),
@@ -135,19 +136,32 @@ Deno.serve(async (req) => {
         niche: classifyNiche(n.category, n.company_name) ?? fallbackNiche ?? 'other',
         source_file_id: source_file_id ?? null,
       })
-      if (error) {
-        if (error.code === '23505') duplicates++
-        else {
-          failed++
-          firstError ||= error.message
-          console.error('insert err', error)
-        }
-      } else {
-        inserted++
-      }
     }
 
-    return json({ ok: failed === 0, total: normalized.length, inserted, duplicates, invalid, skipped_no_contact, failed, error: firstError })
+    if (insertRows.length === 0) {
+      return json({ ok: true, total: normalized.length, inserted: 0, duplicates: 0, invalid, skipped_no_contact, failed: 0, error: null })
+    }
+
+    const { data: insertedRaw, error: insertError } = await supabase.rpc('insert_site_leads_batch', {
+      p_rows: insertRows,
+    })
+    if (insertError) {
+      console.error('batch insert err', insertError)
+      return json({
+        ok: false,
+        total: normalized.length,
+        inserted: 0,
+        duplicates: 0,
+        invalid,
+        skipped_no_contact,
+        failed: insertRows.length,
+        error: insertError.message,
+      }, 500)
+    }
+
+    const inserted = Math.max(0, Number(insertedRaw ?? 0))
+    const duplicates = Math.max(0, insertRows.length - inserted)
+    return json({ ok: true, total: normalized.length, inserted, duplicates, invalid, skipped_no_contact, failed: 0, error: null })
   } catch (err) {
     console.error('import-site-leads', err)
     return json({ error: (err as Error).message }, 500)
