@@ -41,7 +41,7 @@ export default function SitePipelineAlert() {
       if (error) throw error
       return (data ?? []) as Breaker[]
     },
-    refetchInterval: 30_000,
+    // No background polling — the banner refetches on page load and after "Ignorera och starta igen".
   })
 
   const resume = async (provider: Provider) => {

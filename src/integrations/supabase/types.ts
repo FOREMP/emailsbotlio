@@ -1265,11 +1265,87 @@ export type Database = {
       _json_string_escape: { Args: { value: string }; Returns: string }
       claim_site_leads_for_audit: {
         Args: { p_language: string; p_limit?: number }
-        Returns: Database["public"]["Tables"]["site_leads"]["Row"][]
+        Returns: {
+          address: string | null
+          approved_at: string | null
+          audit_details: Json | null
+          audit_reason: string | null
+          audit_score: number | null
+          auto_send: boolean
+          category: string | null
+          company_name: string
+          company_name_normalized: string
+          created_at: string
+          demo_url: string | null
+          domain: string | null
+          domain_normalized: string | null
+          email: string | null
+          extra: Json | null
+          feedback: string | null
+          generated_site_id: string | null
+          id: string
+          language: string
+          last_email_sent_at: string | null
+          niche: string
+          phone: string | null
+          rating: number | null
+          review_snippets: Json | null
+          reviews_count: number | null
+          source_file_id: string | null
+          status: string
+          triaged_at: string | null
+          updated_at: string
+          user_id: string
+          website: string | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "site_leads"
+          isOneToOne: false
+          isSetofReturn: true
+        }
       }
       claim_site_leads_for_generation: {
         Args: { p_language: string; p_limit?: number }
-        Returns: Database["public"]["Tables"]["site_leads"]["Row"][]
+        Returns: {
+          address: string | null
+          approved_at: string | null
+          audit_details: Json | null
+          audit_reason: string | null
+          audit_score: number | null
+          auto_send: boolean
+          category: string | null
+          company_name: string
+          company_name_normalized: string
+          created_at: string
+          demo_url: string | null
+          domain: string | null
+          domain_normalized: string | null
+          email: string | null
+          extra: Json | null
+          feedback: string | null
+          generated_site_id: string | null
+          id: string
+          language: string
+          last_email_sent_at: string | null
+          niche: string
+          phone: string | null
+          rating: number | null
+          review_snippets: Json | null
+          reviews_count: number | null
+          source_file_id: string | null
+          status: string
+          triaged_at: string | null
+          updated_at: string
+          user_id: string
+          website: string | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "site_leads"
+          isOneToOne: false
+          isSetofReturn: true
+        }
       }
       get_site_outreach_queue_counts: {
         Args: { p_sequence_id: string }
@@ -1286,19 +1362,19 @@ export type Database = {
       get_site_outreach_recent: {
         Args: { p_limit?: number; p_sequence_id: string }
         Returns: {
-          body: string | null
-          contact_id: string | null
-          enrollment_id: string | null
+          body: string
+          contact_id: string
+          enrollment_id: string
           id: string
           open_count: number
-          opened_at: string | null
+          opened_at: string
           recipient_email: string
           sent_at: string
           status: string
-          subject: string | null
+          subject: string
           tracking_enabled: boolean
           tracking_route: string
-          tracking_url: string | null
+          tracking_url: string
         }[]
       }
       get_site_outreach_stats: {
@@ -1315,10 +1391,7 @@ export type Database = {
           trackable: number
         }[]
       }
-      insert_site_leads_batch: {
-        Args: { p_rows: Json }
-        Returns: number
-      }
+      insert_site_leads_batch: { Args: { p_rows: Json }; Returns: number }
       next_sequence_schedule_slot: {
         Args: { base_at?: string; config: Json }
         Returns: string
