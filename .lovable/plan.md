@@ -1,55 +1,56 @@
-# Lower AI cost without lowering site or language quality
+# Cut running cost: NVIDIA models + own scraper server
 
-## Where the money actually goes today
+Three phases, in this order. Each one works on its own, so you can stop after any of them.
 
-Per generated website (4-5 pages) the system makes about 9-11 model calls:
+## Phase 1 — Swap OpenRouter for NVIDIA (no server needed, do this first)
 
-| Step | Model today | Volume | Comment |
-| --- | --- | --- | --- |
-| Site content, one call per page | DeepSeek V4 Flash, then DeepSeek V3.1, then GPT-4o-mini | 4-5 calls, 3000 tokens each | V4 Flash often times out (38s), so the same page is paid for twice or three times and ends on the most expensive model |
-| Language polish, one call per page | GPT-4o-mini, always | 4-5 calls, 3000 tokens each | Runs on every page even when the draft is already good. This is the single biggest line item |
-| Template picker | DeepSeek V3.1 | 1 small call per lead | Cheap |
-| Website audit | Gemini 2.5 Flash | 1 per lead | Already cheap |
-| Review snippet picker on import | DeepSeek V3.1 | 1 per 20 rows | Cheap |
-| Cold email writing | GPT-4o-mini via OpenAI direct | 2 small calls per email | Small tokens, quality critical |
+NVIDIA's developer endpoint is OpenAI-compatible, so it is a drop-in swap: same request shape, different address, key and model names.
 
-So the cost is concentrated in the site builder: the double-paying timeout cascade plus a full second GPT pass over every page.
+- Add a shared AI client used by every function instead of each file calling OpenRouter directly. It reads a provider setting (`nvidia` or `openrouter`) so you can flip back instantly if a model disappoints, without another code change.
+- Model mapping (all free on the NVIDIA dev tier):
+  - Website content writing: DeepSeek V3.1 (the same model quality you already fall back to today)
+  - Language polish: a strong instruct model (Qwen3 or Llama 3.3 70B), chosen after a side-by-side test on real Swedish copy
+  - Audit scoring: same tier, needs image input for the screenshot rubric — verified during the test before switching
+  - Template picker and review picker: smallest fast model
+- The 40 requests/minute limit is handled properly, not hoped for: calls go through one small queue that spaces them out, and a 429 waits and retries instead of failing the site build. At your volume (about 10 calls per site, 1 per audit) you use well under half the limit.
+- Anything the free tier cannot do well stays on the current model. Site quality is the deciding test, not price.
 
-## Changes
+Before this counts as done: build two Swedish and one English test site, and re-score ten already-audited leads, then compare against current output for wording, industry fit and score agreement.
 
-**1. Stop paying twice for timeouts**
-Drop DeepSeek V4 Flash from the first position. New cascade for both languages:
-Gemini 2.5 Flash (fast, reliable, strong Swedish and English, 25s timeout) → DeepSeek V3.1 (35s) → GPT-4o-mini (last resort only).
-Gemini 2.5 Flash costs a fraction of GPT-4o-mini and rarely times out, so most pages finish on the first attempt instead of the third.
+## Phase 2 — Own scraper on a Lightsail box (replaces most Firecrawl usage)
 
-**2. Make the polish pass conditional instead of always-on**
-Polish still runs, but only where it earns its cost:
-- always on the start page (index),
-- on any page where the content call fell back to template text or produced short or suspicious copy (missing fields, wrong-language words, mojibake),
-- skipped when the draft already came from the strong language model and passes the existing quality checks.
-Model for polish moves from GPT-4o-mini to Gemini 2.5 Flash, which handles Swedish idiom well at roughly a tenth of the price.
+One Ubuntu box (2 GB, about $12/month), running two Docker containers behind Caddy for automatic HTTPS on a subdomain such as `scrape.foremp.eu`:
 
-**3. Trim tokens, not quality**
-- Lower `max_tokens` from 3000 to 2200 for content and polish (measured output is well under this; the cap only limits runaway responses).
-- Do not resend the full fact pack and template notes in the polish call when polish runs right after content on the same page — send the draft plus a short fact list.
+1. **Scraper service** — a small HTTP service with headless Chromium. One endpoint: give it a website address, it returns the same shape the system already expects (page text, links, images, discovered "om oss"/"tjänster" pages, basic colours and fonts). Protected by a secret token so only your system can call it.
+2. **Caddy** — HTTPS and the token check.
 
-**4. Small calls move to the cheapest usable model**
-Template picker and import review picker move from DeepSeek V3.1 to Gemini 2.5 Flash Lite. Both are short classification tasks where the model choice does not affect output quality.
+In the app:
+- A single scraper client replaces the direct Firecrawl calls in the lead scraping and audit steps.
+- Screenshots stay on Firecrawl, as you said. That is one small call per lead instead of the whole crawl, which drops you back into a much cheaper Firecrawl tier.
+- If your box is down or a site blocks it, the code falls back to Firecrawl for that lead so the pipeline never stalls. Failures are recorded in the existing pipeline-health system.
 
-**5. Cold emails stay as they are**
-Email copy is what actually earns money and uses very few tokens per send. No model change there.
+## Phase 3 — Google Maps lead scraping on the same box
 
-## Expected effect
+Use `gosom/google-maps-scraper` (Go, has a built-in web/API mode and Docker image) as a third container on the same Lightsail box, on an internal port, reachable only through the same token-protected entry.
 
-The site builder's spend should fall by roughly 60-75 percent: the timeout re-tries disappear, the always-on GPT polish becomes a conditional cheap-model polish, and the remaining GPT-4o-mini usage is a rare last resort. Language quality is protected because Gemini 2.5 Flash replaces GPT-4o-mini only for editing work, and the existing quality checks and fallbacks stay in place.
+- **Manual:** a "Hämta leads" panel in the app where you enter search terms, city and language, press start, and watch progress. Results land straight in `site_leads` through the existing import path, with the same duplicate protection.
+- **Automatic:** a nightly job that checks lead stock per language and niche and runs saved searches when stock falls under a threshold, so the pipeline never runs dry.
+- Scraping is queued job-by-job on the server, so a big Maps run never blocks a website scrape.
 
-## Verification before this is considered done
+## What this costs when finished
 
-Generate three test sites (two Swedish, one English) through the normal pipeline, then compare against recent existing sites for Swedish idiom, correct industry wording, no mojibake, and no template-sounding filler. Check the run log for which model each page used and how many retries happened.
+| Item | Now | After |
+| --- | --- | --- |
+| AI (OpenRouter) | Your current monthly spend | 0 while on the NVIDIA free tier |
+| Firecrawl | $80 plan, ~20% used | Lowest paid tier, screenshots only |
+| Server | — | ~$12/month Lightsail |
+| Google Maps scraping | Manual, on your laptop | Runs on the server, manual + nightly |
 
 ## Technical notes
 
-- `supabase/functions/process-site-jobs/freeform.ts`: change `BUILD_MODEL` / `BUILD_FALLBACK_MODEL` / `BUILD_LAST_RESORT_MODEL` and the `callBuildModelCascade` attempt list and timeouts; change `LANG_MODEL`; add a `needsPolish(content, page)` guard in the `polish_content` stage so skipped pages are marked polished without a model call.
-- `supabase/functions/process-site-leads/index.ts`: `TEMPLATE_PICKER_MODEL`.
-- `supabase/functions/import-site-leads/index.ts`: `MODEL`.
-- No database or UI changes; no changes to `generate-email`, `send-cold-email`, or the audit path.
+- New `supabase/functions/_shared/llm.ts`: provider-aware chat client (`https://integrate.api.nvidia.com/v1/chat/completions`, `NVIDIA_API_KEY`), model alias table, rate-limit spacing, 429/5xx backoff. Call sites to migrate: `process-site-jobs/freeform.ts` (`BUILD_MODEL`, `LANG_MODEL`, `callModel`, `callBuildModelCascade`), `process-site-jobs/index.ts`, `_shared/site-audit.ts`, `process-site-leads/index.ts`, `import-site-leads/index.ts`. `generate-email` keeps its current OpenAI path.
+- New `supabase/functions/_shared/scraper.ts`: client for the self-hosted scraper returning the existing `scraped_content` shape, with Firecrawl fallback. `scrape-lead-data` and `_shared/site-audit.ts` switch to it; Firecrawl keeps only the screenshot call.
+- Secrets to add: `NVIDIA_API_KEY`, `SCRAPER_BASE_URL`, `SCRAPER_TOKEN`.
+- Server: Lightsail Ubuntu 2 GB, Docker Compose with Caddy + scraper service (+ `gosom/google-maps-scraper` in phase 3), a DNS record for the subdomain, and firewall limited to 80/443.
+- Phase 3 adds an edge function that starts and polls a Maps job, a UI panel, and a scheduled top-up job; leads are inserted through the existing `insert_site_leads_batch` path.
+- No database schema change is needed for phases 1 and 2; phase 3 adds a small table for saved searches and job runs.
