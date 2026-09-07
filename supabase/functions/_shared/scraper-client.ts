@@ -94,8 +94,11 @@ async function scrapeWithFirecrawl(url: string, options: { screenshot?: boolean 
 
 async function scrapeWithBotlioWorker(url: string, options: { screenshot?: boolean }): Promise<ScraperPayload> {
   const baseUrl = String(Deno.env.get('SCRAPER_WORKER_URL') ?? '').replace(/\/$/, '')
-  const secret = Deno.env.get('SCRAPER_WORKER_SECRET')
-  if (!baseUrl || !secret) throw new ScraperError('SCRAPER_WORKER_URL or SCRAPER_WORKER_SECRET missing', 'botlio_scraper', 503, false)
+  // The worker itself uses SCRAPER_SHARED_SECRET. Prefer that same name in
+  // Supabase so one value can be copied between the two systems, while still
+  // accepting the earlier SCRAPER_WORKER_SECRET name for backward compatibility.
+  const secret = Deno.env.get('SCRAPER_SHARED_SECRET') ?? Deno.env.get('SCRAPER_WORKER_SECRET')
+  if (!baseUrl || !secret) throw new ScraperError('SCRAPER_WORKER_URL or SCRAPER_SHARED_SECRET missing', 'botlio_scraper', 503, false)
   if (!/^https:\/\//i.test(baseUrl)) throw new ScraperError('SCRAPER_WORKER_URL must use HTTPS', 'botlio_scraper', 503, false)
 
   const body = JSON.stringify({ url, screenshot: Boolean(options.screenshot) })
