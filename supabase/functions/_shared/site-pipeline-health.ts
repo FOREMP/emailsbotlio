@@ -1,4 +1,4 @@
-export type PipelineProvider = 'firecrawl' | 'openrouter' | 'vercel'
+export type PipelineProvider = 'firecrawl' | 'botlio_scraper' | 'openrouter' | 'vercel'
 
 export type PipelineBreaker = {
   provider: PipelineProvider
@@ -35,11 +35,13 @@ export function pipelineErrorCode(provider: PipelineProvider, status: number | n
   return 'request_failed'
 }
 
-export async function activePipelineBreakers(supabase: any): Promise<PipelineBreaker[]> {
-  const { data, error } = await supabase
+export async function activePipelineBreakers(supabase: any, providers?: PipelineProvider[]): Promise<PipelineBreaker[]> {
+  let query = supabase
     .from('site_pipeline_breakers')
     .select('provider,is_paused,error_code,error_message,error_count,window_started_at,last_error_at,paused_at')
     .eq('is_paused', true)
+  if (providers?.length) query = query.in('provider', providers)
+  const { data, error } = await query
   if (error) {
     console.error('pipeline breaker read failed', error)
     return []
@@ -79,4 +81,3 @@ export function pipelinePausedPayload(breakers: PipelineBreaker[]) {
     })),
   }
 }
-

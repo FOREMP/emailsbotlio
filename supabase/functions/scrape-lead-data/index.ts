@@ -12,13 +12,12 @@ import {
   pipelinePausedPayload,
   recordPipelineFailure,
 } from '../_shared/site-pipeline-health.ts'
+import { mapUrl, scrapeUrl, selectedScrapeProvider, ScraperError } from '../_shared/scraper-client.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
-
-const FIRECRAWL_V2 = 'https://api.firecrawl.dev/v2'
 
 // Ordered slug fallback lists. First hit wins.
 const ABOUT_SLUGS = [
@@ -51,7 +50,8 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     )
 
-    const breakers = await activePipelineBreakers(supabase)
+    const provider = await selectedScrapeProvider(supabase)
+    const breakers = await activePipelineBreakers(supabase, [provider, 'openrouter', 'vercel'])
     if (breakers.length) return json(pipelinePausedPayload(breakers), 423)
 
     const { data: site, error: siteErr } = await supabase
@@ -64,16 +64,6 @@ Deno.serve(async (req) => {
 
     await supabase.from('generated_sites').update({ status: 'scraping', error_message: null }).eq('id', generated_site_id)
 
-    const fcKey = Deno.env.get('FIRECRAWL_API_KEY')
-    if (!fcKey) {
-      await recordPipelineFailure(supabase, {
-        provider: 'firecrawl', sourceFunction: 'scrape-lead-data',
-        message: 'FIRECRAWL_API_KEY missing', generatedSiteId: generated_site_id,
-        siteLeadId: site.site_lead_id ?? null,
-      })
-      return json({ error: 'FIRECRAWL_API_KEY missing', provider: 'firecrawl', error_code: 'invalid_credentials' }, 503)
-    }
-
     // ---- 1. Find a working root URL by scraping variants (with screenshot) ----
     const candidates = buildUrlCandidates(site.source_url)
     const attempts: { url: string; status: number; apiStatus: number; title?: string; error?: string }[] = []
@@ -81,7 +71,7 @@ Deno.serve(async (req) => {
     let usedUrl = site.source_url
 
     for (const candidate of candidates) {
-      const { data, status, apiStatus, title, error } = await scrapeOne(candidate, fcKey, true)
+      const { data, status, apiStatus, title, error } = await scrapeOne(provider, candidate, true)
       attempts.push({ url: candidate, status, apiStatus, title: (title || '').slice(0, 60), error })
       const badTitle = /(400|401|403|404|500|502|503|504)\s*(bad request|unauthorized|forbidden|not found|error|gateway|unavailable)|access denied|cloudflare|attention required/i
       const looksBad = (status && status >= 400) || badTitle.test(title || '')
@@ -97,17 +87,17 @@ Deno.serve(async (req) => {
         [401, 402, 429].includes(attempt.apiStatus) || attempt.apiStatus >= 500
       )
       if (providerFailure) {
-        const message = providerFailure.error || `Firecrawl API failed with HTTP ${providerFailure.apiStatus}`
-        const errorCode = pipelineErrorCode('firecrawl', providerFailure.apiStatus, message)
+        const message = providerFailure.error || `${provider} failed with HTTP ${providerFailure.apiStatus}`
+        const errorCode = pipelineErrorCode(provider, providerFailure.apiStatus, message)
         const incident = await recordPipelineFailure(supabase, {
-          provider: 'firecrawl', sourceFunction: 'scrape-lead-data', message,
+          provider, sourceFunction: 'scrape-lead-data', message,
           httpStatus: providerFailure.apiStatus, siteLeadId: site.site_lead_id ?? null,
           generatedSiteId: generated_site_id,
         })
         await supabase.from('generated_sites').update({
-          status: 'failed', error_message: `Firecrawl ${errorCode}: ${message}`,
+          status: 'failed', error_message: `${provider} ${errorCode}: ${message}`,
         }).eq('id', generated_site_id)
-        return json({ error: message, provider: 'firecrawl', error_code: errorCode, pipeline_paused: incident.isPaused }, providerFailure.apiStatus === 402 ? 402 : 503)
+        return json({ error: message, provider, error_code: errorCode, pipeline_paused: incident.isPaused }, providerFailure.apiStatus === 402 ? 402 : 503)
       }
       await supabase.from('generated_sites').update({
         status: 'failed',
@@ -119,13 +109,7 @@ Deno.serve(async (req) => {
     // ---- 2. Map the site to discover subpages ----
     let allLinks: string[] = []
     try {
-      const mapResp = await fetch(`${FIRECRAWL_V2}/map`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: usedUrl, limit: 200, includeSubdomains: false }),
-      })
-      const mapJson = await mapResp.json()
-      allLinks = (mapJson?.links ?? mapJson?.data?.links ?? []).map((l: any) => typeof l === 'string' ? l : l?.url).filter(Boolean)
+      allLinks = await mapUrl(provider, usedUrl)
     } catch (_) { /* map is best-effort */ }
 
     if (allLinks.length === 0 && Array.isArray(rootScrape.links)) {
@@ -141,11 +125,11 @@ Deno.serve(async (req) => {
       home: normalizePage(rootScrape, usedUrl),
     }
     if (aboutUrl && aboutUrl !== usedUrl) {
-      const r = await scrapeOne(aboutUrl, fcKey, false)
+      const r = await scrapeOne(provider, aboutUrl, false)
       if (r.data && (r.data.markdown || '').trim().length > 150) pages.about = normalizePage(r.data, aboutUrl)
     }
     if (servicesUrl && servicesUrl !== usedUrl && servicesUrl !== aboutUrl) {
-      const r = await scrapeOne(servicesUrl, fcKey, false)
+      const r = await scrapeOne(provider, servicesUrl, false)
       if (r.data && (r.data.markdown || '').trim().length > 150) pages.services = normalizePage(r.data, servicesUrl)
     }
 
@@ -195,24 +179,15 @@ Deno.serve(async (req) => {
   }
 })
 
-async function scrapeOne(url: string, fcKey: string, includeScreenshot: boolean): Promise<{ data: any | null; status: number; apiStatus: number; title: string; error: string }> {
+async function scrapeOne(provider: 'firecrawl' | 'botlio_scraper', url: string, includeScreenshot: boolean): Promise<{ data: any | null; status: number; apiStatus: number; title: string; error: string }> {
   try {
-    const formats: any[] = ['markdown', 'links', 'branding', 'summary']
-    if (includeScreenshot) formats.push({ type: 'screenshot', fullPage: false })
-    const r = await fetch(`${FIRECRAWL_V2}/scrape`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, formats, onlyMainContent: true }),
-    })
-    const j = await r.json()
-    const payload = j?.data ?? j
-    const status = payload?.metadata?.statusCode ?? payload?.metadata?.status_code ?? r.status
+    const payload = await scrapeUrl(provider, url, { screenshot: includeScreenshot })
+    const status = payload?.metadata?.statusCode ?? 200
     const title = payload?.metadata?.title ?? ''
-    const error = String(j?.error ?? j?.message ?? '')
-    if (!r.ok) return { data: null, status, apiStatus: r.status, title, error }
-    return { data: payload, status, apiStatus: r.status, title, error }
+    return { data: payload, status, apiStatus: 200, title, error: '' }
   } catch (error) {
-    return { data: null, status: 0, apiStatus: 0, title: '', error: error instanceof Error ? error.message : String(error) }
+    const typed = error instanceof ScraperError ? error : null
+    return { data: null, status: typed?.status ?? 0, apiStatus: typed?.status ?? 0, title: '', error: error instanceof Error ? error.message : String(error) }
   }
 }
 

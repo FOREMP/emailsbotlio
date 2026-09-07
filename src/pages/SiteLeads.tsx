@@ -11,8 +11,6 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { FileSpreadsheet, Upload, Pencil, Trash2, Play, Pause, StopCircle, Wand2, RefreshCw } from "lucide-react";
 import * as XLSX from "xlsx";
-import TriageQueue from "@/components/site-leads/TriageQueue";
-import { auditScoreLabel } from "@/lib/site-audit-score";
 
 type Lead = {
   id: string;
@@ -29,7 +27,6 @@ type Lead = {
   review_snippets: string[] | null;
   feedback: string | null;
   status: string;
-  auto_send?: boolean | null;
   audit_score: number | null;
   demo_url: string | null;
   created_at: string;
@@ -73,13 +70,11 @@ const ROLE_LABELS: Record<ImportRole, string> = {
 const STATUS_OPTIONS = [
   "pending_audit",
   "auditing",
-  "needs_triage",
   "site_good_enough",
   "needs_site",
   "generating",
   "awaiting_approval",
   "approved",
-  "auto_approved",
   "skipped_no_contact",
   "failed",
 ];
@@ -88,12 +83,10 @@ const STATUS_COLORS: Record<string, string> = {
   pending_audit: "bg-slate-500",
   auditing: "bg-blue-500",
   site_good_enough: "bg-green-500",
-  needs_triage: "bg-orange-500",
   needs_site: "bg-amber-500",
   generating: "bg-purple-500",
   awaiting_approval: "bg-indigo-500",
   approved: "bg-emerald-500",
-  auto_approved: "bg-teal-500",
   skipped_no_contact: "bg-neutral-400",
   failed: "bg-red-500",
 };
@@ -131,34 +124,22 @@ export default function SiteLeads() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [page, setPage] = useState(1);
-  const [triageRefresh, setTriageRefresh] = useState(0);
 
   // Automation switch + manual override (moved here from the old Sites page)
   const [autoState, setAutoState] = useState<"running" | "paused" | "stopped">("running");
   const [autoBusy, setAutoBusy] = useState(false);
   // Which builder engine new jobs use
   const [genMode, setGenMode] = useState<"template" | "freeform">("template");
-
-  const applyCountFilters = (query: any, includeLanguage: boolean) => {
-    let next = query;
-    if (nicheFilter !== "all") next = next.eq("niche", nicheFilter);
-    if (includeLanguage && languageFilter !== "all") next = next.eq("language", languageFilter);
-    const q = search.trim();
-    if (q) {
-      const safe = q.replace(/[%]/g, "");
-      next = next.or(`company_name.ilike.%${safe}%,email.ilike.%${safe}%,website.ilike.%${safe}%,category.ilike.%${safe}%,address.ilike.%${safe}%`);
-    }
-    return next;
-  };
+  // Firecrawl stays the default until the self-hosted worker has been tested.
+  const [scrapeProvider, setScrapeProvider] = useState<"firecrawl" | "botlio_scraper">("firecrawl");
 
   const loadCounts = async () => {
+    const totalQuery = supabase.from("site_leads").select("id", { count: "exact", head: true });
     const statusQueries = STATUS_OPTIONS.map((status) =>
-      applyCountFilters(
-        supabase.from("site_leads").select("id", { count: "exact", head: true }).eq("status", status),
-        true,
-      )
+      supabase.from("site_leads").select("id", { count: "exact", head: true }).eq("status", status)
     );
-    const statusRes = await Promise.all(statusQueries);
+    const [totalRes, ...statusRes] = await Promise.all([totalQuery, ...statusQueries]);
+    setTotalCount(totalRes.count ?? 0);
     const nextCounts: Record<string, number> = {};
     STATUS_OPTIONS.forEach((status, idx) => {
       nextCounts[status] = statusRes[idx].count ?? 0;
@@ -190,7 +171,7 @@ export default function SiteLeads() {
       const { data, error, count } = await applyListFilters(
         supabase
         .from("site_leads")
-        .select("id, company_name, email, website, phone, address, category, niche, rating, reviews_count, review_snippets, feedback, status, auto_send, audit_score, demo_url, created_at, language", { count: "exact" }),
+        .select("id, company_name, email, website, phone, address, category, niche, rating, reviews_count, review_snippets, feedback, status, audit_score, demo_url, created_at, language", { count: "exact" }),
         true,
       );
       if (error) throw error;
@@ -275,6 +256,36 @@ export default function SiteLeads() {
     }
   };
 
+  const loadScrapeProvider = async () => {
+    const { data } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("key", "site_scrape_provider")
+      .maybeSingle();
+    setScrapeProvider(((data?.value as any)?.provider === "botlio_scraper" ? "botlio_scraper" : "firecrawl"));
+  };
+
+  const changeScrapeProvider = async (provider: "firecrawl" | "botlio_scraper") => {
+    setAutoBusy(true);
+    try {
+      const { error } = await supabase
+        .from("app_settings")
+        .upsert({ key: "site_scrape_provider", value: { provider } as any, updated_at: new Date().toISOString() });
+      if (error) throw error;
+      setScrapeProvider(provider);
+      toast({
+        title: provider === "firecrawl" ? "Auditkälla: Firecrawl" : "Auditkälla: Botlio server",
+        description: provider === "firecrawl"
+          ? "Nuvarande Firecrawl-flöde används för alla nya audits och skrapningar."
+          : "Nya audits och skrapningar skickas till den egna servern. Firecrawl går att välja tillbaka direkt.",
+      });
+    } catch (err) {
+      toast({ title: "Kunde inte byta auditkälla", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setAutoBusy(false);
+    }
+  };
+
 
 
   const changeAutoState = async (state: "running" | "paused" | "stopped") => {
@@ -298,15 +309,7 @@ export default function SiteLeads() {
     try {
       const { data, error } = await supabase.functions.invoke("process-site-leads", { body: {} });
       if (error) throw error;
-      const sv = data?.budgets?.sv;
-      const en = data?.budgets?.en;
-      const budgetSummary = sv && en
-        ? ` SV: ${sv.completed}/${sv.target} klara, ${sv.remaining} platser kvar. EN: ${en.completed}/${en.target} klara, ${en.remaining} platser kvar.`
-        : "";
-      toast({
-        title: "Pipeline körd",
-        description: `Auditerade ${data?.audited ?? 0}, startade ${data?.generated ?? 0} bygg.${budgetSummary}`,
-      });
+      toast({ title: "Pipeline körd", description: `Auditerade ${data?.audited ?? 0}, startade ${data?.generated ?? 0} bygg.` });
       await load();
     } catch (err) {
       toast({ title: "Pipeline misslyckades", description: (err as Error).message, variant: "destructive" });
@@ -336,7 +339,7 @@ export default function SiteLeads() {
     }
   };
 
-  useEffect(() => { loadAutoState(); loadGenMode(); }, []);
+  useEffect(() => { loadAutoState(); loadGenMode(); loadScrapeProvider(); }, []);
   useEffect(() => { load(); }, [page, search, statusFilter, nicheFilter, languageFilter, sortBy]);
   useEffect(() => { setPage(1); }, [search, statusFilter, nicheFilter, languageFilter, sortBy]);
 
@@ -385,7 +388,6 @@ export default function SiteLeads() {
       const { error } = await supabase.from("site_leads").update(patch as any).in("id", ids);
       if (error) throw error;
       toast({ title: `${ids.length} leads uppdaterade`, description: label });
-      setTriageRefresh((n) => n + 1);
       await load();
     } catch (err) {
       toast({ title: "Kunde inte uppdatera", description: (err as Error).message, variant: "destructive" });
@@ -661,16 +663,23 @@ export default function SiteLeads() {
             minst start, om oss och kontakt, fler sidor när underlaget räcker. Byt tillbaka när som helst.
           </p>
         </div>
+        <div className="flex flex-wrap items-center gap-2 border-t pt-3">
+          <div className="text-sm font-medium">Audit- och skrapkälla</div>
+          <Button size="sm" variant={scrapeProvider === "firecrawl" ? "default" : "outline"}
+            disabled={autoBusy || scrapeProvider === "firecrawl"} onClick={() => changeScrapeProvider("firecrawl")}>
+            Firecrawl (säker fallback)
+          </Button>
+          <Button size="sm" variant={scrapeProvider === "botlio_scraper" ? "default" : "outline"}
+            disabled={autoBusy || scrapeProvider === "botlio_scraper"} onClick={() => changeScrapeProvider("botlio_scraper")}>
+            Botlio server
+          </Button>
+          <p className="text-xs text-muted-foreground basis-full">
+            Gäller nya audits och nya hemsidesbyggen. Firecrawl ändras inte och kan alltid väljas tillbaka om den egna servern behöver underhåll.
+          </p>
+        </div>
       </Card>
 
 
-
-      <TriageQueue
-        languageFilter={languageFilter}
-        nicheFilter={nicheFilter}
-        refreshKey={triageRefresh}
-        onChanged={() => load()}
-      />
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {Object.entries(counts).map(([k, v]) => (
@@ -717,8 +726,8 @@ export default function SiteLeads() {
             <SelectItem value="created_desc">Nyast först</SelectItem>
             <SelectItem value="created_asc">Äldst först</SelectItem>
             <SelectItem value="company">Företag A–Ö</SelectItem>
-            <SelectItem value="audit_asc">Högst säljpotential först</SelectItem>
-            <SelectItem value="audit_desc">Lägst säljpotential först</SelectItem>
+            <SelectItem value="audit_asc">Sämst audit först</SelectItem>
+            <SelectItem value="audit_desc">Bäst audit först</SelectItem>
             <SelectItem value="status">Status</SelectItem>
           </SelectContent>
         </Select>
@@ -728,13 +737,9 @@ export default function SiteLeads() {
       {selected.size > 0 && (
         <Card className="p-3 flex flex-wrap items-center gap-2 border-primary/40">
           <span className="text-sm font-medium">{selected.size} valda</span>
-          <Button size="sm" variant="default" disabled={bulkBusy}
-            onClick={() => bulkSet({ status: "needs_site", auto_send: true, triaged_at: new Date().toISOString() }, "Byggs och skickas direkt")}>
-            Bygg + skicka direkt
-          </Button>
-          <Button size="sm" variant="secondary" disabled={bulkBusy}
-            onClick={() => bulkSet({ status: "needs_site", auto_send: false, triaged_at: new Date().toISOString() }, "Byggs, du granskar innan utskick")}>
-            Bygg + jag granskar
+          <Button size="sm" variant="outline" disabled={bulkBusy}
+            onClick={() => bulkSet({ status: "needs_site" }, "Köade för hemsidebygge")}>
+            Köa för hemsida
           </Button>
           <Button size="sm" variant="default" className="gap-1" disabled={bulkBusy} onClick={forceBuildSelected}>
             <Wand2 className="h-4 w-4" /> Bygg nu (override)
@@ -745,7 +750,7 @@ export default function SiteLeads() {
             Kör audit igen
           </Button>
           <Button size="sm" variant="outline" disabled={bulkBusy}
-            onClick={() => bulkSet({ status: "site_good_enough", auto_send: false, triaged_at: new Date().toISOString() }, "Uteslutna från bygget")}>
+            onClick={() => bulkSet({ status: "site_good_enough" }, "Uteslutna från bygget")}>
             Ta bort från byggkön
           </Button>
           <Select disabled={bulkBusy} onValueChange={(v) => bulkSet({ niche: v }, "Bransch uppdaterad")}>
@@ -774,7 +779,7 @@ export default function SiteLeads() {
               <th className="text-left p-3">Email</th>
               <th className="text-left p-3">Website</th>
               <th className="text-left p-3">Status</th>
-              <th className="text-left p-3">Säljpotential</th>
+              <th className="text-left p-3">Audit</th>
               <th className="text-left p-3">Demo</th>
               <th className="text-right p-3"></th>
             </tr>
@@ -797,14 +802,9 @@ export default function SiteLeads() {
                   {l.website ? <a href={l.website} target="_blank" rel="noreferrer" className="underline">{l.website}</a> : "—"}
                 </td>
                 <td className="p-3">
-                  <div className="flex flex-wrap items-center gap-1">
-                    <Badge className={STATUS_COLORS[l.status] ?? "bg-slate-400"}>{l.status}</Badge>
-                    {l.auto_send && <Badge variant="outline" className="text-[10px]">auto</Badge>}
-                  </div>
+                  <Badge className={STATUS_COLORS[l.status] ?? "bg-slate-400"}>{l.status}</Badge>
                 </td>
-                <td className="p-3" title={l.audit_score == null ? undefined : `Nuvarande sajtkvalitet ${l.audit_score}/10`}>
-                  {auditScoreLabel(l.audit_score)}
-                </td>
+                <td className="p-3">{l.audit_score ?? "—"}</td>
                 <td className="p-3">
                   {l.demo_url ? <a href={l.demo_url} target="_blank" rel="noreferrer" className="underline">Öppna</a> : "—"}
                 </td>

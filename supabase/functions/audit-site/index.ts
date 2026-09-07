@@ -2,35 +2,28 @@
 // quality 1-10. High scores (>= skip_threshold) mean the lead has a decent
 // site already — we can skip generation and save cost.
 import { createClient } from 'npm:@supabase/supabase-js@2'
-import { auditWebsite } from '../_shared/site-audit.ts'
+import { scrapeUrl, selectedScrapeProvider, ScraperError } from '../_shared/scraper-client.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
 
 interface AuditRequest {
-  generated_site_id?: string
+  generated_site_id: string
   url?: string
-  /** Calibration mode: re-score these site_leads WITHOUT writing anything. */
-  calibrate_lead_ids?: string[]
 }
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   try {
-    const { generated_site_id, url, calibrate_lead_ids }: AuditRequest = await req.json()
-
-    if (Array.isArray(calibrate_lead_ids) && calibrate_lead_ids.length) {
-      return await calibrate(calibrate_lead_ids)
-    }
-
+    const { generated_site_id, url }: AuditRequest = await req.json()
     if (!generated_site_id) {
       return json({ error: 'generated_site_id required' }, 400)
     }
-
 
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
@@ -74,114 +67,103 @@ Deno.serve(async (req) => {
       return json({ score: 0, reason: 'no site' })
     }
 
-    const fcKey = Deno.env.get('FIRECRAWL_API_KEY')
-    if (!fcKey) return json({ error: 'FIRECRAWL_API_KEY not configured' }, 500)
-
-    // Same screenshot-first rubric as the outreach pipeline.
-    const { data: contactRow } = await supabase
-      .from('contacts')
-      .select('first_name, last_name, custom_fields')
-      .eq('id', site.contact_id)
-      .maybeSingle()
-    const cfName = (contactRow?.custom_fields ?? {}) as Record<string, unknown>
-    const companyName = String(
-      cfName.company_name ?? cfName.company ?? cfName.foretag ?? contactRow?.first_name ?? '',
-    )
-
-    let result
+    const provider = await selectedScrapeProvider(supabase)
+    let scraped: any
     try {
-      result = await auditWebsite(targetUrl, companyName, fcKey, 'sv', supabase)
-    } catch (e) {
+      scraped = await scrapeUrl(provider, targetUrl, { screenshot: false })
+    } catch (error) {
+      const typed = error instanceof ScraperError ? error : null
+      if (typed?.retryable) {
+        await supabase.from('generated_sites').update({ status: 'auditing', error_message: `${provider}: ${typed.message}` }).eq('id', generated_site_id)
+        return json({ error: `${provider} temporarily unavailable`, provider }, 503)
+      }
+      await supabase.from('generated_sites').update({
+        status: 'audited',
+        audit_score: 0,
+        audit_reason: `Could not reach site (${typed?.status ?? 0}). Treating as needs generation.`,
+      }).eq('id', generated_site_id)
+      return json({ score: 0, reason: 'unreachable', provider })
+    }
+
+    const markdown: string = scraped?.markdown ?? ''
+    const title: string = scraped?.metadata?.title ?? ''
+
+    // Score with AI
+    const lovableKey = Deno.env.get('LOVABLE_API_KEY')
+    if (!lovableKey) return json({ error: 'LOVABLE_API_KEY missing' }, 500)
+
+    const aiResp = await fetch(`${AI_GATEWAY}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Lovable-API-Key': lovableKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'google/gemini-3-flash-preview',
+        // Determinism: temperature 0 + fixed seed + top_p 1 so identical input
+        // produces identical output. Without this Gemini varies scores by ±3.
+        temperature: 0,
+        top_p: 1,
+        seed: 42,
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'You audit small-business websites and score them 1-10 for how modern, trustworthy and conversion-ready they look.',
+              'Be strict, consistent and deterministic — the SAME input MUST always produce the SAME score. Do not vary tone or scoring between runs.',
+              '',
+              'Scoring rubric (pick the single band that best matches, then pick the exact integer inside it):',
+              '  1  = broken, blank, parked domain, or unreadable',
+              '  2  = extremely outdated (pre-2010 look), no mobile layout, no real content',
+              '  3  = outdated template, weak copy, poor structure, no clear CTA',
+              '  4  = dated but functional; basic info present but ugly typography/layout',
+              '  5  = average small-business site; usable but generic, weak hero, thin content',
+              '  6  = decent modern-ish template with clear services and contact info',
+              '  7  = clearly modern, responsive, good hierarchy, clear CTAs',
+              '  8  = polished, on-brand, strong copy, trust signals (reviews, cases)',
+              '  9  = excellent design and conversion-focused, comparable to top agencies',
+              '  10 = flawless best-in-class, nothing meaningful to improve',
+              '',
+              'Rules:',
+              '- Judge ONLY from the title and content excerpt provided. Do not speculate about images you cannot see.',
+              '- If content is very thin (<300 chars of real copy) cap the score at 4.',
+              '- If the site is unreachable or empty, score 1.',
+              '- Reply with STRICT JSON only: {"score": <integer 1-10>, "reason": "<max 200 chars, cite concrete evidence>"}.',
+              '- The reason MUST reference specific observations (e.g. "no mobile nav", "generic stock hero", "clear service list + phone CTA"). No vague adjectives alone.',
+            ].join('\n'),
+          },
+          {
+            role: 'user',
+            content: `URL: ${targetUrl}\nTitle: ${title}\n\nContent excerpt:\n${markdown.slice(0, 3000)}`,
+          },
+        ],
+        response_format: { type: 'json_object' },
+      }),
+    })
+    const aiData = await aiResp.json()
+    if (!aiResp.ok) {
       await supabase.from('generated_sites').update({
         status: 'failed',
-        error_message: `AI audit failed: ${(e as Error).message}`.slice(0, 400),
+        error_message: `AI audit failed: ${JSON.stringify(aiData).slice(0, 400)}`,
       }).eq('id', generated_site_id)
-      return json({ error: 'ai audit failed', details: (e as Error).message }, 500)
+      return json({ error: 'ai audit failed', details: aiData }, aiResp.status)
     }
+
+    let parsed: { score: number; reason: string } = { score: 5, reason: 'unparsed' }
+    try {
+      parsed = JSON.parse(aiData.choices?.[0]?.message?.content ?? '{}')
+    } catch (_) { /* keep default */ }
 
     await supabase.from('generated_sites').update({
       status: 'audited',
-      audit_score: result.score,
-      audit_reason: result.reason?.slice(0, 500) ?? null,
-      source_url: result.url,
+      audit_score: Math.max(0, Math.min(10, Math.round(parsed.score))),
+      audit_reason: parsed.reason?.slice(0, 500) ?? null,
+      source_url: targetUrl,
     }).eq('id', generated_site_id)
 
-    return json({
-      score: result.score,
-      reason: result.reason,
-      weaknesses: result.weaknesses,
-      structural: result.structural,
-      cosmetic: result.cosmetic,
-      uncertain: result.uncertain,
-      url: result.url,
-    })
-
-
+    return json({ score: parsed.score, reason: parsed.reason, url: targetUrl })
   } catch (err) {
     console.error('audit-site error', err)
     return json({ error: (err as Error).message }, 500)
   }
 })
-
-// Re-score already-decided leads under the current rubric and report how the
-// new score compares to the human decision. Writes nothing — this exists purely
-// to check the bands before trusting them in the pipeline.
-async function calibrate(leadIds: string[]): Promise<Response> {
-  const fcKey = Deno.env.get('FIRECRAWL_API_KEY')
-  if (!fcKey) return json({ error: 'missing FIRECRAWL_API_KEY' }, 500)
-
-  const supabase = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-  )
-  const { data: leads, error } = await supabase
-    .from('site_leads')
-    .select('id, company_name, website, status, audit_score')
-    .in('id', leadIds.slice(0, 40))
-  if (error) return json({ error: error.message }, 500)
-
-  const results: unknown[] = []
-  let agree = 0
-  let scored = 0
-
-  let first = true
-  for (const lead of leads ?? []) {
-    if (!lead.website) continue
-    // Stay under Firecrawl's per-minute cap: a burst here starves the live pipeline.
-    if (!first) await new Promise((r) => setTimeout(r, 2000))
-    first = false
-    try {
-      const r = await auditWebsite(lead.website, lead.company_name ?? '', fcKey, 'sv', supabase)
-
-      // audit_score is website quality: high means the current site is good.
-      // Human decision: parked means "good enough", anything built means the
-      // current website quality was low enough to justify a redesign.
-      const humanWontBuy = lead.status === 'site_good_enough'
-      const modelWontBuy = r.score >= 7
-      const match = humanWontBuy === modelWontBuy
-      if (match) agree++
-      scored++
-      results.push({
-        company: lead.company_name,
-        website: lead.website,
-        human_status: lead.status,
-        old_score: lead.audit_score,
-        new_score: r.score,
-        structural: r.structural,
-        cosmetic: r.cosmetic,
-        agrees_with_human: match,
-      })
-    } catch (e) {
-      results.push({ company: lead.company_name, error: (e as Error).message })
-    }
-  }
-
-  return json({
-    scored,
-    agreement_pct: scored ? Math.round((agree / scored) * 100) : 0,
-    results,
-  })
-}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -189,7 +171,6 @@ function json(body: unknown, status = 200): Response {
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   })
 }
-
 
 function normaliseUrl(raw: string): string {
   const s = raw.trim()

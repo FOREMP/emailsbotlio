@@ -1,0 +1,4 @@
+{$SCRAPER_HOSTNAME} {
+  encode zstd gzip
+  reverse_proxy scraper:3000
+}

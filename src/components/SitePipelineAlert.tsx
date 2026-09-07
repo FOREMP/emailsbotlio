@@ -4,7 +4,7 @@ import { supabase } from '@/integrations/supabase/client'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 
-type Provider = 'firecrawl' | 'openrouter' | 'vercel'
+type Provider = 'firecrawl' | 'botlio_scraper' | 'openrouter' | 'vercel'
 type Breaker = {
   provider: Provider
   error_code: string | null
@@ -15,6 +15,7 @@ type Breaker = {
 
 const PROVIDERS: Record<Provider, { label: string; purpose: string }> = {
   firecrawl: { label: 'Firecrawl', purpose: 'hämtning av företagets nuvarande webbplats' },
+  botlio_scraper: { label: 'Botlio server', purpose: 'hämtning av företagets nuvarande webbplats' },
   openrouter: { label: 'OpenRouter', purpose: 'AI-generering av webbplatsen' },
   vercel: { label: 'Vercel', purpose: 'publicering av den färdiga webbplatsen' },
 }
@@ -41,7 +42,7 @@ export default function SitePipelineAlert() {
       if (error) throw error
       return (data ?? []) as Breaker[]
     },
-    // No background polling — the banner refetches on page load and after "Ignorera och starta igen".
+    refetchInterval: 30_000,
   })
 
   const resume = async (provider: Provider) => {
@@ -79,4 +80,3 @@ export default function SitePipelineAlert() {
     </div>
   )
 }
-

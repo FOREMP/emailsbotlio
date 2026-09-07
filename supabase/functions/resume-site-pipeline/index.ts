@@ -21,8 +21,8 @@ Deno.serve(async (req) => {
 
   const body = await req.json().catch(() => ({}))
   const provider = body?.provider as PipelineProvider | 'all'
-  if (!['firecrawl', 'openrouter', 'vercel', 'all'].includes(provider)) {
-    return json({ error: 'provider must be firecrawl, openrouter, vercel, or all' }, 400)
+  if (!['firecrawl', 'botlio_scraper', 'openrouter', 'vercel', 'all'].includes(provider)) {
+    return json({ error: 'provider must be firecrawl, botlio_scraper, openrouter, vercel, or all' }, 400)
   }
 
   const admin = createClient(supabaseUrl, serviceKey)
@@ -32,11 +32,11 @@ Deno.serve(async (req) => {
     updated_at: new Date().toISOString(),
   })
   if (provider !== 'all') update = update.eq('provider', provider)
-  else update = update.in('provider', ['firecrawl', 'openrouter', 'vercel'])
+  else update = update.in('provider', ['firecrawl', 'botlio_scraper', 'openrouter', 'vercel'])
   const { error: updateError } = await update
   if (updateError) return json({ error: updateError.message }, 500)
 
-  const incrementTargets = provider === 'all' ? ['firecrawl', 'openrouter', 'vercel'] : [provider]
+  const incrementTargets = provider === 'all' ? ['firecrawl', 'botlio_scraper', 'openrouter', 'vercel'] : [provider]
   for (const target of incrementTargets) {
     const { data: row } = await admin.from('site_pipeline_breakers').select('ignored_count').eq('provider', target).maybeSingle()
     await admin.from('site_pipeline_breakers').update({ ignored_count: Number(row?.ignored_count ?? 0) + 1 }).eq('provider', target)
@@ -61,4 +61,3 @@ function json(body: unknown, status = 200) {
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   })
 }
-
