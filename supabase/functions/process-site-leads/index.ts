@@ -640,7 +640,11 @@ async function startGeneration(
   serviceKey: string,
   lead: any,
 ) {
-  const breakers = await activePipelineBreakers(supabase)
+  // Only the chosen scraper should gate this generation. A paused Firecrawl
+  // breaker must not stop Botlio-server mode (or the reverse); OpenRouter and
+  // Vercel remain shared dependencies for both paths.
+  const scrapeProvider = await selectedScrapeProvider(supabase)
+  const breakers = await activePipelineBreakers(supabase, [scrapeProvider, 'openrouter', 'vercel'])
   if (breakers.length) throw new Error(`pipeline paused: ${breakers.map((row) => row.provider).join(', ')}`)
 
   // Resolve the niche up-front: it is used both on the ghost contact and on
@@ -786,7 +790,7 @@ async function startGeneration(
   if (!scrapeResp.ok) {
     const body = await scrapeResp.text().catch(() => '')
     let providerFailure = false
-    try { providerFailure = JSON.parse(body)?.provider === 'firecrawl' } catch { /* plain error body */ }
+    try { providerFailure = JSON.parse(body)?.provider === scrapeProvider } catch { /* plain error body */ }
     await supabase.from('site_leads').update({
       status: providerFailure || scrapeResp.status === 423 ? 'needs_site' : 'failed',
       generated_site_id: providerFailure || scrapeResp.status === 423 ? null : gs.id,
