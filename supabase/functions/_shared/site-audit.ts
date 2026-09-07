@@ -8,7 +8,7 @@
 // secondary signal only.
 
 const FIRECRAWL_V2 = 'https://api.firecrawl.dev/v2'
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
+import { callRoutedChat } from './ai-provider.ts'
 
 export interface AuditResult {
   score: number
@@ -211,8 +211,8 @@ export async function auditWebsite(
   rawUrl: string,
   companyName: string,
   fcKey: string,
-  openrouterKey: string,
   language: 'sv' | 'en' = 'sv',
+  supabase?: any,
 ): Promise<AuditResult> {
   const url = normaliseUrl(rawUrl)
   const scraped = await scrapeForAudit(url, fcKey)
@@ -267,28 +267,27 @@ export async function auditWebsite(
     ? 'Return reason, structural and cosmetic text in natural English. Keep the JSON keys unchanged.'
     : 'Skriv reason, structural och cosmetic på naturlig svenska. Behåll JSON-nycklarna oförändrade.'
 
-  const aiResp = await fetch(OPENROUTER_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${openrouterKey}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': 'https://emailsbotlio.lovable.app',
-      'X-Title': 'Botlio Site Audit',
-    },
-    body: JSON.stringify({
-      model: 'google/gemini-2.5-flash',
+  if (!supabase) throw new Error('AI audit requires a Supabase client for provider routing')
+  const routed = await callRoutedChat({
+    supabase,
+    nvidiaModel: 'qwen/qwen3.5-122b-a10b',
+    openrouterModel: 'google/gemini-2.5-flash',
+    title: 'Botlio Site Audit',
+    timeoutMs: 60_000,
+    requireJsonObject: true,
+    body: {
       temperature: 0,
       top_p: 1,
       seed: 42,
+      max_tokens: 1200,
       messages: [
         { role: 'system', content: `${SYSTEM_PROMPT}\n\n${outputLanguageRule}` },
         { role: 'user', content: userContent },
       ],
       response_format: { type: 'json_object' },
-    }),
+    },
   })
-  const aiData = await aiResp.json().catch(() => ({}))
-  if (!aiResp.ok) throw new Error(`AI audit ${aiResp.status}: ${JSON.stringify(aiData).slice(0, 200)}`)
+  const aiData = routed.data
 
   let parsed: { score?: number; reason?: string; weaknesses?: string[]; structural?: string[]; cosmetic?: string[] } = {}
   try { parsed = JSON.parse(aiData.choices?.[0]?.message?.content ?? '{}') } catch (_) { /* keep default */ }

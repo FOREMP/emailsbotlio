@@ -4,14 +4,13 @@
 // picking the best review snippets, not for re-reading every column.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { classifyNiche, type NicheKey } from '../_shared/niche.ts'
+import { callRoutedChat } from '../_shared/ai-provider.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
-const MODEL = 'deepseek/deepseek-chat-v3.1'
 const MAX_ROWS_PER_CALL = 25
 const MAX_REVIEW_ROWS_PER_AI_CALL = 20
 const MAX_REVIEW_CANDIDATES_PER_ROW = 10
@@ -81,10 +80,8 @@ Deno.serve(async (req) => {
       .slice(0, MAX_REVIEW_ROWS_PER_AI_CALL)
 
     if (reviewInput.length > 0) {
-      const openrouter = Deno.env.get('OPENROUTER_API_KEY')
-      if (!openrouter) return json({ error: 'OPENROUTER_API_KEY missing' }, 500)
       try {
-        const picked = await pickReviewSnippets(reviewInput, openrouter)
+        const picked = await pickReviewSnippets(reviewInput, supabase)
         for (const [idx, snippets] of Object.entries(picked)) {
           const n = Number(idx)
           if (Number.isInteger(n) && normalized[n] && Array.isArray(snippets)) {
@@ -192,13 +189,16 @@ function normalizeMappedRow(row: ImportRow, mapping: Record<string, ImportRole>)
 
 async function pickReviewSnippets(
   items: { index: number; reviews: string[] }[],
-  apiKey: string,
+  supabase: any,
 ): Promise<Record<string, string[]>> {
-  const resp = await fetch(OPENROUTER_URL, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: MODEL,
+  const routed = await callRoutedChat({
+    supabase,
+    nvidiaModel: 'deepseek-ai/deepseek-v4-flash-0731',
+    openrouterModel: 'deepseek/deepseek-chat-v3.1',
+    title: 'Botlio Review Picker',
+    timeoutMs: 30_000,
+    requireJsonObject: true,
+    body: {
       temperature: 0,
       max_tokens: 1800,
       response_format: { type: 'json_object' },
@@ -211,13 +211,9 @@ async function pickReviewSnippets(
         ].join('\n') },
         { role: 'user', content: JSON.stringify({ businesses: items }) },
       ],
-    }),
+    },
   })
-  if (!resp.ok) {
-    const t = await resp.text()
-    throw new Error(`deepseek ${resp.status}: ${t.slice(0, 300)}`)
-  }
-  const j = await resp.json()
+  const j = routed.data
   const content = j.choices?.[0]?.message?.content ?? '{}'
   try {
     const parsed = JSON.parse(content)

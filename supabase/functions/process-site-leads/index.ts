@@ -7,7 +7,7 @@
 //      sequence's throttle (2x daily first-mail capacity), atomically claim
 //      leads, then create generated_sites jobs without cross-language starvation.
 //   3. AUDIT — atomically claim up to AUDIT_PER_TICK pending leads and score
-//      their screenshots through the shared Firecrawl + OpenRouter audit.
+//      their screenshots through Firecrawl + the dashboard-selected AI provider.
 // The whole file uses the service role; cron sends the anon key just so
 // pg_net can hit the function endpoint (verify_jwt is off).
 import { createClient } from 'npm:@supabase/supabase-js@2'
@@ -25,16 +25,12 @@ import {
   type BlockTemplateFamily,
   type BlockTemplateFamilyKey,
 } from '../_shared/block-templates.ts'
+import { callRoutedChat } from '../_shared/ai-provider.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
-
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
-// Template selection still uses the existing Lovable gateway. Website audits
-// use OpenRouter through the shared scorer below.
-const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
 
 const AUDIT_PER_TICK = 3    // Firecrawl+Gemini per invocation — keep memory low
 const GEN_PER_TICK = 6      // how many new pipelines may START per tick
@@ -63,7 +59,6 @@ function isCanonicalDemoUrl(value?: string | null): boolean {
 }
 const STALE_PIPELINE_MINUTES = 180 // queued work may legitimately wait; don't fail healthy backlog
 const ORPHAN_GRACE_MINUTES = 10   // 'generating' with no generated_sites row = dead job
-const TEMPLATE_PICKER_MODEL = 'deepseek/deepseek-chat-v3.1'
 
 type LanguageBudget = {
   language: PipelineLanguage
@@ -794,16 +789,15 @@ async function auditOne(
   if (breakers.length) throw new Error(`pipeline paused: ${breakers.map((breaker) => breaker.provider).join(', ')}`)
 
   const fcKey = Deno.env.get('FIRECRAWL_API_KEY')
-  const openrouterKey = Deno.env.get('OPENROUTER_API_KEY')
-  if (!fcKey || !openrouterKey) {
+  if (!fcKey) {
     await supabase.from('site_leads').update({ status: 'pending_audit' }).eq('id', row.id)
-    throw new Error('missing FIRECRAWL_API_KEY or OPENROUTER_API_KEY')
+    throw new Error('missing FIRECRAWL_API_KEY')
   }
 
   const language = normaliseLanguage(row.language)
   let result
   try {
-    result = await auditWebsite(row.website, row.company_name ?? '', fcKey, openrouterKey, language)
+    result = await auditWebsite(row.website, row.company_name ?? '', fcKey, language, supabase)
   } catch (error) {
     const provider = error instanceof ScrapeProviderError ? 'firecrawl' : 'openrouter'
     const httpStatus = error instanceof ScrapeProviderError ? error.status : undefined
@@ -874,7 +868,7 @@ async function resolveGenerationMode(
   return cachedGenerationMode
 }
 
-async function chooseTemplateFamilyForLead(lead: any): Promise<{
+async function chooseTemplateFamilyForLead(supabase: SupabaseAdmin, lead: any): Promise<{
   family: BlockTemplateFamily
   source: 'ai' | 'rules'
   reason?: string
@@ -884,22 +878,20 @@ async function chooseTemplateFamilyForLead(lead: any): Promise<{
     niche: lead?.niche ?? null,
     businessName: lead?.company_name ?? null,
   })
-  const lovableKey = Deno.env.get('LOVABLE_API_KEY')
-  if (!lovableKey) return { family: fallback, source: 'rules', reason: 'LOVABLE_API_KEY missing' }
-
   const familyCatalog = blockTemplateFamilyCatalog()
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 12_000)
   try {
-    const resp = await fetch(`${AI_GATEWAY}/chat/completions`, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { 'Lovable-API-Key': lovableKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: TEMPLATE_PICKER_MODEL,
+    const routed = await callRoutedChat({
+      supabase,
+      nvidiaModel: 'deepseek-ai/deepseek-v4-flash-0731',
+      openrouterModel: 'deepseek/deepseek-chat-v3.1',
+      title: 'Botlio Template Picker',
+      timeoutMs: 20_000,
+      requireJsonObject: true,
+      body: {
         temperature: 0,
         top_p: 1,
         seed: 42,
+        max_tokens: 600,
         messages: [
           {
             role: 'system',
@@ -930,13 +922,9 @@ async function chooseTemplateFamilyForLead(lead: any): Promise<{
           },
         ],
         response_format: { type: 'json_object' },
-      }),
+      },
     })
-    clearTimeout(timeoutId)
-    const data = await resp.json().catch(() => ({}))
-    if (!resp.ok) {
-      return { family: fallback, source: 'rules', reason: `AI picker failed (${resp.status})` }
-    }
+    const data = routed.data
     const raw = String(data?.choices?.[0]?.message?.content ?? '{}')
     const parsed = JSON.parse(raw) as { templateFamily?: string; reason?: string; confidence?: number }
     const key = parsed?.templateFamily
@@ -946,16 +934,16 @@ async function chooseTemplateFamilyForLead(lead: any): Promise<{
     return {
       family: BLOCK_TEMPLATE_FAMILIES[key as BlockTemplateFamilyKey],
       source: 'ai',
-      reason: typeof parsed.reason === 'string' ? parsed.reason.slice(0, 240) : undefined,
+      reason: typeof parsed.reason === 'string'
+        ? `${parsed.reason.slice(0, 200)} (${routed.provider}/${routed.model})`
+        : `${routed.provider}/${routed.model}`,
     }
   } catch (err) {
     return {
       family: fallback,
       source: 'rules',
-      reason: (err as Error).name === 'AbortError' ? 'AI picker timed out' : `AI picker error: ${(err as Error).message}`,
+      reason: `AI picker error: ${(err as Error).message}`,
     }
-  } finally {
-    clearTimeout(timeoutId)
   }
 }
 
@@ -975,7 +963,7 @@ async function startGeneration(
   // the generated_sites row (previously declared after first use -> TDZ crash).
   const niche = inferLeadNiche(lead)
   const nicheTemplate = templateForNiche(niche)
-  const chosenFamily = await chooseTemplateFamilyForLead({
+  const chosenFamily = await chooseTemplateFamilyForLead(supabase, {
     ...lead,
     niche: lead?.niche ?? niche ?? null,
   })

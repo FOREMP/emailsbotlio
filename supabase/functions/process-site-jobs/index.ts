@@ -13,6 +13,7 @@ import {
   pipelinePausedPayload,
   recordPipelineFailure,
 } from '../_shared/site-pipeline-health.ts'
+import { callRoutedChat } from '../_shared/ai-provider.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -20,13 +21,14 @@ const corsHeaders = {
 }
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
-// Fast model for the content plan. DeepSeek V3.1 was frequently queued on
-// OpenRouter for 60s+, which is what killed most generations.
+// OpenRouter model used when OpenRouter is selected or NVIDIA needs fallback.
+// The dashboard-selected NVIDIA route is handled by _shared/ai-provider.ts.
 const MODEL = 'openai/gpt-4o-mini'
-const POLISH_MODEL = 'openai/gpt-4o-mini'
 // When plan + polish use the same model we merge them into ONE call — the
 // second round-trip roughly doubled wall time for no measurable gain.
-const SKIP_POLISH = MODEL === POLISH_MODEL
+// Planning may use NVIDIA, but the established GPT copy pass is intentionally
+// preserved. It is especially important for natural Swedish output.
+const SKIP_POLISH = false
 const MAX_ATTEMPTS = 3
 const STUCK_MINUTES = 20
 
@@ -1055,8 +1057,6 @@ Deno.serve(async (req) => {
     // Run AI work synchronously. Background waitUntil has proven unreliable for
     // this long-running job in Supabase Edge.
     const runGeneration = async () => {
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 75_000)
       // Heartbeat while the model is thinking, so the reaper never marks a
       // still-running job as "worker died".
       const heartbeat = setInterval(() => {
@@ -1069,17 +1069,14 @@ Deno.serve(async (req) => {
         const systemPrompt = SKIP_POLISH
           ? `${nc.systemPrompt}\n\n--- SPRÅKKRAV (skriv färdig, publicerbar copy direkt) ---\n${nc.polishSystemPrompt}`
           : nc.systemPrompt
-        const aiResp = await fetch(OPENROUTER_URL, {
-          method: 'POST',
-          signal: controller.signal,
-          headers: {
-            Authorization: `Bearer ${openrouterKey}`,
-            'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://emailsbotlio.lovable.app',
-            'X-Title': 'Botlio Site Generator',
-          },
-          body: JSON.stringify({
-            model: chosenModel,
+        const routed = await callRoutedChat({
+          supabase,
+          nvidiaModel: 'deepseek-ai/deepseek-v4-flash-0731',
+          openrouterModel: chosenModel,
+          title: 'Botlio Site Generator',
+          timeoutMs: 75_000,
+          requireJsonObject: true,
+          body: {
             messages: [
               { role: 'system', content: systemPrompt },
               { role: 'user', content: userContent },
@@ -1087,18 +1084,9 @@ Deno.serve(async (req) => {
             temperature: 0.6,
             max_tokens: 4000,
             response_format: { type: 'json_object' },
-          }),
+          },
         })
-        clearTimeout(timeoutId)
-
-        if (!aiResp.ok) {
-          const errText = await aiResp.text()
-          const msg = `OpenRouter failed (${aiResp.status}): ${errText.slice(0, 400)}`
-          await failOrRetry(supabase, generated_site_id, nextAttempts, msg, siteLeadId)
-          return
-        }
-
-        const aiData = await aiResp.json()
+        const aiData = routed.data
         const raw: string = aiData.choices?.[0]?.message?.content ?? ''
         const cleaned = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```\s*$/i, '').trim()
 
@@ -1152,14 +1140,10 @@ Deno.serve(async (req) => {
           updated_at: new Date().toISOString(),
         }).eq('id', generated_site_id)
       } catch (err) {
-        clearTimeout(timeoutId)
-        const msg = (err as Error).name === 'AbortError'
-          ? 'Timed out after 75s — model took too long.'
-          : `Error: ${(err as Error).message}`
+        const msg = `Error: ${(err as Error).message}`
         console.error('generate error', err)
         await failOrRetry(supabase, generated_site_id, nextAttempts, msg, siteLeadId)
       } finally {
-        clearTimeout(timeoutId)
         clearInterval(heartbeat)
       }
     }

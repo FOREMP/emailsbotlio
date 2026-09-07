@@ -76,8 +76,6 @@ Deno.serve(async (req) => {
 
     const fcKey = Deno.env.get('FIRECRAWL_API_KEY')
     if (!fcKey) return json({ error: 'FIRECRAWL_API_KEY not configured' }, 500)
-    const openrouterKey = Deno.env.get('OPENROUTER_API_KEY')
-    if (!openrouterKey) return json({ error: 'OPENROUTER_API_KEY missing' }, 500)
 
     // Same screenshot-first rubric as the outreach pipeline.
     const { data: contactRow } = await supabase
@@ -92,7 +90,7 @@ Deno.serve(async (req) => {
 
     let result
     try {
-      result = await auditWebsite(targetUrl, companyName, fcKey, openrouterKey)
+      result = await auditWebsite(targetUrl, companyName, fcKey, 'sv', supabase)
     } catch (e) {
       await supabase.from('generated_sites').update({
         status: 'failed',
@@ -130,8 +128,7 @@ Deno.serve(async (req) => {
 // to check the bands before trusting them in the pipeline.
 async function calibrate(leadIds: string[]): Promise<Response> {
   const fcKey = Deno.env.get('FIRECRAWL_API_KEY')
-  const openrouterKey = Deno.env.get('OPENROUTER_API_KEY')
-  if (!fcKey || !openrouterKey) return json({ error: 'missing FIRECRAWL_API_KEY or OPENROUTER_API_KEY' }, 500)
+  if (!fcKey) return json({ error: 'missing FIRECRAWL_API_KEY' }, 500)
 
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,
@@ -154,7 +151,7 @@ async function calibrate(leadIds: string[]): Promise<Response> {
     if (!first) await new Promise((r) => setTimeout(r, 2000))
     first = false
     try {
-      const r = await auditWebsite(lead.website, lead.company_name ?? '', fcKey, openrouterKey)
+      const r = await auditWebsite(lead.website, lead.company_name ?? '', fcKey, 'sv', supabase)
 
       // audit_score is website quality: high means the current site is good.
       // Human decision: parked means "good enough", anything built means the

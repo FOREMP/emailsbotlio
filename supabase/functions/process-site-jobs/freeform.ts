@@ -16,11 +16,13 @@ import {
   type SectionKind,
   type ServiceStyle,
 } from './sections.ts'
+import { callRoutedChat } from '../_shared/ai-provider.ts'
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 export const BUILD_MODEL = 'deepseek/deepseek-v4-flash-0731'
 export const BUILD_FALLBACK_MODEL = 'deepseek/deepseek-chat-v3.1'
 export const BUILD_LAST_RESORT_MODEL = 'openai/gpt-4o-mini'
+export const NVIDIA_BUILD_MODEL = 'deepseek-ai/deepseek-v4-flash-0731'
 export const LANG_MODEL = 'openai/gpt-4o-mini'
 const VERSION = 12
 const MAX_PAGES = 6
@@ -451,7 +453,7 @@ Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","he
     sourceFor(ctx, page).slice(0, 2200) || '[Tunt underlag. Använd säker branschcopy utan påhittade fakta.]',
   ].filter(Boolean).join('\n')
   try {
-    const got = await callBuildModelCascade(ctx, ctx.openrouterKey, `freeform-v7-content:${page.slug}`, system, user, 3000)
+    const got = await callBuildModelCascade(ctx, `freeform-v7-content:${page.slug}`, system, user, 3000)
     const raw = got.text
     const parsed = parseJson(raw)
     const c = repairContent(ctx, cleanContent(parsed, ctx, page))
@@ -506,7 +508,9 @@ HÅRDA REGLER:
     JSON.stringify(draft),
   ].filter(Boolean).join('\n')
   try {
-    const raw = await callModel(ctx.openrouterKey, LANG_MODEL, `freeform-v7-polish:${page.slug}`, system, user, 3000, 36_000)
+    // Deliberately stays on GPT through OpenRouter. NVIDIA controls the build,
+    // not the Swedish language finishing pass.
+    const raw = await callOpenRouterModel(ctx.openrouterKey, LANG_MODEL, `freeform-v7-polish:${page.slug}`, system, user, 3000, 36_000)
     const parsed = parseJson(raw)
     const c = repairContent(ctx, cleanContent(parsed, ctx, page))
     if (!c.heroTitle || !c.heroLead) throw new Error('polish missing hero fields')
@@ -1660,7 +1664,7 @@ function contrast(a: string, b: string): number { const A = lum(a), B = lum(b), 
 function lum(c: string): number { const r = rgb(c); if (!r) return 0; const a = [r.r, r.g, r.b].map((v) => { const s = v / 255; return s <= .03928 ? s / 12.92 : ((s + .055) / 1.055) ** 2.4 }); return .2126 * a[0] + .7152 * a[1] + .0722 * a[2] }
 function rgb(c: string): { r: number; g: number; b: number } | null { const x = String(c || '').trim().toLowerCase(); if (/^#[0-9a-f]{3}$/i.test(x)) return { r: parseInt(x[1] + x[1], 16), g: parseInt(x[2] + x[2], 16), b: parseInt(x[3] + x[3], 16) }; if (/^#[0-9a-f]{6}$/i.test(x)) return { r: parseInt(x.slice(1, 3), 16), g: parseInt(x.slice(3, 5), 16), b: parseInt(x.slice(5, 7), 16) }; const m = x.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/); return m ? { r: +m[1], g: +m[2], b: +m[3] } : null }
 
-async function callModel(key: string, model: string, label: string, system: string, user: string, maxTokens: number, timeoutMs: number): Promise<string> {
+async function callOpenRouterModel(key: string, model: string, label: string, system: string, user: string, maxTokens: number, timeoutMs: number): Promise<string> {
   const controller = new AbortController()
   const id = setTimeout(() => controller.abort(), timeoutMs)
   try {
@@ -1679,21 +1683,39 @@ async function callModel(key: string, model: string, label: string, system: stri
   }
 }
 
-async function callBuildModelCascade(ctx: FreeformCtx, key: string, label: string, system: string, user: string, maxTokens: number): Promise<{ model: string; text: string }> {
-  const attempts: { model: string; timeoutMs: number }[] = isEnglish(ctx)
-    ? [
-        { model: BUILD_FALLBACK_MODEL, timeoutMs: 40_000 },
-        { model: BUILD_LAST_RESORT_MODEL, timeoutMs: 42_000 },
-      ]
-    : [
-        { model: BUILD_MODEL, timeoutMs: 38_000 },
-        { model: BUILD_FALLBACK_MODEL, timeoutMs: 42_000 },
-        { model: BUILD_LAST_RESORT_MODEL, timeoutMs: 42_000 },
-      ]
+async function callBuildModelCascade(ctx: FreeformCtx, label: string, system: string, user: string, maxTokens: number): Promise<{ model: string; text: string }> {
   const errors: string[] = []
+  try {
+    const routed = await callRoutedChat({
+      supabase: ctx.supabase,
+      nvidiaModel: NVIDIA_BUILD_MODEL,
+      openrouterModel: isEnglish(ctx) ? BUILD_FALLBACK_MODEL : BUILD_MODEL,
+      title: 'Botlio Freeform Site Builder V7',
+      timeoutMs: 45_000,
+      requireJsonObject: true,
+      body: {
+        messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+        temperature: .55,
+        max_tokens: maxTokens,
+        response_format: { type: 'json_object' },
+      },
+    })
+    const content = routed.data?.choices?.[0]?.message?.content
+    const text = Array.isArray(content) ? content.map((p: any) => p?.text || '').join('') : String(content || '')
+    if (!text.trim()) throw new Error(`${routed.model} returned empty content`)
+    return { model: `${routed.provider}/${routed.model}`, text }
+  } catch (error) {
+    errors.push((error as Error).message)
+  }
+
+  // Final OpenRouter safety net. This deliberately does not re-enter NVIDIA,
+  // so one unhealthy provider cannot consume the whole Edge Function timeout.
+  const attempts: { model: string; timeoutMs: number }[] = [
+    { model: BUILD_LAST_RESORT_MODEL, timeoutMs: 42_000 },
+  ]
   for (const attempt of attempts) {
     try {
-      const text = await callModel(key, attempt.model, label, system, user, maxTokens, attempt.timeoutMs)
+      const text = await callOpenRouterModel(ctx.openrouterKey, attempt.model, label, system, user, maxTokens, attempt.timeoutMs)
       return { model: attempt.model, text }
     } catch (error) {
       errors.push(`${attempt.model}: ${(error as Error).message}`)

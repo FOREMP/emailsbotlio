@@ -3,6 +3,7 @@ import { Send, Users, Mail, Layers, FileSpreadsheet, Inbox, Plus, ArrowRight } f
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { AiProviderSettings } from "@/components/AiProviderSettings";
 
 const Dashboard = () => {
 
@@ -85,6 +86,8 @@ const Dashboard = () => {
           <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
           <p className="text-muted-foreground text-sm mt-1">Your outreach at a glance.</p>
         </div>
+
+        <AiProviderSettings />
 
         {/* Stat tiles */}
         <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-8">
