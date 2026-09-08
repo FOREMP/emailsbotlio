@@ -28,7 +28,7 @@ Deno.serve(async (req) => {
       if (job?.market_id) {
         const completedAt = new Date().toISOString()
         const { data: market } = await supabase.from('lead_markets')
-          .select('city, niche_key').eq('id', job.market_id).maybeSingle()
+          .select('city, niche_key, search_key').eq('id', job.market_id).maybeSingle()
         await supabase.from('lead_markets').update({ last_scraped_at: completedAt }).eq('id', job.market_id)
         if (market?.city && market?.niche_key) {
           const { error: historyError } = await supabase.from('lead_scrape_history').upsert({
@@ -36,12 +36,13 @@ Deno.serve(async (req) => {
             language: job.language,
             city_key: cityKey(market.city),
             niche_key: market.niche_key,
+            search_key: market.search_key ?? 'all',
             city: market.city,
             search_query: job.search_query,
             source: 'server',
             market_id: job.market_id,
             completed_at: completedAt,
-          }, { onConflict: 'user_id,language,city_key,niche_key' })
+          }, { onConflict: 'user_id,language,city_key,niche_key,search_key' })
           if (historyError) throw historyError
         }
       }

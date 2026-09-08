@@ -1,15 +1,14 @@
-// Audits an existing website: scrapes it with Firecrawl, then uses AI to score
-// quality 1-10. High scores (>= skip_threshold) mean the lead has a decent
-// site already — we can skip generation and save cost.
+// On-demand audit entry point. It deliberately uses the exact same shared,
+// screenshot-first evaluator as process-site-leads so manual and scheduled
+// audits can never drift into different scoring systems again.
 import { createClient } from 'npm:@supabase/supabase-js@2'
-import { scrapeUrl, selectedScrapeProvider, ScraperError } from '../_shared/scraper-client.ts'
+import { auditWebsite, normaliseUrl } from '../_shared/site-audit.ts'
+import { selectedScrapeProvider, ScraperError } from '../_shared/scraper-client.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
-
-const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
 
 interface AuditRequest {
   generated_site_id: string
@@ -21,32 +20,31 @@ Deno.serve(async (req) => {
 
   try {
     const { generated_site_id, url }: AuditRequest = await req.json()
-    if (!generated_site_id) {
-      return json({ error: 'generated_site_id required' }, 400)
-    }
+    if (!generated_site_id) return json({ error: 'generated_site_id required' }, 400)
 
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     )
 
-    // Load the row + optional URL fallback from contacts
     const { data: site, error: siteErr } = await supabase
       .from('generated_sites')
-      .select('id, contact_id, source_url')
+      .select('id, contact_id, source_url, language')
       .eq('id', generated_site_id)
       .single()
     if (siteErr || !site) return json({ error: 'site not found' }, 404)
 
+    const { data: contact } = await supabase
+      .from('contacts')
+      .select('email, custom_fields')
+      .eq('id', site.contact_id)
+      .maybeSingle()
+    const cf = (contact?.custom_fields ?? {}) as Record<string, unknown>
+    const contactLanguage = typeof cf.language === 'string' ? cf.language : null
+    const companyName = String(cf.company_name ?? cf.company ?? cf.business_name ?? site.id)
+
     let targetUrl = url || site.source_url
     if (!targetUrl) {
-      // Try to derive from contact.website / email domain
-      const { data: contact } = await supabase
-        .from('contacts')
-        .select('email, custom_fields')
-        .eq('id', site.contact_id)
-        .single()
-      const cf = (contact?.custom_fields ?? {}) as Record<string, unknown>
       const websiteField = (cf.website ?? cf.url ?? cf.homepage ?? cf.hemsida ?? cf.webbsida ?? cf.webbplats ?? cf.site ?? cf.domain) as string | undefined
       if (websiteField) targetUrl = normaliseUrl(String(websiteField))
       else if (contact?.email) {
@@ -55,10 +53,13 @@ Deno.serve(async (req) => {
       }
     }
 
-    await supabase.from('generated_sites').update({ status: 'auditing', source_url: targetUrl }).eq('id', generated_site_id)
+    await supabase.from('generated_sites').update({
+      status: 'auditing',
+      source_url: targetUrl,
+      error_message: null,
+    }).eq('id', generated_site_id)
 
     if (!targetUrl) {
-      // No site to audit — score = 0, needs full generation
       await supabase.from('generated_sites').update({
         status: 'audited',
         audit_score: 0,
@@ -67,98 +68,48 @@ Deno.serve(async (req) => {
       return json({ score: 0, reason: 'no site' })
     }
 
-    const provider = await selectedScrapeProvider(supabase)
-    let scraped: any
+    const language = site.language === 'en' || contactLanguage === 'en' ? 'en' : 'sv'
+    const scrapeProvider = await selectedScrapeProvider(supabase)
+    let result
     try {
-      scraped = await scrapeUrl(provider, targetUrl, { screenshot: false })
+      result = await auditWebsite(
+        targetUrl,
+        companyName,
+        language,
+        supabase,
+        scrapeProvider,
+      )
     } catch (error) {
       const typed = error instanceof ScraperError ? error : null
-      if (typed?.retryable) {
-        await supabase.from('generated_sites').update({ status: 'auditing', error_message: `${provider}: ${typed.message}` }).eq('id', generated_site_id)
-        return json({ error: `${provider} temporarily unavailable`, provider }, 503)
-      }
+      const message = typed?.message ?? (error as Error).message
       await supabase.from('generated_sites').update({
-        status: 'audited',
-        audit_score: 0,
-        audit_reason: `Could not reach site (${typed?.status ?? 0}). Treating as needs generation.`,
+        // Provider failures are retryable audit work, not evidence that the
+        // lead's website is bad and not a reason to start generation.
+        status: 'auditing',
+        error_message: `${typed?.provider ?? 'audit'}: ${message}`.slice(0, 500),
       }).eq('id', generated_site_id)
-      return json({ score: 0, reason: 'unreachable', provider })
+      return json({ error: 'audit temporarily unavailable', provider: typed?.provider, details: message }, 503)
     }
 
-    const markdown: string = scraped?.markdown ?? ''
-    const title: string = scraped?.metadata?.title ?? ''
-
-    // Score with AI
-    const lovableKey = Deno.env.get('LOVABLE_API_KEY')
-    if (!lovableKey) return json({ error: 'LOVABLE_API_KEY missing' }, 500)
-
-    const aiResp = await fetch(`${AI_GATEWAY}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Lovable-API-Key': lovableKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'google/gemini-3-flash-preview',
-        // Determinism: temperature 0 + fixed seed + top_p 1 so identical input
-        // produces identical output. Without this Gemini varies scores by ±3.
-        temperature: 0,
-        top_p: 1,
-        seed: 42,
-        messages: [
-          {
-            role: 'system',
-            content: [
-              'You audit small-business websites and score them 1-10 for how modern, trustworthy and conversion-ready they look.',
-              'Be strict, consistent and deterministic — the SAME input MUST always produce the SAME score. Do not vary tone or scoring between runs.',
-              '',
-              'Scoring rubric (pick the single band that best matches, then pick the exact integer inside it):',
-              '  1  = broken, blank, parked domain, or unreadable',
-              '  2  = extremely outdated (pre-2010 look), no mobile layout, no real content',
-              '  3  = outdated template, weak copy, poor structure, no clear CTA',
-              '  4  = dated but functional; basic info present but ugly typography/layout',
-              '  5  = average small-business site; usable but generic, weak hero, thin content',
-              '  6  = decent modern-ish template with clear services and contact info',
-              '  7  = clearly modern, responsive, good hierarchy, clear CTAs',
-              '  8  = polished, on-brand, strong copy, trust signals (reviews, cases)',
-              '  9  = excellent design and conversion-focused, comparable to top agencies',
-              '  10 = flawless best-in-class, nothing meaningful to improve',
-              '',
-              'Rules:',
-              '- Judge ONLY from the title and content excerpt provided. Do not speculate about images you cannot see.',
-              '- If content is very thin (<300 chars of real copy) cap the score at 4.',
-              '- If the site is unreachable or empty, score 1.',
-              '- Reply with STRICT JSON only: {"score": <integer 1-10>, "reason": "<max 200 chars, cite concrete evidence>"}.',
-              '- The reason MUST reference specific observations (e.g. "no mobile nav", "generic stock hero", "clear service list + phone CTA"). No vague adjectives alone.',
-            ].join('\n'),
-          },
-          {
-            role: 'user',
-            content: `URL: ${targetUrl}\nTitle: ${title}\n\nContent excerpt:\n${markdown.slice(0, 3000)}`,
-          },
-        ],
-        response_format: { type: 'json_object' },
-      }),
-    })
-    const aiData = await aiResp.json()
-    if (!aiResp.ok) {
-      await supabase.from('generated_sites').update({
-        status: 'failed',
-        error_message: `AI audit failed: ${JSON.stringify(aiData).slice(0, 400)}`,
-      }).eq('id', generated_site_id)
-      return json({ error: 'ai audit failed', details: aiData }, aiResp.status)
-    }
-
-    let parsed: { score: number; reason: string } = { score: 5, reason: 'unparsed' }
-    try {
-      parsed = JSON.parse(aiData.choices?.[0]?.message?.content ?? '{}')
-    } catch (_) { /* keep default */ }
-
-    await supabase.from('generated_sites').update({
+    const { error: updateError } = await supabase.from('generated_sites').update({
       status: 'audited',
-      audit_score: Math.max(0, Math.min(10, Math.round(parsed.score))),
-      audit_reason: parsed.reason?.slice(0, 500) ?? null,
+      audit_score: result.score,
+      audit_reason: result.reason,
       source_url: targetUrl,
+      error_message: null,
     }).eq('id', generated_site_id)
+    if (updateError) throw new Error(`save audit: ${updateError.message}`)
 
-    return json({ score: parsed.score, reason: parsed.reason, url: targetUrl })
+    return json({
+      score: result.score,
+      reason: result.reason,
+      confidence: result.confidence,
+      uncertain: result.uncertain,
+      second_opinion_used: result.secondOpinionUsed,
+      first_score: result.firstScore,
+      second_score: result.secondScore,
+      url: targetUrl,
+    })
   } catch (err) {
     console.error('audit-site error', err)
     return json({ error: (err as Error).message }, 500)
@@ -172,18 +123,12 @@ function json(body: unknown, status = 200): Response {
   })
 }
 
-function normaliseUrl(raw: string): string {
-  const s = raw.trim()
-  if (!s) return ''
-  if (/^https?:\/\//i.test(s)) return s
-  return `https://${s.replace(/^\/+/, '')}`
-}
-
 const FREE_EMAIL_DOMAINS = new Set([
   'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'live.com', 'icloud.com',
   'aol.com', 'me.com', 'protonmail.com', 'proton.me', 'yahoo.co.uk', 'yahoo.se',
   'hotmail.se', 'live.se', 'telia.com', 'spray.se', 'bredband.net',
 ])
+
 function isFreeEmail(domain: string): boolean {
   return FREE_EMAIL_DOMAINS.has(domain.toLowerCase())
 }

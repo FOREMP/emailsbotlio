@@ -16,10 +16,10 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import {
   activePipelineBreakers,
-  pipelinePausedPayload,
   recordPipelineFailure,
 } from '../_shared/site-pipeline-health.ts'
-import { scrapeUrl, selectedScrapeProvider, ScraperError } from '../_shared/scraper-client.ts'
+import { selectedScrapeProvider, ScraperError } from '../_shared/scraper-client.ts'
+import { auditWebsite } from '../_shared/site-audit.ts'
 import { classifyNiche, templateForNiche, type NicheKey } from '../_shared/niche.ts'
 import {
   blockTemplateFamilyCatalog,
@@ -78,10 +78,6 @@ Deno.serve(async (req) => {
       }
     } catch { /* no body — normal cron tick */ }
   }
-
-  const scrapeProvider = await selectedScrapeProvider(supabase)
-  const activeBreakers = await activePipelineBreakers(supabase, [scrapeProvider, 'openrouter', 'vercel'])
-  if (activeBreakers.length) return json(pipelinePausedPayload(activeBreakers), 423)
 
   try {
     if (overrideIds.length > 0) {
@@ -607,120 +603,111 @@ async function syncAutoSendLead(
 }
 
 // ---------------------------------------------------------------------------
-// AUDIT — Firecrawl (markdown only) + Gemini (deterministic scoring).
-// Also asks for 2-3 concrete weaknesses to reuse in outreach emails later.
+// AUDIT — one shared screenshot-first evaluator for every audit entry point.
+// The score remains a recommendation: every result waits for the operator.
 // ---------------------------------------------------------------------------
 async function auditOne(
   supabase: ReturnType<typeof createClient>,
-  row: { id: string; website: string; company_name: string },
+  row: { id: string; website: string; company_name: string; language?: string | null },
 ) {
   const scrapeProvider = await selectedScrapeProvider(supabase)
-  const breakers = await activePipelineBreakers(supabase, [scrapeProvider, 'openrouter', 'vercel'])
+  // Vercel is unrelated to auditing and must never block it. AI routing has
+  // its own NVIDIA -> OpenRouter fallback, so only the selected scraper's
+  // explicit circuit breaker is checked here.
+  const breakers = await activePipelineBreakers(supabase, [scrapeProvider])
   if (breakers.length) throw new Error(`pipeline paused: ${breakers.map((breaker) => breaker.provider).join(', ')}`)
-
-  const lovableKey = Deno.env.get('LOVABLE_API_KEY')
-  if (!lovableKey) throw new Error('missing LOVABLE_API_KEY')
 
   await supabase.from('site_leads').update({ status: 'auditing' }).eq('id', row.id)
 
-  const url = normaliseUrl(row.website)
-  let markdown = ''
-  let title = ''
-  let unreachable = false
-
   try {
-    const scraped = await scrapeUrl(scrapeProvider, url, { screenshot: false })
-    markdown = scraped.markdown ?? ''
-    title = scraped.metadata?.title ?? ''
+    const result = await auditWebsite(
+      row.website,
+      row.company_name,
+      row.language === 'en' ? 'en' : 'sv',
+      supabase,
+      scrapeProvider,
+    )
+    const recommendedStatus = result.score >= 7 ? 'site_good_enough' : 'needs_site'
+    // Do not persist large inline screenshot data. Provider-hosted screenshot
+    // URLs are useful evidence; base64 payloads would create avoidable DB I/O.
+    const screenshotEvidence = result.screenshot?.startsWith('http')
+      ? result.screenshot.slice(0, 2000)
+      : null
+
+    const { error: updateError } = await supabase.from('site_leads').update({
+      status: 'awaiting_audit_approval',
+      audit_score: result.score,
+      audit_reason: result.reason,
+      audit_details: {
+        weaknesses: result.weaknesses,
+        structural: result.structural,
+        cosmetic: result.cosmetic,
+        recommended_status: recommendedStatus,
+        uncertain: result.uncertain,
+        confidence: result.confidence,
+        evidence: {
+          rubric_version: 'screenshot_consensus_v3',
+          screenshot_used: Boolean(result.screenshot),
+          screenshot: screenshotEvidence,
+          scraped_text_characters: result.markdown.length,
+          scrape_provider: result.providerUsed,
+          first_model: result.modelUsed,
+          first_score: result.firstScore,
+          second_opinion_used: result.secondOpinionUsed,
+          second_provider: result.secondProviderUsed,
+          second_model: result.secondModelUsed,
+          second_score: result.secondScore,
+          score_disagreement: result.scoreDisagreement,
+          second_opinion_error: result.secondOpinionError,
+        },
+      },
+    }).eq('id', row.id)
+    if (updateError) throw new Error(`save audit: ${updateError.message}`)
+    return
   } catch (error) {
     const typed = error instanceof ScraperError ? error : null
-    if (typed?.retryable) {
-        const message = typed.message
-        const failedProvider = typed.provider ?? scrapeProvider
-        await recordPipelineFailure(supabase, {
-          provider: failedProvider, sourceFunction: 'process-site-leads:audit', message,
-          httpStatus: typed.status, siteLeadId: row.id,
-        })
-        await supabase.from('site_leads').update({ status: 'pending_audit' }).eq('id', row.id)
-        throw new Error(`${failedProvider} provider error (${typed.status}): ${message}`)
+    if (!typed) {
+      // AI/provider and persistence failures are not website verdicts. Leave
+      // the lead retryable instead of saving a fabricated neutral score.
+      await supabase.from('site_leads').update({ status: 'pending_audit' }).eq('id', row.id)
+      throw error
     }
-    unreachable = true
-  }
-
-  if (unreachable || !markdown) {
+    const providerFailure = typed && (
+      typed.retryable || typed.status === 0 || typed.status === 401 ||
+      typed.status === 402 || typed.status === 403 || typed.status === 429 || typed.status >= 500
+    )
+    if (providerFailure) {
+      await recordPipelineFailure(supabase, {
+        provider: typed.provider,
+        sourceFunction: 'process-site-leads:audit',
+        message: typed.message,
+        httpStatus: typed.status,
+        siteLeadId: row.id,
+      })
+      await supabase.from('site_leads').update({ status: 'pending_audit' }).eq('id', row.id)
+      throw new Error(`${typed.provider} provider error (${typed.status}): ${typed.message}`)
+    }
+    // A target-specific failure is not proof of a bad website. Put a neutral,
+    // explicitly uncertain result in manual review instead of auto-building.
+    const reason = row.language === 'en'
+      ? 'The website could not be inspected reliably and needs a manual check.'
+      : 'Webbplatsen kunde inte granskas tillförlitligt och behöver kontrolleras manuellt.'
     await supabase.from('site_leads').update({
-      // A failed scrape strongly suggests a replacement, but it still needs
-      // the same human decision as a normal audit before spending capacity.
       status: 'awaiting_audit_approval',
-      audit_score: 1,
-      audit_reason: unreachable ? 'Could not reach existing website.' : 'Site returned empty content.',
+      audit_score: 5,
+      audit_reason: reason,
       audit_details: {
-        weaknesses: ['Ingen nåbar eller läsbar hemsida idag.'],
+        weaknesses: [reason],
+        structural: [],
+        cosmetic: [],
         recommended_status: 'needs_site',
+        uncertain: true,
+        confidence: 'low',
+        evidence: { rubric_version: 'screenshot_consensus_v3', screenshot_used: false },
       },
     }).eq('id', row.id)
     return
   }
-
-  const aiResp = await fetch(`${AI_GATEWAY}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Lovable-API-Key': lovableKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'google/gemini-3-flash-preview',
-      temperature: 0,
-      top_p: 1,
-      seed: 42,
-      messages: [
-        {
-          role: 'system',
-          content: [
-            'Du auditerar små företags hemsidor och betygsätter dem 1-10 för hur moderna, förtroendeingivande och konverterande de ser ut.',
-            'Var STRIKT, KONSEKVENT och DETERMINISTISK — samma input MÅSTE ge samma svar.',
-            '',
-            'Rubrik för poäng:',
-            '  1  = trasig, tom, parkerad domän',
-            '  2-3 = extremt föråldrad (pre-2010), ingen mobil, tunt innehåll',
-            '  4  = daterad men fungerande, ful typografi/layout',
-            '  5  = genomsnittlig småföretagssajt, generisk, tunn hero',
-            '  6  = hyfsad modern-ish, tydliga tjänster + kontakt',
-            '  7  = klart modern, responsiv, tydlig hierarki, tydliga CTA',
-            '  8  = polerad, on-brand, trust signals',
-            '  9-10 = förstklassig, inget meningsfullt att förbättra',
-            '',
-            'Om innehållet är väldigt tunt (<300 tecken riktig copy) — cap 4.',
-            '',
-            'Svara ENDAST med strikt JSON:',
-            '{"score": <heltal 1-10>, "reason": "<max 200 tecken, konkret evidens>", "weaknesses": ["<konkret svaghet 1>", "<konkret svaghet 2>", "<konkret svaghet 3>"]}',
-            'Svagheterna ska vara på svenska, konkreta (t.ex. "generisk stock-hero", "ingen mobil-nav", "saknar priser", "gammal design 2015-typ"), och användbara i ett kallmail som argument för varför de behöver ny hemsida.',
-          ].join('\n'),
-        },
-        {
-          role: 'user',
-          content: `URL: ${url}\nFöretag: ${row.company_name}\nTitel: ${title}\n\nInnehåll:\n${markdown.slice(0, 3000)}`,
-        },
-      ],
-      response_format: { type: 'json_object' },
-    }),
-  })
-  const aiData = await aiResp.json()
-  if (!aiResp.ok) throw new Error(`AI audit ${aiResp.status}: ${JSON.stringify(aiData).slice(0, 200)}`)
-
-  let parsed: { score: number; reason: string; weaknesses?: string[] } = { score: 5, reason: 'unparsed' }
-  try { parsed = JSON.parse(aiData.choices?.[0]?.message?.content ?? '{}') } catch (_) { /* keep default */ }
-  const score = Math.max(1, Math.min(10, Math.round(parsed.score)))
-  // Preserve the model recommendation without letting the model decide to
-  // create a site. The operator explicitly moves the lead into the queue.
-  const recommendedStatus = score >= 7 ? 'site_good_enough' : 'needs_site'
-
-  await supabase.from('site_leads').update({
-    status: 'awaiting_audit_approval',
-    audit_score: score,
-    audit_reason: (parsed.reason ?? '').slice(0, 500),
-    audit_details: {
-      weaknesses: (parsed.weaknesses ?? []).slice(0, 5),
-      recommended_status: recommendedStatus,
-    },
-  }).eq('id', row.id)
 }
 
 // ---------------------------------------------------------------------------

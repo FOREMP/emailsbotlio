@@ -136,20 +136,15 @@ async function planAndDispatch(supabase: any, userId: string, request: { action:
 }
 
 async function getCoverage(supabase: any, userId: string, language: Language, settings: State) {
-  const { data: senders } = await supabase.from('senders').select('daily_limit, from_email').eq('is_active', true)
+  const { data: senders, error: senderError } = await supabase.from('senders').select('daily_limit, from_email').eq('is_active', true)
+  if (senderError) throw senderError
   const domains = language === 'en' ? ['foremp.eu', 'foremp.one'] : ['foremp.email']
   const dailyCapacity = (senders ?? []).filter((sender: any) => domains.some((domain) => String(sender.from_email ?? '').toLowerCase().endsWith(`@${domain}`)))
     .reduce((total: number, sender: any) => total + Math.max(0, Number(sender.daily_limit) || 0), 0)
   const stockMultiplier = Math.max(1, Math.min(10, Number(settings.lead_stock_multiplier) || LEAD_STOCK_MULTIPLIER))
   const tolerance = Math.max(0, Math.min(20, Number(settings.stock_tolerance) || STOCK_TOLERANCE))
   const backlogMultiplier = Math.max(1, Math.min(6, Number(settings.backlog_multiplier) || BACKLOG_MULTIPLIER))
-  const [
-    { count: pipelineCount },
-    { count: unsentApprovedCount },
-    { count: auditBacklog },
-    { count: reviewBacklog },
-    { count: buildBacklog },
-  ] = await Promise.all([
+  const stockQueries = await Promise.all([
     // These statuses all represent leads which can still become an outbound
     // first email. They are the usable stock, not merely raw imported rows.
     supabase.from('site_leads').select('id', { count: 'exact', head: true })
@@ -165,6 +160,15 @@ async function getCoverage(supabase: any, userId: string, language: Language, se
     supabase.from('site_leads').select('id', { count: 'exact', head: true })
       .eq('user_id', userId).eq('language', language).in('status', ['needs_site', 'generating']),
   ])
+  const queryFailure = stockQueries.find((result: any) => result.error)
+  if (queryFailure?.error) throw queryFailure.error
+  const [
+    { count: pipelineCount },
+    { count: unsentApprovedCount },
+    { count: auditBacklog },
+    { count: reviewBacklog },
+    { count: buildBacklog },
+  ] = stockQueries as any[]
   const daily = Math.max(1, dailyCapacity || 10)
   const target = daily * stockMultiplier
   const stock = (pipelineCount ?? 0) + (unsentApprovedCount ?? 0)
@@ -190,15 +194,22 @@ async function getCoverage(supabase: any, userId: string, language: Language, se
 }
 
 async function findCandidate(supabase: any, userId: string, request: { action: 'plan' | 'run_now'; requestedMarketId: string | null; language: Language | null }, coverage: any[]) {
-  let query = supabase.from('lead_markets').select('*').eq('user_id', userId).eq('is_enabled', true).order('priority', { ascending: true }).order('last_scraped_at', { ascending: true, nullsFirst: true }).limit(50)
+  // The recommended catalogue intentionally contains many small, specialised
+  // queries. Inspect the whole owned catalogue; a 50-row cap would leave the
+  // planner permanently stuck on completed markets near the top of the list.
+  let query = supabase.from('lead_markets').select('*').eq('user_id', userId).eq('is_enabled', true).order('priority', { ascending: true }).order('last_scraped_at', { ascending: true, nullsFirst: true }).limit(2_000)
   if (request.requestedMarketId) query = query.eq('id', request.requestedMarketId)
   if (request.language) query = query.eq('language', request.language)
   const { data: markets, error } = await query
   if (error) throw error
   const { data: history, error: historyError } = await supabase.from('lead_scrape_history')
-    .select('language, city_key, niche_key').eq('user_id', userId)
+    .select('language, city_key, niche_key, search_key').eq('user_id', userId)
   if (historyError) throw historyError
-  const completed = new Set((history ?? []).map((row: any) => `${row.language}:${row.city_key}:${row.niche_key}`))
+  // Older local coverage has search_key = "all", meaning the entire family
+  // was already searched in that city. New catalogue rows have a specific
+  // search key, so restaurant/bistro/bar searches can each run once without
+  // repeating the same query forever.
+  const completed = new Set((history ?? []).map((row: any) => `${row.language}:${row.city_key}:${row.niche_key}:${row.search_key ?? 'all'}`))
   const now = Date.now()
   for (const market of markets ?? []) {
     const marketCoverage = coverage.find((item) => item.language === market.language)
@@ -207,7 +218,11 @@ async function findCandidate(supabase: any, userId: string, request: { action: '
     if (!marketCoverage || !marketCoverage.should_source) continue
     // Completed coverage is permanent until a future explicit re-run tool is
     // added. Cooldowns alone are not enough: they would repeat local work.
-    if (market.niche_key && completed.has(`${market.language}:${cityKey(market.city)}:${market.niche_key}`)) continue
+    if (market.niche_key) {
+      const base = `${market.language}:${cityKey(market.city)}:${market.niche_key}`
+      const key = String(market.search_key ?? 'all')
+      if (completed.has(`${base}:all`) || completed.has(`${base}:${key}`)) continue
+    }
     const last = market.last_scraped_at ? Date.parse(market.last_scraped_at) : 0
     if (last && now - last < Number(market.cooldown_days) * 86_400_000) continue
     return {
@@ -227,13 +242,14 @@ async function ensureLegacyHistory(supabase: any, userId: string) {
     language: item.language,
     city_key: cityKey(item.city),
     niche_key: item.nicheKey,
+    search_key: 'all',
     city: item.city,
     source: 'legacy_local',
     source_note: item.sourceFile,
   }))
   if (!rows.length) return
   const { error } = await supabase.from('lead_scrape_history').upsert(rows, {
-    onConflict: 'user_id,language,city_key,niche_key',
+    onConflict: 'user_id,language,city_key,niche_key,search_key',
     ignoreDuplicates: true,
   })
   if (error) throw error
@@ -246,22 +262,42 @@ function cityKey(value: unknown): string {
 
 function canonicalNicheKey(value: unknown): string {
   const text = String(value ?? '').trim().toLocaleLowerCase('sv-SE')
-  if (/(hair|frisör|frisor|salong|barber)/.test(text)) return 'hair_salon'
+  // "salong" by itself is too broad: it also appears in Swedish beauty,
+  // nail and massage businesses.  Require a genuine hair/barber signal.
+  if (/(hair|frisör|frisor|hårsalong|harsalong|barber)/.test(text)) return 'hair_salon'
+  if (/(beauty|skönhet|skonhet|nail|nagel|lash|frans|brow|bryn)/.test(text)) return 'beauty_salon'
+  if (/(massage|wellness)/.test(text)) return 'massage_wellness'
+  if (/(restaurant|restaurang|bistro|cafe|café|bar|pub|pizzeria|brasserie)/.test(text)) return 'restaurant_food'
   if (/(electric|elektr|elfirma|elinstall)/.test(text)) return 'electrician'
   if (/(plumb|rörmok|vvs)/.test(text)) return 'plumber'
   if (/(roof|taklägg|takfirma)/.test(text)) return 'roofer'
   if (/(paint|målare|malare)/.test(text)) return 'painter'
-  if (/(auto|garage|mekanik|bilverk)/.test(text)) return 'auto_workshop'
+  if (/(clean|städ|stad)/.test(text)) return 'cleaning'
+  if (/(garden|landscap|trädgård|tradgard|markarbete|tree)/.test(text)) return 'landscaping'
+  if (/(floor|golv|window|fönster|fonster|door|dörr|dorr|fenc|staket)/.test(text)) return 'flooring_exterior'
+  if (/(pet|dog|hund|trim)/.test(text)) return 'pet_grooming'
+  if (/(detail|valet|rekond|bilvård|bilvard|car wash|biltvätt|biltvatt)/.test(text)) return 'car_detailing'
+  if (/(auto|garage|mekanik|bilverk|tyre|tire|däck|dack)/.test(text)) return 'auto_workshop'
+  if (/(build|bygg|carpent|snick|renovat|renover)/.test(text)) return 'builder_renovation'
   return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 48) || 'other'
 }
 
 function searchTerm(language: Language, nicheKey: string, supplied: string): string {
   const defaults: Record<string, { sv: string; en: string }> = {
     hair_salon: { sv: 'frisör', en: 'hair salon' },
+    beauty_salon: { sv: 'skönhetssalong', en: 'beauty salon' },
+    massage_wellness: { sv: 'massage', en: 'massage therapist' },
+    restaurant_food: { sv: 'restaurang', en: 'restaurant' },
+    builder_renovation: { sv: 'byggfirma', en: 'builder' },
     electrician: { sv: 'elektriker', en: 'electrician' },
     plumber: { sv: 'rörmokare', en: 'plumber' },
     roofer: { sv: 'takläggare', en: 'roofer' },
     painter: { sv: 'målare', en: 'painter' },
+    cleaning: { sv: 'städfirma', en: 'cleaning service' },
+    landscaping: { sv: 'trädgårdsskötsel', en: 'landscaping' },
+    flooring_exterior: { sv: 'golvläggare', en: 'flooring contractor' },
+    pet_grooming: { sv: 'hundtrim', en: 'dog groomer' },
+    car_detailing: { sv: 'bilvård', en: 'car detailing' },
     auto_workshop: { sv: 'bilverkstad', en: 'auto repair shop' },
   }
   return defaults[nicheKey]?.[language] ?? supplied
@@ -274,17 +310,18 @@ async function addMatrix(supabase: any, userId: string, language: Language, rawC
   if (cities.length * niches.length > 100) throw new Error('a maximum of 100 place × niche combinations can be added at once')
   await ensureLegacyHistory(supabase, userId)
   const { data: history, error: historyError } = await supabase.from('lead_scrape_history')
-    .select('city_key, niche_key').eq('user_id', userId).eq('language', language)
+    .select('city_key, niche_key, search_key').eq('user_id', userId).eq('language', language)
   if (historyError) throw historyError
-  const completed = new Set((history ?? []).map((row: any) => `${row.city_key}:${row.niche_key}`))
+  const completed = new Set((history ?? []).map((row: any) => `${row.city_key}:${row.niche_key}:${row.search_key ?? 'all'}`))
   const countryCode = language === 'sv' ? 'SE' : 'GB'
   const countryName = language === 'sv' ? 'Sverige' : 'UK'
   const rows = cities.flatMap((city) => niches.map((niche) => {
     const nicheKey = canonicalNicheKey(niche)
-    const isCovered = completed.has(`${cityKey(city)}:${nicheKey}`)
+    const isCovered = completed.has(`${cityKey(city)}:${nicheKey}:all`)
     return {
       user_id: userId, language, country_code: countryCode, city,
       category: niche, niche_key: nicheKey,
+      search_key: 'all',
       search_query: `${searchTerm(language, nicheKey, niche)} ${city} ${countryName}`,
       is_enabled: !isCovered, priority: 100, max_results: 75, cooldown_days: 90,
     }
@@ -293,7 +330,7 @@ async function addMatrix(supabase: any, userId: string, language: Language, rawC
   for (const row of rows) {
     const { data: existing, error: existingError } = await supabase.from('lead_markets').select('id')
       .eq('user_id', userId).eq('language', language).eq('country_code', countryCode)
-      .eq('city', row.city).eq('niche_key', row.niche_key).limit(1)
+      .eq('city', row.city).eq('niche_key', row.niche_key).eq('search_key', row.search_key).limit(1)
     if (existingError) throw existingError
     if (!existing?.length) {
       const { error: insertError } = await supabase.from('lead_markets').insert(row)
@@ -309,7 +346,7 @@ async function addMatrix(supabase: any, userId: string, language: Language, rawC
   for (const row of rows.filter((item) => !item.is_enabled)) {
     const { error: disableError } = await supabase.from('lead_markets').update({ is_enabled: false })
       .eq('user_id', userId).eq('language', language).eq('country_code', countryCode)
-      .eq('city', row.city).eq('niche_key', row.niche_key)
+      .eq('city', row.city).eq('niche_key', row.niche_key).eq('search_key', row.search_key)
     if (disableError) throw disableError
   }
   return { added, already_covered: rows.filter((row) => !row.is_enabled).length, combinations: rows.length }

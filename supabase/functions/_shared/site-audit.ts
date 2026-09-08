@@ -7,8 +7,9 @@
 // actually looked. Scoring now leads with the rendered screenshot; text is a
 // secondary signal only.
 
-const FIRECRAWL_V2 = 'https://api.firecrawl.dev/v2'
 import { callRoutedChat } from './ai-provider.ts'
+import { scrapeUrl, type ScrapeProvider, type ScraperPayload } from './scraper-client.ts'
+import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 export interface AuditResult {
   score: number
@@ -27,6 +28,18 @@ export interface AuditResult {
   title: string
   markdown: string
   screenshot: string | null
+  /** Confidence after the optional second opinion has been reconciled. */
+  confidence: 'high' | 'medium' | 'low'
+  /** The second vision model is used only for uncertain/borderline results. */
+  secondOpinionUsed: boolean
+  firstScore: number
+  secondScore: number | null
+  scoreDisagreement: number | null
+  providerUsed: string
+  modelUsed: string
+  secondProviderUsed: string | null
+  secondModelUsed: string | null
+  secondOpinionError: string | null
 }
 
 
@@ -36,6 +49,8 @@ export interface ScrapeResult {
   description: string
   screenshot: string | null
   blocked: boolean
+  providerUsed: string
+  fallbackFrom: string | null
 }
 
 export function guardedAuditScore(
@@ -48,16 +63,13 @@ export function guardedAuditScore(
   return score
 }
 
-/**
- * Raised when Firecrawl itself failed (out of credits, auth, rate limit) rather
- * than the lead's site being unreadable. Callers must NOT score a lead from
- * this — the lead has to stay in the queue until scraping works again.
- */
-export class ScrapeProviderError extends Error {
-  constructor(public status: number, message: string) {
-    super(message)
-    this.name = 'ScrapeProviderError'
-  }
+export function shouldRequestSecondOpinion(
+  score: number,
+  confidence: 'high' | 'medium' | 'low',
+  hasScreenshot: boolean,
+): boolean {
+  if (!hasScreenshot) return false
+  return (score >= 4 && score <= 6) || confidence === 'low'
 }
 
 export function normaliseUrl(raw: string): string {
@@ -67,92 +79,25 @@ export function normaliseUrl(raw: string): string {
   return `https://${s.replace(/^\/+/, '')}`
 }
 
-/** Scrape once, asking for both markdown and a desktop screenshot. */
-export async function scrapeForAudit(url: string, fcKey: string): Promise<ScrapeResult> {
-  const empty: ScrapeResult = { markdown: '', title: '', description: '', screenshot: null, blocked: true }
+/** Scrape once through the configured provider boundary, requesting a screenshot. */
+export async function scrapeForAudit(url: string, provider: ScrapeProvider): Promise<ScrapeResult> {
+  const empty: ScrapeResult = {
+    markdown: '', title: '', description: '', screenshot: null, blocked: true,
+    providerUsed: provider, fallbackFrom: null,
+  }
   if (!url) return empty
-
-
-
-  const attempt = async (withScreenshot: boolean) => {
-    const formats: unknown[] = ['markdown']
-    if (withScreenshot) formats.push({ type: 'screenshot', fullPage: false, viewport: { width: 1280, height: 900 } })
-
-    // Firecrawl enforces a per-minute request cap. A 429 says nothing about the
-    // lead's website, so retry it instead of scoring the lead as unreadable.
-    for (let tryNo = 0; tryNo < 3; tryNo++) {
-      const resp = await fetch(`${FIRECRAWL_V2}/scrape`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url,
-          formats,
-          // Full page, not just "main content" — nav, hero and footer are exactly
-          // the parts that reveal whether a site looks modern.
-          onlyMainContent: false,
-          waitFor: 2500,
-          timeout: 45000,
-        }),
-      })
-      const data = await resp.json().catch(() => ({}))
-
-      if (resp.status === 429 && tryNo < 2) {
-        const retryHeader = Number(resp.headers.get('retry-after'))
-        const fromBody = /retry after (\d+)s/i.exec(JSON.stringify(data ?? {}))?.[1]
-        const waitSec = Math.min(
-          40,
-          Number.isFinite(retryHeader) && retryHeader > 0 ? retryHeader : Number(fromBody) || 15,
-        )
-        console.warn(`firecrawl 429 for ${url} — waiting ${waitSec}s (try ${tryNo + 1}/3)`)
-        await new Promise((r) => setTimeout(r, waitSec * 1000))
-        continue
-      }
-
-      if (!resp.ok) {
-        // Silent nulls here made a Firecrawl outage look like "every site is
-        // blocked", so always surface the provider's own status and message.
-        const detail = JSON.stringify(data).slice(0, 400)
-        console.error(`firecrawl scrape failed [${resp.status}] ${url}: ${detail}`)
-        // 402 = out of credits, 401/403 = bad key, 429 = still limited after
-        // retries. None of these are facts about the lead's website.
-        if ([401, 402, 403, 429].includes(resp.status)) {
-          throw new ScrapeProviderError(resp.status, `Firecrawl ${resp.status}: ${detail}`)
-        }
-        return null
-      }
-
-      const d = data.data ?? data
-      return {
-        markdown: (d.markdown ?? '') as string,
-        title: (d.metadata?.title ?? '') as string,
-        description: (d.metadata?.description ?? '') as string,
-        screenshot: (d.screenshot ?? d.screenshotUrl ?? null) as string | null,
-        blocked: false,
-      }
-    }
-    return null
+  const payload: ScraperPayload = await scrapeUrl(provider, url, { screenshot: true })
+  return {
+    markdown: String(payload.markdown ?? ''),
+    title: String(payload.metadata?.title ?? ''),
+    description: String(payload.metadata?.description ?? ''),
+    screenshot: typeof payload.screenshot === 'string' && payload.screenshot.trim()
+      ? payload.screenshot
+      : null,
+    blocked: false,
+    providerUsed: payload.provider_used ?? provider,
+    fallbackFrom: payload.fallback_from ?? null,
   }
-
-  // A provider-level failure must propagate: the caller has to leave the lead
-  // untouched rather than record a verdict we never actually made.
-  let providerError: ScrapeProviderError | null = null
-
-  try {
-    const withShot = await attempt(true)
-    if (withShot && (withShot.markdown || withShot.screenshot)) return withShot
-  } catch (e) {
-    if (e instanceof ScrapeProviderError) providerError = e
-  }
-
-  try {
-    const textOnly = await attempt(false)
-    if (textOnly) return textOnly
-  } catch (e) {
-    if (e instanceof ScrapeProviderError) providerError = e
-  }
-
-  if (providerError) throw providerError
-  return empty
 }
 
 
@@ -201,78 +146,127 @@ const SYSTEM_PROMPT = [
   '- Bedöm ENDAST det du faktiskt ser eller läser. Spekulera inte.',
   '',
   'Svara ENDAST med strikt JSON:',
-  '{"score": <heltal 1-10>, "reason": "<max 200 tecken, konkret evidens på svenska>", "structural": ["<riktig brist>"], "cosmetic": ["<putsdetalj>"]}',
+  '{"score": <heltal 1-10>, "confidence": "high|medium|low", "reason": "<max 200 tecken, konkret evidens på svenska>", "structural": ["<riktig brist>"], "cosmetic": ["<putsdetalj>"]}',
   'Båda listorna får vara tomma. Punkterna ska vara på svenska, konkreta och användbara som argument i ett kallmail.',
 ].join('\n')
 
+type AuditJudgment = {
+  score: number
+  confidence: 'high' | 'medium' | 'low'
+  reason: string
+  structural: string[]
+  cosmetic: string[]
+  provider: string
+  model: string
+}
 
-/** Score a scraped site. Returns a fair, screenshot-first verdict. */
-export async function auditWebsite(
-  rawUrl: string,
+function messageText(data: unknown): string {
+  const shaped = data as { choices?: Array<{ message?: { content?: unknown } }> }
+  const content = shaped.choices?.[0]?.message?.content
+  return Array.isArray(content)
+    ? content.map((part: unknown) => {
+      if (typeof part === 'string') return part
+      if (part && typeof part === 'object' && 'text' in part) {
+        return String((part as { text?: unknown }).text ?? '')
+      }
+      return ''
+    }).join('')
+    : String(content ?? '')
+}
+
+function parseJudgment(data: unknown, provider: string, model: string, hasScreenshot: boolean): AuditJudgment {
+  let parsed: {
+    score?: unknown
+    confidence?: unknown
+    reason?: unknown
+    weaknesses?: unknown
+    structural?: unknown
+    cosmetic?: unknown
+  } = {}
+  try {
+    const cleaned = messageText(data)
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/i, '')
+      .replace(/\s*```\s*$/i, '')
+      .trim()
+    parsed = JSON.parse(cleaned || '{}')
+  } catch { /* validated by callRoutedChat; safe defaults below */ }
+
+  const clean = (list: unknown): string[] =>
+    Array.isArray(list)
+      ? list.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).slice(0, 5)
+      : []
+  const structural = clean(parsed.structural)
+  const explicitCosmetic = clean(parsed.cosmetic)
+  const cosmetic = explicitCosmetic.length || structural.length
+    ? explicitCosmetic
+    : clean(parsed.weaknesses)
+  const score = guardedAuditScore(parsed.score, {
+    hasScreenshot,
+    hasStructuralIssues: structural.length > 0,
+  })
+  const rawConfidence = String(parsed.confidence ?? '').toLowerCase()
+  const confidence: AuditJudgment['confidence'] = !hasScreenshot
+    ? 'low'
+    : rawConfidence === 'high' || rawConfidence === 'low'
+      ? rawConfidence
+      : 'medium'
+
+  return {
+    score,
+    confidence,
+    reason: String(parsed.reason ?? '').slice(0, 500),
+    structural,
+    cosmetic,
+    provider,
+    model,
+  }
+}
+
+function auditUserContent(
+  url: string,
   companyName: string,
-  fcKey: string,
-  language: 'sv' | 'en' = 'sv',
-  supabase?: any,
-): Promise<AuditResult> {
-  const url = normaliseUrl(rawUrl)
-  const scraped = await scrapeForAudit(url, fcKey)
-  const hasText = scraped.markdown.replace(/\s+/g, ' ').trim().length > 40
-
-  if (!scraped.screenshot && !hasText) {
-    // Nothing readable at all. If Firecrawl was blocked we must NOT pretend we
-    // saw a bad site — flag it as uncertain instead of scoring it a 1.
-    const noSiteIssues = scraped.blocked
-      ? ['Kunde inte läsas automatiskt — kontrollera manuellt.']
-      : ['Ingen läsbar hemsida idag.']
-    return {
-      score: scraped.blocked ? 5 : 1,
-      reason: scraped.blocked
-        ? 'Sajten kunde inte läsas automatiskt (blockerad eller timeout) — betyget är en platshållare, kräver manuell koll.'
-        : 'Sajten returnerar tomt innehåll — parkerad domän eller trasig sida.',
-      weaknesses: noSiteIssues,
-      structural: noSiteIssues,
-      cosmetic: [],
-      unreadable: true,
-      uncertain: scraped.blocked,
-      url,
-      title: '',
-      markdown: '',
-      screenshot: null,
-    }
-  }
-
-
-  const userContent: unknown[] = [
-    {
-      type: 'text',
-      text: [
-        `URL: ${url}`,
-        `Företag: ${companyName}`,
-        `Titel: ${scraped.title}`,
-        `Metabeskrivning: ${scraped.description}`,
-        scraped.screenshot
-          ? 'Skärmbild av startsidan bifogas — den är ditt viktigaste underlag.'
-          : 'Ingen skärmbild tillgänglig — döm försiktigt på texten och lägg dig runt 5 om inget tydligt talar emot.',
-        '',
-        'Textinnehåll (utdrag):',
-        scraped.markdown.slice(0, 4000) || '(inget textutdrag)',
-      ].join('\n'),
-    },
-  ]
+  scraped: ScrapeResult,
+): unknown[] {
+  const content: unknown[] = [{
+    type: 'text',
+    text: [
+      `URL: ${url}`,
+      `Företag: ${companyName}`,
+      `Titel: ${scraped.title}`,
+      `Metabeskrivning: ${scraped.description}`,
+      scraped.screenshot
+        ? 'Skärmbild av startsidan bifogas — den är ditt viktigaste underlag.'
+        : 'Ingen skärmbild tillgänglig — modernitet kan inte bedömas säkert.',
+      '',
+      'Textinnehåll (utdrag):',
+      scraped.markdown.slice(0, 4000) || '(inget textutdrag)',
+    ].join('\n'),
+  }]
   if (scraped.screenshot) {
-    userContent.push({ type: 'image_url', image_url: { url: scraped.screenshot } })
+    content.push({ type: 'image_url', image_url: { url: scraped.screenshot } })
   }
+  return content
+}
 
+async function scoreAudit(
+  supabase: SupabaseClient,
+  userContent: unknown[],
+  language: 'sv' | 'en',
+  options: { secondOpinion?: boolean } = {},
+): Promise<AuditJudgment> {
   const outputLanguageRule = language === 'en'
-    ? 'Return reason, structural and cosmetic text in natural English. Keep the JSON keys unchanged.'
+    ? 'Return reason, structural and cosmetic in natural English. Keep the JSON keys unchanged.'
     : 'Skriv reason, structural och cosmetic på naturlig svenska. Behåll JSON-nycklarna oförändrade.'
-
-  if (!supabase) throw new Error('AI audit requires a Supabase client for provider routing')
+  const independentRule = options.secondOpinion
+    ? '\nThis is an independent second opinion. Judge the supplied evidence yourself; do not assume another reviewer was correct.'
+    : ''
   const routed = await callRoutedChat({
     supabase,
     nvidiaModel: 'qwen/qwen3.5-122b-a10b',
-    openrouterModel: 'google/gemini-2.5-flash',
-    title: 'Botlio Site Audit',
+    openrouterModel: options.secondOpinion ? 'openai/gpt-4.1-mini' : 'google/gemini-2.5-flash',
+    preferredProvider: options.secondOpinion ? 'openrouter' : undefined,
+    title: options.secondOpinion ? 'Botlio Site Audit Second Opinion' : 'Botlio Site Audit',
     timeoutMs: 60_000,
     requireJsonObject: true,
     body: {
@@ -281,47 +275,121 @@ export async function auditWebsite(
       seed: 42,
       max_tokens: 1200,
       messages: [
-        { role: 'system', content: `${SYSTEM_PROMPT}\n\n${outputLanguageRule}` },
+        { role: 'system', content: `${SYSTEM_PROMPT}\n\n${outputLanguageRule}${independentRule}` },
         { role: 'user', content: userContent },
       ],
       response_format: { type: 'json_object' },
     },
   })
-  const aiData = routed.data
+  const hasScreenshot = userContent.some((part: unknown) =>
+    Boolean(part && typeof part === 'object' && 'type' in part && (part as { type?: unknown }).type === 'image_url')
+  )
+  return parseJudgment(routed.data, routed.provider, routed.model, hasScreenshot)
+}
 
-  let parsed: { score?: number; reason?: string; weaknesses?: string[]; structural?: string[]; cosmetic?: string[] } = {}
-  try { parsed = JSON.parse(aiData.choices?.[0]?.message?.content ?? '{}') } catch (_) { /* keep default */ }
 
-  const clean = (list: unknown): string[] =>
-    Array.isArray(list) ? list.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).slice(0, 5) : []
+/** Score a scraped site. Returns a fair, screenshot-first verdict. */
+export async function auditWebsite(
+  rawUrl: string,
+  companyName: string,
+  language: 'sv' | 'en',
+  supabase: SupabaseClient,
+  scrapeProvider: ScrapeProvider,
+): Promise<AuditResult> {
+  const url = normaliseUrl(rawUrl)
+  const scraped = await scrapeForAudit(url, scrapeProvider)
+  const hasText = scraped.markdown.replace(/\s+/g, ' ').trim().length > 40
 
-  const structural = clean(parsed.structural)
-  // Older/looser responses may still return a flat "weaknesses" list. Without a
-  // split we cannot tell nits from real deficiencies, so treat them as cosmetic
-  // — the safe side, since cosmetic alone never drags a lead into a build.
-  const cosmetic = clean(parsed.cosmetic).length || structural.length
-    ? clean(parsed.cosmetic)
-    : clean(parsed.weaknesses)
+  if (!scraped.screenshot && !hasText) {
+    // The provider returned a successful but empty response. This remains a
+    // human-review result; callers never auto-build or auto-park from it.
+    const noSiteIssues = scraped.blocked
+      ? [language === 'en' ? 'Could not be read automatically — check manually.' : 'Kunde inte läsas automatiskt — kontrollera manuellt.']
+      : [language === 'en' ? 'No readable website content was returned.' : 'Ingen läsbar hemsida returnerades.']
+    return {
+      score: scraped.blocked ? 5 : 1,
+      reason: language === 'en'
+        ? 'The site returned no reliable visual or text evidence and requires manual review.'
+        : 'Sajten gav inget tillförlitligt visuellt eller textbaserat underlag och kräver manuell kontroll.',
+      weaknesses: noSiteIssues,
+      structural: noSiteIssues,
+      cosmetic: [],
+      unreadable: true,
+      uncertain: true,
+      url,
+      title: '',
+      markdown: '',
+      screenshot: null,
+      confidence: 'low',
+      secondOpinionUsed: false,
+      firstScore: scraped.blocked ? 5 : 1,
+      secondScore: null,
+      scoreDisagreement: null,
+      providerUsed: scraped.providerUsed,
+      modelUsed: 'none',
+      secondProviderUsed: null,
+      secondModelUsed: null,
+      secondOpinionError: null,
+    }
+  }
 
-  // Without a screenshot the model has no reliable design signal. Keep the
-  // result in the manual-review band. Cosmetic issues alone also cannot make a
-  // functioning site look like a structural rebuild case.
-  const score = guardedAuditScore(parsed.score, {
-    hasScreenshot: Boolean(scraped.screenshot),
-    hasStructuralIssues: structural.length > 0,
-  })
+  const userContent = auditUserContent(url, companyName, scraped)
+  const first = await scoreAudit(supabase, userContent, language)
+
+  // A second model sees the same visual evidence only when the first verdict
+  // is genuinely uncertain. Clear extremes stay one-call audits.
+  const needsSecondOpinion = shouldRequestSecondOpinion(
+    first.score,
+    first.confidence,
+    Boolean(scraped.screenshot),
+  )
+  let second: AuditJudgment | null = null
+  let secondOpinionError: string | null = null
+  if (needsSecondOpinion) {
+    try {
+      second = await scoreAudit(supabase, userContent, language, { secondOpinion: true })
+    } catch (error) {
+      // The first visual verdict is still useful. A second-opinion outage must
+      // not stall the entire audit queue; mark the result low-confidence so it
+      // stays visibly uncertain for the operator.
+      secondOpinionError = (error instanceof Error ? error.message : String(error)).slice(0, 400)
+      console.warn(`audit second opinion unavailable for ${url}: ${secondOpinionError}`)
+    }
+  }
+  const disagreement = second ? Math.abs(first.score - second.score) : null
+
+  // The independent OpenRouter judge is the tie-breaker in the manual-review
+  // band. We still retain both scores so later calibration can measure it.
+  const chosen = second ?? first
+  const confidence: AuditResult['confidence'] = !scraped.screenshot
+    ? 'low'
+    : Boolean(secondOpinionError) || (disagreement != null && disagreement >= 2)
+      ? 'low'
+      : second
+        ? (first.confidence === 'high' && second.confidence === 'high' ? 'high' : 'medium')
+        : first.confidence
 
   return {
-    score,
-    reason: (parsed.reason ?? '').slice(0, 500),
-    weaknesses: [...structural, ...cosmetic].slice(0, 6),
-    structural,
-    cosmetic,
+    score: chosen.score,
+    reason: chosen.reason,
+    weaknesses: [...chosen.structural, ...chosen.cosmetic].slice(0, 6),
+    structural: chosen.structural,
+    cosmetic: chosen.cosmetic,
     unreadable: false,
-    uncertain: !scraped.screenshot,
+    uncertain: !scraped.screenshot || confidence === 'low',
     url,
     title: scraped.title,
     markdown: scraped.markdown,
     screenshot: scraped.screenshot,
+    confidence,
+    secondOpinionUsed: Boolean(second),
+    firstScore: first.score,
+    secondScore: second?.score ?? null,
+    scoreDisagreement: disagreement,
+    providerUsed: scraped.providerUsed,
+    modelUsed: first.model,
+    secondProviderUsed: second?.provider ?? null,
+    secondModelUsed: second?.model ?? null,
+    secondOpinionError,
   }
 }

@@ -17,6 +17,7 @@ type Settings = { state?: "manual" | "auto" | "paused"; buffer_days?: number; le
 type HistoryRow = { id: string; language: Language; city: string; niche_key: string; search_query: string | null; source: "legacy_local" | "server"; source_note: string | null; completed_at: string };
 
 const db = supabase as any;
+const MARKET_PAGE_SIZE = 50;
 
 const stateColour: Record<string, string> = { completed: "bg-emerald-500", failed: "bg-red-600", running: "bg-blue-500", importing: "bg-blue-500", dispatched: "bg-amber-500", queued: "bg-amber-500" };
 
@@ -24,6 +25,8 @@ export default function LeadSourcing() {
   const { user } = useAuth();
   const [language, setLanguage] = useState<"all" | Language>("all");
   const [markets, setMarkets] = useState<Market[]>([]);
+  const [marketTotal, setMarketTotal] = useState(0);
+  const [marketPage, setMarketPage] = useState(0);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [settings, setSettings] = useState<Settings>({ state: "manual", buffer_days: 3 });
   const [history, setHistory] = useState<HistoryRow[]>([]);
@@ -38,8 +41,10 @@ export default function LeadSourcing() {
   const load = useCallback(async () => {
     if (!user) return;
     setLoading(true);
-    const marketQuery = db.from("lead_markets").select("*").eq("user_id", user.id).order("priority").order("city");
-    const [{ data: existing, error: marketError }, { data: settingRow }, { data: historyRows, error: historyError }] = await Promise.all([
+    let marketQuery = db.from("lead_markets").select("*", { count: "exact" }).eq("user_id", user.id).order("priority").order("city");
+    if (language !== "all") marketQuery = marketQuery.eq("language", language);
+    marketQuery = marketQuery.range(marketPage * MARKET_PAGE_SIZE, marketPage * MARKET_PAGE_SIZE + MARKET_PAGE_SIZE - 1);
+    const [{ data: existing, error: marketError, count: marketCount }, { data: settingRow }, { data: historyRows, error: historyError }] = await Promise.all([
       marketQuery,
       db.from("app_settings").select("value").eq("key", "lead_sourcing_state").maybeSingle(),
       db.from("lead_scrape_history").select("*").eq("user_id", user.id).order("completed_at", { ascending: false }).limit(100),
@@ -52,15 +57,16 @@ export default function LeadSourcing() {
     const { data: jobRows, error: jobError } = await db.from("lead_scrape_jobs").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(30);
     if (jobError) toast({ title: "Kunde inte ladda sourcing-jobb", description: jobError.message, variant: "destructive" });
     setMarkets(currentMarkets);
+    setMarketTotal(marketCount ?? 0);
     setJobs((jobRows ?? []) as Job[]);
     setSettings((settingRow?.value ?? { state: "manual", lead_stock_multiplier: 4, stock_tolerance: 5, backlog_multiplier: 2 }) as Settings);
     if (!historyError) setHistory((historyRows ?? []) as HistoryRow[]);
     setLoading(false);
-  }, [user]);
+  }, [user, language, marketPage]);
 
   useEffect(() => { void load(); }, [load]);
 
-  const shownMarkets = useMemo(() => language === "all" ? markets : markets.filter((market) => market.language === language), [language, markets]);
+  const shownMarkets = markets;
   const shownJobs = useMemo(() => language === "all" ? jobs : jobs.filter((job) => job.language === language), [language, jobs]);
 
   async function changeState(next: Settings["state"]) {
@@ -110,7 +116,7 @@ export default function LeadSourcing() {
         <p className="mt-1 text-sm text-muted-foreground">Hämtar endast från marknader du har godkänt. Nya leads auditeras först och väntar sedan på ditt beslut innan en hemsida får byggas.</p>
       </div>
       <div className="flex gap-2">
-        <Select value={language} onValueChange={(value) => setLanguage(value as any)}><SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Alla språk</SelectItem><SelectItem value="sv">Svenska</SelectItem><SelectItem value="en">English</SelectItem></SelectContent></Select>
+        <Select value={language} onValueChange={(value) => { setLanguage(value as any); setMarketPage(0); }}><SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Alla språk</SelectItem><SelectItem value="sv">Svenska</SelectItem><SelectItem value="en">English</SelectItem></SelectContent></Select>
         <Button variant="outline" size="icon" onClick={() => void load()} disabled={loading}><RefreshCw className={loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} /></Button>
       </div>
     </div>
@@ -128,7 +134,7 @@ export default function LeadSourcing() {
       {(["sv", "en"] as Language[]).map((lang) => <Card key={lang} className="p-5"><div className="flex items-center justify-between"><div><p className="font-medium">{lang === "sv" ? "Svenska marknader" : "English markets"}</p><p className="text-sm text-muted-foreground">Kör en liten kontrollerad testhämtning.</p></div><Button onClick={() => void runNow(lang)} disabled={running !== null}>{running === lang ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}Kör nu</Button></div></Card>)}
     </div>
 
-    <Card className="overflow-hidden"><div className="border-b p-5"><h2 className="font-semibold">Godkända marknader</h2></div><div className="divide-y">{shownMarkets.map((market) => <div key={market.id} className="flex flex-wrap items-center justify-between gap-3 p-4"><div><div className="flex items-center gap-2"><span className="font-medium">{market.category} — {market.city}</span><Badge variant="outline">{market.language === "sv" ? "SV" : "EN"}</Badge></div><p className="text-sm text-muted-foreground">{market.search_query} · max {market.max_results} {market.last_scraped_at ? `· senast körd ${new Date(market.last_scraped_at).toLocaleDateString()}` : ""}</p></div><div className="flex items-center gap-2"><span className="text-xs text-muted-foreground">{market.is_enabled ? "Aktiv" : "Täckt / pausad"}</span><Switch checked={market.is_enabled} onCheckedChange={(checked) => void toggleMarket(market, checked)} /></div></div>)}{!loading && shownMarkets.length === 0 && <p className="p-5 text-sm text-muted-foreground">Inga marknader för detta språk.</p>}</div></Card>
+    <Card className="overflow-hidden"><div className="border-b p-5"><h2 className="font-semibold">Godkända marknader</h2><p className="mt-1 text-sm text-muted-foreground">Visar {marketTotal === 0 ? 0 : marketPage * MARKET_PAGE_SIZE + 1}–{Math.min((marketPage + 1) * MARKET_PAGE_SIZE, marketTotal)} av {marketTotal} marknader.</p></div><div className="divide-y">{shownMarkets.map((market) => <div key={market.id} className="flex flex-wrap items-center justify-between gap-3 p-4"><div><div className="flex items-center gap-2"><span className="font-medium">{market.category} — {market.city}</span><Badge variant="outline">{market.language === "sv" ? "SV" : "EN"}</Badge></div><p className="text-sm text-muted-foreground">{market.search_query} · max {market.max_results} {market.last_scraped_at ? `· senast körd ${new Date(market.last_scraped_at).toLocaleDateString()}` : ""}</p></div><div className="flex items-center gap-2"><span className="text-xs text-muted-foreground">{market.is_enabled ? "Aktiv" : "Täckt / pausad"}</span><Switch checked={market.is_enabled} onCheckedChange={(checked) => void toggleMarket(market, checked)} /></div></div>)}{!loading && shownMarkets.length === 0 && <p className="p-5 text-sm text-muted-foreground">Inga marknader för detta språk.</p>}</div>{marketTotal > MARKET_PAGE_SIZE && <div className="flex items-center justify-between border-t p-4"><Button variant="outline" size="sm" onClick={() => setMarketPage((page) => Math.max(0, page - 1))} disabled={marketPage === 0}>Föregående</Button><span className="text-sm text-muted-foreground">Sida {marketPage + 1} av {Math.ceil(marketTotal / MARKET_PAGE_SIZE)}</span><Button variant="outline" size="sm" onClick={() => setMarketPage((page) => page + 1)} disabled={(marketPage + 1) * MARKET_PAGE_SIZE >= marketTotal}>Nästa</Button></div>}</Card>
 
     <Card className="overflow-hidden"><div className="border-b p-5"><h2 className="font-semibold">Redan täckta sökningar</h2></div><div className="divide-y">{history.filter((item) => language === "all" || item.language === language).slice(0, 30).map((item) => <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 p-4"><div><div className="flex items-center gap-2"><span className="font-medium">{item.city} — {item.niche_key}</span><Badge variant="outline">{item.language.toUpperCase()}</Badge></div><p className="text-sm text-muted-foreground">{item.source === "legacy_local" ? `Lokalt tidigare: ${item.source_note ?? "query-lista"}` : item.search_query ?? "Server-sökning"}</p></div><span className="text-xs text-muted-foreground">{new Date(item.completed_at).toLocaleDateString()}</span></div>)}{!loading && history.filter((item) => language === "all" || item.language === language).length === 0 && <p className="p-5 text-sm text-muted-foreground">Ingen täckningshistorik ännu.</p>}</div></Card>
 
