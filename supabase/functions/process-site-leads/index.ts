@@ -5,8 +5,9 @@
 //      when live, failed when the site pipeline errored).
 //   2. AUDIT — for up to AUDIT_PER_TICK pending_audit leads: scrape with
 //      Firecrawl, score 1-10 with Gemini, extract 2-3 concrete weaknesses.
-//      The score becomes a recommendation, then waits for an operator audit
-//      decision. An audit must never start a website build by itself.
+//      Scores above 7 are automatically parked as site_good_enough; all
+//      other results wait for an operator audit decision. An audit must never
+//      start a website build by itself.
 //   3. GENERATE — enforce daily cap DAILY_GEN_CAP by counting leads that
 //      already moved into generating/awaiting_approval/approved today. If
 //      capacity is left, take exactly GEN_PER_TICK needs_site leads, create a
@@ -604,7 +605,8 @@ async function syncAutoSendLead(
 
 // ---------------------------------------------------------------------------
 // AUDIT — one shared screenshot-first evaluator for every audit entry point.
-// The score remains a recommendation: every result waits for the operator.
+// Scores 8–10 are automatically parked as good enough. Scores 1–7 remain in
+// the operator review queue, so borderline sites are never auto-dismissed.
 // ---------------------------------------------------------------------------
 async function auditOne(
   supabase: ReturnType<typeof createClient>,
@@ -627,7 +629,12 @@ async function auditOne(
       supabase,
       scrapeProvider,
     )
-    const recommendedStatus = result.score >= 7 ? 'site_good_enough' : 'needs_site'
+    // "More than 7" is deliberately strict: 7 stays in manual review while
+    // only clearly strong sites (8–10) are parked automatically.
+    const recommendedStatus = result.score > 7 ? 'site_good_enough' : 'needs_site'
+    const nextStatus = recommendedStatus === 'site_good_enough'
+      ? 'site_good_enough'
+      : 'awaiting_audit_approval'
     // Do not persist large inline screenshot data. Provider-hosted screenshot
     // URLs are useful evidence; base64 payloads would create avoidable DB I/O.
     const screenshotEvidence = result.screenshot?.startsWith('http')
@@ -635,7 +642,7 @@ async function auditOne(
       : null
 
     const { error: updateError } = await supabase.from('site_leads').update({
-      status: 'awaiting_audit_approval',
+      status: nextStatus,
       audit_score: result.score,
       audit_reason: result.reason,
       audit_details: {
@@ -661,6 +668,9 @@ async function auditOne(
           second_opinion_error: result.secondOpinionError,
         },
       },
+      ...(recommendedStatus === 'site_good_enough'
+        ? { triaged_at: new Date().toISOString() }
+        : {}),
     }).eq('id', row.id)
     if (updateError) throw new Error(`save audit: ${updateError.message}`)
     return
