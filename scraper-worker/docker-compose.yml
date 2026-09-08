@@ -17,6 +17,7 @@ services:
     restart: unless-stopped
     depends_on:
       - scraper
+      - lead_runner
     env_file: .env
     ports:
       - "80:80"

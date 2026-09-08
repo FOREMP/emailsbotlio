@@ -174,6 +174,9 @@ async function dispatchWorker(job: any): Promise<{ worker_job_id?: string }> {
       headers: { 'content-type': 'application/json', 'X-Botlio-Timestamp': timestamp, 'X-Botlio-Signature': signature }, body,
     })
     const payload = await response.json().catch(() => ({}))
+    if (response.status === 404) {
+      throw new Error('Lead worker endpoint is unavailable (404). The Lightsail server still needs the lead_runner service and updated Caddy route installed and restarted.')
+    }
     if (!response.ok || !payload?.ok) throw new Error(String(payload?.error ?? `lead worker returned ${response.status}`))
     return payload
   } finally { clearTimeout(timeout) }
