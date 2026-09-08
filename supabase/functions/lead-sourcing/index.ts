@@ -81,10 +81,12 @@ Deno.serve(async (req) => {
         .select('id, language, search_query, state, created_at').eq('user_id', userId)
         .in('state', ['queued', 'dispatched', 'running', 'importing']).order('created_at').limit(1)
       if (activeJobsError) throw activeJobsError
-      const candidate = activeJobs?.length ? null : await findCandidate(supabase, userId, {
-        action: 'plan', requestedMarketId: null, language: null,
-      }, coverage)
-      return json({ ok: true, coverage, active_job: activeJobs?.[0] ?? null, next_market: candidate ?? null })
+      const nextMarkets = activeJobs?.length ? {} : Object.fromEntries(await Promise.all(
+        (['sv', 'en'] as Language[]).map(async (language) => [language, await findCandidate(supabase, userId, {
+          action: 'plan', requestedMarketId: null, language,
+        }, coverage)]),
+      ))
+      return json({ ok: true, coverage, active_job: activeJobs?.[0] ?? null, next_markets: nextMarkets })
     }
     const action = body?.action === 'run_now' ? 'run_now' : 'plan'
     const requestedMarketId = typeof body?.market_id === 'string' ? body.market_id : null
@@ -210,14 +212,6 @@ async function getCoverage(supabase: any, userId: string, language: Language, se
 }
 
 async function findCandidate(supabase: any, userId: string, request: { action: 'plan' | 'run_now'; requestedMarketId: string | null; language: Language | null }, coverage: any[]) {
-  // The recommended catalogue intentionally contains many small, specialised
-  // queries. Inspect the whole owned catalogue; a 50-row cap would leave the
-  // planner permanently stuck on completed markets near the top of the list.
-  let query = supabase.from('lead_markets').select('*').eq('user_id', userId).eq('is_enabled', true).order('priority', { ascending: true }).order('last_scraped_at', { ascending: true, nullsFirst: true }).limit(2_000)
-  if (request.requestedMarketId) query = query.eq('id', request.requestedMarketId)
-  if (request.language) query = query.eq('language', request.language)
-  const { data: markets, error } = await query
-  if (error) throw error
   const { data: history, error: historyError } = await supabase.from('lead_scrape_history')
     .select('language, city_key, niche_key, search_key').eq('user_id', userId)
   if (historyError) throw historyError
@@ -226,26 +220,45 @@ async function findCandidate(supabase: any, userId: string, request: { action: '
   // search key, so restaurant/bistro/bar searches can each run once without
   // repeating the same query forever.
   const completed = new Set((history ?? []).map((row: any) => `${row.language}:${row.city_key}:${row.niche_key}:${row.search_key ?? 'all'}`))
+  const requestedLanguages: Array<Language | null> = request.language
+    ? [request.language]
+    : coverage
+      .filter((item) => item.should_source)
+      // When both countries need stock, work on the relatively emptier lane
+      // first. This prevents a larger English catalogue from starving Sweden.
+      .sort((left, right) => (left.stock / Math.max(1, left.target)) - (right.stock / Math.max(1, right.target)))
+      .map((item) => item.language)
+  const languages = request.requestedMarketId && !request.language ? [null] : requestedLanguages
   const now = Date.now()
-  for (const market of markets ?? []) {
-    const marketCoverage = coverage.find((item) => item.language === market.language)
-    // Manual "run now" is still subject to stock and backlog controls. It is
-    // a request to choose the next safe market, not a way to flood the queue.
-    if (!marketCoverage || !marketCoverage.should_source) continue
-    // Completed coverage is permanent until a future explicit re-run tool is
-    // added. Cooldowns alone are not enough: they would repeat local work.
-    if (market.niche_key) {
-      const base = `${market.language}:${cityKey(market.city)}:${market.niche_key}`
-      const key = String(market.search_key ?? 'all')
-      if (completed.has(`${base}:all`) || completed.has(`${base}:${key}`)) continue
-    }
-    const last = market.last_scraped_at ? Date.parse(market.last_scraped_at) : 0
-    if (last && now - last < Number(market.cooldown_days) * 86_400_000) continue
-    return {
-      ...market,
-      remaining_discovery_capacity: Math.min(
-        Number(marketCoverage.remaining_discovery_capacity) || 0,
-      ),
+
+  for (const language of languages) {
+    // The recommended catalogue intentionally contains many small,
+    // specialised queries. Inspect the whole relevant language catalogue; a
+    // 50-row cap would leave the planner stuck on completed early markets.
+    let query = supabase.from('lead_markets').select('*').eq('user_id', userId).eq('is_enabled', true)
+      .order('priority', { ascending: true }).order('last_scraped_at', { ascending: true, nullsFirst: true }).limit(2_000)
+    if (request.requestedMarketId) query = query.eq('id', request.requestedMarketId)
+    if (language) query = query.eq('language', language)
+    const { data: markets, error } = await query
+    if (error) throw error
+    for (const market of markets ?? []) {
+      const marketCoverage = coverage.find((item) => item.language === market.language)
+      // Manual "run now" is still subject to stock and backlog controls. It is
+      // a request to choose the next safe market, not a way to flood the queue.
+      if (!marketCoverage || !marketCoverage.should_source) continue
+      // Completed coverage is permanent until a future explicit re-run tool is
+      // added. Cooldowns alone are not enough: they would repeat local work.
+      if (market.niche_key) {
+        const base = `${market.language}:${cityKey(market.city)}:${market.niche_key}`
+        const key = String(market.search_key ?? 'all')
+        if (completed.has(`${base}:all`) || completed.has(`${base}:${key}`)) continue
+      }
+      const last = market.last_scraped_at ? Date.parse(market.last_scraped_at) : 0
+      if (last && now - last < Number(market.cooldown_days) * 86_400_000) continue
+      return {
+        ...market,
+        remaining_discovery_capacity: Number(marketCoverage.remaining_discovery_capacity) || 0,
+      }
     }
   }
   return null
