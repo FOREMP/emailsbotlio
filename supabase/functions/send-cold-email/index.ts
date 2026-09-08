@@ -473,6 +473,14 @@ Deno.serve(async (req) => {
     }
 
     await supabase.from('sent_emails').update({ status: 'sent' }).eq('id', messageId)
+    // Lead sourcing counts approved demo leads only until their first email
+    // really leaves the system. Record that transition after a successful API
+    // send; failed/queued attempts must not reduce the available lead stock.
+    if (isFirstTouch && typeof contactFields.site_lead_id === 'string') {
+      await supabase.from('site_leads').update({ last_email_sent_at: new Date().toISOString() })
+        .eq('id', contactFields.site_lead_id)
+        .is('last_email_sent_at', null)
+    }
 
   } catch (err) {
     const detail = err instanceof EmailAPIError ? `${err.status}: ${err.message}` : (err instanceof Error ? err.message : String(err))

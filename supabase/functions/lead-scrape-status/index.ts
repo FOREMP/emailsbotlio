@@ -23,11 +23,36 @@ Deno.serve(async (req) => {
     const { error } = await supabase.from('lead_scrape_jobs').update(patch).eq('id', body.job_id)
     if (error) throw error
     if (body.state === 'completed') {
-      const { data: job } = await supabase.from('lead_scrape_jobs').select('market_id').eq('id', body.job_id).maybeSingle()
-      if (job?.market_id) await supabase.from('lead_markets').update({ last_scraped_at: new Date().toISOString() }).eq('id', job.market_id)
+      const { data: job } = await supabase.from('lead_scrape_jobs')
+        .select('market_id, user_id, language, search_query').eq('id', body.job_id).maybeSingle()
+      if (job?.market_id) {
+        const completedAt = new Date().toISOString()
+        const { data: market } = await supabase.from('lead_markets')
+          .select('city, niche_key').eq('id', job.market_id).maybeSingle()
+        await supabase.from('lead_markets').update({ last_scraped_at: completedAt }).eq('id', job.market_id)
+        if (market?.city && market?.niche_key) {
+          const { error: historyError } = await supabase.from('lead_scrape_history').upsert({
+            user_id: job.user_id,
+            language: job.language,
+            city_key: cityKey(market.city),
+            niche_key: market.niche_key,
+            city: market.city,
+            search_query: job.search_query,
+            source: 'server',
+            market_id: job.market_id,
+            completed_at: completedAt,
+          }, { onConflict: 'user_id,language,city_key,niche_key' })
+          if (historyError) throw historyError
+        }
+      }
     }
     return json({ ok: true })
   } catch (error) { return json({ error: error instanceof Error ? error.message : String(error) }, 500) }
 })
+
+function cityKey(value: unknown): string {
+  return String(value ?? '').trim().toLocaleLowerCase('sv-SE').normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/\s+/g, '-')
+}
 
 function json(value: unknown, status = 200) { return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } }) }

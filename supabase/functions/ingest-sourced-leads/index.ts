@@ -30,6 +30,16 @@ Deno.serve(async (req) => {
         await recordResult(supabase, jobId, lead, 'rejected', 'missing a usable website or email')
         continue
       }
+      // The unique indexes below are the final race-safe barrier. Check the
+      // practical identifiers first as well: older CSV leads may not have a
+      // Google place ID, or may have been imported before domain normalisation
+      // existed. Never create a second outreach candidate for the same inbox.
+      const existing = await findExistingLead(supabase, job.user_id, lead)
+      if (existing) {
+        duplicates++
+        await recordResult(supabase, jobId, lead, 'duplicate', 'matches an existing lead')
+        continue
+      }
       const { data: inserted, error } = await supabase.from('site_leads').insert({
         user_id: job.user_id,
         company_name: lead.companyName,
@@ -70,6 +80,29 @@ Deno.serve(async (req) => {
     return json({ error: error instanceof Error ? error.message : String(error) }, 500)
   }
 })
+
+async function findExistingLead(supabase: any, userId: string, lead: NonNullable<ReturnType<typeof prepareMapsLead>>): Promise<boolean> {
+  const checks: Array<PromiseLike<any>> = []
+  const forUser = () => supabase.from('site_leads').select('id').eq('user_id', userId).limit(1)
+
+  if (lead.placeId) {
+    checks.push(forUser().eq('source_provider', 'google_maps').eq('source_place_id', lead.placeId))
+  }
+  if (lead.domain) {
+    checks.push(forUser().eq('company_name_normalized', lead.normalizedName).eq('domain_normalized', lead.domain))
+  }
+  if (lead.email) {
+    checks.push(forUser().eq('email', lead.email))
+  }
+  if (lead.website) {
+    checks.push(forUser().eq('website', lead.website))
+  }
+
+  const results = await Promise.all(checks)
+  const failure = results.find((result) => result.error)
+  if (failure?.error) throw new Error(`duplicate check failed: ${failure.error.message}`)
+  return results.some((result) => Boolean(result.data?.length))
+}
 
 async function recordResult(supabase: any, jobId: string, lead: ReturnType<typeof prepareMapsLead>, outcome: string, reason: string | null, siteLeadId: string | null = null) {
   if (!lead) return

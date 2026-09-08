@@ -7,18 +7,16 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/hooks/use-toast";
 
 type Language = "sv" | "en";
-type Market = { id: string; language: Language; country_code: string; city: string; category: string; search_query: string; is_enabled: boolean; priority: number; max_results: number; cooldown_days: number; last_scraped_at: string | null };
+type Market = { id: string; language: Language; country_code: string; city: string; category: string; niche_key: string | null; search_query: string; is_enabled: boolean; priority: number; max_results: number; cooldown_days: number; last_scraped_at: string | null };
 type Job = { id: string; language: Language; search_query: string; state: string; max_results: number; discovered_count: number; imported_count: number; duplicate_count: number; rejected_count: number; error_message: string | null; created_at: string };
-type Settings = { state?: "manual" | "auto" | "paused"; buffer_days?: number };
+type Settings = { state?: "manual" | "auto" | "paused"; buffer_days?: number; lead_stock_multiplier?: number; stock_tolerance?: number; backlog_multiplier?: number };
+type HistoryRow = { id: string; language: Language; city: string; niche_key: string; search_query: string | null; source: "legacy_local" | "server"; source_note: string | null; completed_at: string };
 
 const db = supabase as any;
-const starterMarkets = (userId: string): Omit<Market, "id" | "last_scraped_at">[] => [
-  { user_id: userId, language: "sv", country_code: "SE", city: "Stockholm", category: "Hair salon", search_query: "frisör Stockholm Sverige", is_enabled: true, priority: 10, max_results: 75, cooldown_days: 21 },
-  { user_id: userId, language: "en", country_code: "GB", city: "Leeds", category: "Hair salon", search_query: "hair salon Leeds UK", is_enabled: true, priority: 10, max_results: 75, cooldown_days: 21 },
-] as any;
 
 const stateColour: Record<string, string> = { completed: "bg-emerald-500", failed: "bg-red-600", running: "bg-blue-500", importing: "bg-blue-500", dispatched: "bg-amber-500", queued: "bg-amber-500" };
 
@@ -28,34 +26,35 @@ export default function LeadSourcing() {
   const [markets, setMarkets] = useState<Market[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [settings, setSettings] = useState<Settings>({ state: "manual", buffer_days: 3 });
+  const [history, setHistory] = useState<HistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState<Language | null>(null);
   const [cancelling, setCancelling] = useState<string | null>(null);
+  const [matrixLanguage, setMatrixLanguage] = useState<Language>("sv");
+  const [citiesInput, setCitiesInput] = useState("");
+  const [nichesInput, setNichesInput] = useState("Hair salon");
+  const [addingMatrix, setAddingMatrix] = useState(false);
 
   const load = useCallback(async () => {
     if (!user) return;
     setLoading(true);
     const marketQuery = db.from("lead_markets").select("*").eq("user_id", user.id).order("priority").order("city");
-    const [{ data: existing, error: marketError }, { data: settingRow }] = await Promise.all([
+    const [{ data: existing, error: marketError }, { data: settingRow }, { data: historyRows, error: historyError }] = await Promise.all([
       marketQuery,
       db.from("app_settings").select("value").eq("key", "lead_sourcing_state").maybeSingle(),
+      db.from("lead_scrape_history").select("*").eq("user_id", user.id).order("completed_at", { ascending: false }).limit(100),
     ]);
     if (marketError) {
       toast({ title: "Lead sourcing är inte installerat ännu", description: marketError.message, variant: "destructive" });
       setLoading(false); return;
     }
-    let currentMarkets = (existing ?? []) as Market[];
-    // First visit seeds only the two markets explicitly approved for this rollout.
-    if (currentMarkets.length === 0) {
-      const { data, error } = await db.from("lead_markets").insert(starterMarkets(user.id)).select("*");
-      if (error) toast({ title: "Kunde inte lägga till startmarknader", description: error.message, variant: "destructive" });
-      else currentMarkets = (data ?? []) as Market[];
-    }
+    const currentMarkets = (existing ?? []) as Market[];
     const { data: jobRows, error: jobError } = await db.from("lead_scrape_jobs").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(30);
     if (jobError) toast({ title: "Kunde inte ladda sourcing-jobb", description: jobError.message, variant: "destructive" });
     setMarkets(currentMarkets);
     setJobs((jobRows ?? []) as Job[]);
-    setSettings((settingRow?.value ?? { state: "manual", buffer_days: 3 }) as Settings);
+    setSettings((settingRow?.value ?? { state: "manual", lead_stock_multiplier: 4, stock_tolerance: 5, backlog_multiplier: 2 }) as Settings);
+    if (!historyError) setHistory((historyRows ?? []) as HistoryRow[]);
     setLoading(false);
   }, [user]);
 
@@ -76,6 +75,18 @@ export default function LeadSourcing() {
     setRunning(null);
     if (error || !data?.ok) return toast({ title: "Kunde inte köa sökning", description: error?.message ?? data?.error ?? data?.reason, variant: "destructive" });
     toast({ title: data.dispatched ? "Sökning köad" : "Ingen sökning startades", description: data.dispatched ? "Lead-servern hämtar nu företag i bakgrunden." : data.reason });
+    await load();
+  }
+  async function addMatrix() {
+    const cities = citiesInput.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean);
+    const niches = nichesInput.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean);
+    if (!cities.length || !niches.length) return toast({ title: "Lägg till plats och nisch", description: "Skriv minst en plats och en nisch.", variant: "destructive" });
+    setAddingMatrix(true);
+    const { data, error } = await supabase.functions.invoke("lead-sourcing", { body: { action: "add_matrix", language: matrixLanguage, cities, niches } });
+    setAddingMatrix(false);
+    if (error || !data?.ok) return toast({ title: "Kunde inte skapa sökplanen", description: error?.message ?? data?.error, variant: "destructive" });
+    toast({ title: "Sökplan sparad", description: `${data.combinations} kombinationer. ${data.already_covered ?? 0} var redan skrapade och hålls avstängda.` });
+    setCitiesInput("");
     await load();
   }
   async function toggleMarket(market: Market, enabled: boolean) {
@@ -104,13 +115,22 @@ export default function LeadSourcing() {
       </div>
     </div>
 
-    <Card className="p-5"><div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-medium">Automatisk påfyllning</p><p className="text-sm text-muted-foreground">När lagret går under ungefär {settings.buffer_days ?? 3} dagars behov väljs nästa godkända marknad. Starta i manuellt läge tills första testet är godkänt.</p></div><div className="flex items-center gap-3"><Badge variant={settings.state === "auto" ? "default" : "secondary"}>{settings.state === "auto" ? "Automatisk" : settings.state === "paused" ? "Pausad" : "Manuell"}</Badge><Switch checked={settings.state === "auto"} onCheckedChange={(checked) => void changeState(checked ? "auto" : "manual")} /></div></div></Card>
+    <Card className="p-5"><div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-medium">Automatisk påfyllning</p><p className="text-sm text-muted-foreground">Varje språk bygger ett lager på {settings.lead_stock_multiplier ?? 4} × dagens nya email-kapacitet, med ±{settings.stock_tolerance ?? 5} leads. Den pausar också när audit-, bygg- eller godkännandekön blir för stor.</p></div><div className="flex items-center gap-3"><Badge variant={settings.state === "auto" ? "default" : "secondary"}>{settings.state === "auto" ? "Automatisk" : settings.state === "paused" ? "Pausad" : "Manuell"}</Badge><Switch checked={settings.state === "auto"} onCheckedChange={(checked) => void changeState(checked ? "auto" : "manual")} /></div></div></Card>
+
+    <Card className="p-5 space-y-4">
+      <div><h2 className="font-semibold">Sökplan: platser × nischer</h2><p className="mt-1 text-sm text-muted-foreground">Skriv flera platser och nischer på egna rader. Systemet skapar kombinationerna, men kör alltid en enda sökning i taget och hoppar över tidigare täckta marknader.</p></div>
+      <div className="flex flex-wrap gap-2"><Button size="sm" variant={matrixLanguage === "sv" ? "default" : "outline"} onClick={() => setMatrixLanguage("sv")}>Svenska</Button><Button size="sm" variant={matrixLanguage === "en" ? "default" : "outline"} onClick={() => setMatrixLanguage("en")}>English</Button></div>
+      <div className="grid gap-4 md:grid-cols-2"><div><p className="mb-2 text-sm font-medium">Platser</p><Textarea value={citiesInput} onChange={(event) => setCitiesInput(event.target.value)} placeholder={matrixLanguage === "sv" ? "Stockholm\nGöteborg" : "Leeds\nBristol"} rows={5} /></div><div><p className="mb-2 text-sm font-medium">Nischer</p><Textarea value={nichesInput} onChange={(event) => setNichesInput(event.target.value)} placeholder="Hair salon" rows={5} /></div></div>
+      <Button onClick={() => void addMatrix()} disabled={addingMatrix}>{addingMatrix ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MapPinned className="mr-2 h-4 w-4" />}Skapa säker sökplan</Button>
+    </Card>
 
     <div className="grid gap-4 md:grid-cols-2">
       {(["sv", "en"] as Language[]).map((lang) => <Card key={lang} className="p-5"><div className="flex items-center justify-between"><div><p className="font-medium">{lang === "sv" ? "Svenska marknader" : "English markets"}</p><p className="text-sm text-muted-foreground">Kör en liten kontrollerad testhämtning.</p></div><Button onClick={() => void runNow(lang)} disabled={running !== null}>{running === lang ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}Kör nu</Button></div></Card>)}
     </div>
 
-    <Card className="overflow-hidden"><div className="border-b p-5"><h2 className="font-semibold">Godkända marknader</h2></div><div className="divide-y">{shownMarkets.map((market) => <div key={market.id} className="flex flex-wrap items-center justify-between gap-3 p-4"><div><div className="flex items-center gap-2"><span className="font-medium">{market.category} — {market.city}</span><Badge variant="outline">{market.language === "sv" ? "SV" : "EN"}</Badge></div><p className="text-sm text-muted-foreground">{market.search_query} · max {market.max_results} · var {market.cooldown_days}:e dag</p></div><div className="flex items-center gap-2"><span className="text-xs text-muted-foreground">{market.is_enabled ? "Aktiv" : "Pausad"}</span><Switch checked={market.is_enabled} onCheckedChange={(checked) => void toggleMarket(market, checked)} /></div></div>)}{!loading && shownMarkets.length === 0 && <p className="p-5 text-sm text-muted-foreground">Inga marknader för detta språk.</p>}</div></Card>
+    <Card className="overflow-hidden"><div className="border-b p-5"><h2 className="font-semibold">Godkända marknader</h2></div><div className="divide-y">{shownMarkets.map((market) => <div key={market.id} className="flex flex-wrap items-center justify-between gap-3 p-4"><div><div className="flex items-center gap-2"><span className="font-medium">{market.category} — {market.city}</span><Badge variant="outline">{market.language === "sv" ? "SV" : "EN"}</Badge></div><p className="text-sm text-muted-foreground">{market.search_query} · max {market.max_results} {market.last_scraped_at ? `· senast körd ${new Date(market.last_scraped_at).toLocaleDateString()}` : ""}</p></div><div className="flex items-center gap-2"><span className="text-xs text-muted-foreground">{market.is_enabled ? "Aktiv" : "Täckt / pausad"}</span><Switch checked={market.is_enabled} onCheckedChange={(checked) => void toggleMarket(market, checked)} /></div></div>)}{!loading && shownMarkets.length === 0 && <p className="p-5 text-sm text-muted-foreground">Inga marknader för detta språk.</p>}</div></Card>
+
+    <Card className="overflow-hidden"><div className="border-b p-5"><h2 className="font-semibold">Redan täckta sökningar</h2></div><div className="divide-y">{history.filter((item) => language === "all" || item.language === language).slice(0, 30).map((item) => <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 p-4"><div><div className="flex items-center gap-2"><span className="font-medium">{item.city} — {item.niche_key}</span><Badge variant="outline">{item.language.toUpperCase()}</Badge></div><p className="text-sm text-muted-foreground">{item.source === "legacy_local" ? `Lokalt tidigare: ${item.source_note ?? "query-lista"}` : item.search_query ?? "Server-sökning"}</p></div><span className="text-xs text-muted-foreground">{new Date(item.completed_at).toLocaleDateString()}</span></div>)}{!loading && history.filter((item) => language === "all" || item.language === language).length === 0 && <p className="p-5 text-sm text-muted-foreground">Ingen täckningshistorik ännu.</p>}</div></Card>
 
     <Card className="overflow-hidden"><div className="border-b p-5"><h2 className="font-semibold">Senaste sourcing-jobb</h2></div><div className="divide-y">{shownJobs.map((job) => <div key={job.id} className="flex flex-wrap items-center justify-between gap-3 p-4"><div><div className="flex items-center gap-2"><span className="font-medium">{job.search_query}</span><Badge className={stateColour[job.state] ?? "bg-slate-500"}>{job.state}</Badge></div><p className="text-sm text-muted-foreground">Hittade {job.discovered_count} · importerade {job.imported_count} · dubbletter {job.duplicate_count} · avvisade {job.rejected_count}</p>{job.error_message && <p className="mt-1 text-xs text-destructive">{job.error_message}</p>}</div><div className="flex items-center gap-3">{["queued", "dispatched", "running", "importing"].includes(job.state) && <Button variant="outline" size="sm" onClick={() => void cancelJob(job)} disabled={cancelling !== null}>{cancelling === job.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <XCircle className="mr-2 h-4 w-4" />}Avbryt</Button>}<span className="text-xs text-muted-foreground">{new Date(job.created_at).toLocaleString()}</span></div></div>)}{!loading && shownJobs.length === 0 && <p className="p-5 text-sm text-muted-foreground">Inga jobb ännu. Starta ett litet test med “Kör nu”.</p>}</div></Card>
   </div>;

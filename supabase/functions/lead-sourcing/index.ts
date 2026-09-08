@@ -1,15 +1,27 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { signLeadSource } from '../_shared/lead-source-auth.ts'
+import { LEGACY_SCRAPE_COVERAGE } from '../_shared/legacy-scrape-history.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 const MAX_RESULTS_PER_JOB = 150
-const DEFAULT_BUFFER_DAYS = 3
+const LEAD_STOCK_MULTIPLIER = 4
+const STOCK_TOLERANCE = 5
+const BACKLOG_MULTIPLIER = 2
+const MIN_BACKLOG_CAP = 10
 
 type Language = 'sv' | 'en'
-type State = { state?: 'manual' | 'auto' | 'paused'; buffer_days?: number; max_auto_jobs_per_language_per_day?: number }
+type State = {
+  state?: 'manual' | 'auto' | 'paused'
+  // buffer_days is retained only for compatibility with old saved settings.
+  buffer_days?: number
+  max_auto_jobs_per_language_per_day?: number
+  lead_stock_multiplier?: number
+  stock_tolerance?: number
+  backlog_multiplier?: number
+}
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
@@ -50,6 +62,14 @@ Deno.serve(async (req) => {
       if (cancelError) throw cancelError
       return json({ ok: true, cancelled: true, job_id: job.id })
     }
+    if (body?.action === 'add_matrix') {
+      const language = body?.language === 'en' ? 'en' : body?.language === 'sv' ? 'sv' : null
+      if (!language) return json({ error: 'language must be sv or en' }, 400)
+      const cities = Array.isArray(body?.cities) ? body.cities : []
+      const niches = Array.isArray(body?.niches) ? body.niches : []
+      const result = await addMatrix(supabase, userId, language, cities, niches)
+      return json({ ok: true, ...result })
+    }
     const action = body?.action === 'run_now' ? 'run_now' : 'plan'
     const requestedMarketId = typeof body?.market_id === 'string' ? body.market_id : null
     const language = body?.language === 'en' ? 'en' : body?.language === 'sv' ? 'sv' : null
@@ -62,32 +82,27 @@ Deno.serve(async (req) => {
 })
 
 async function planAndDispatch(supabase: any, userId: string, request: { action: 'plan' | 'run_now'; requestedMarketId: string | null; language: Language | null }) {
+  await ensureLegacyHistory(supabase, userId)
   const { data: settingsRow } = await supabase.from('app_settings').select('value').eq('key', 'lead_sourcing_state').maybeSingle()
   const settings = ((settingsRow?.value ?? {}) as State)
   const mode = settings.state === 'auto' || settings.state === 'paused' ? settings.state : 'manual'
   if (request.action === 'plan' && mode !== 'auto') return { state: mode, dispatched: false, reason: 'automatic sourcing is not enabled' }
   if (mode === 'paused') return { state: mode, dispatched: false, reason: 'lead sourcing is paused' }
 
-  if (request.action === 'plan') {
-    const maxPerLanguage = Math.max(1, Number(settings.max_auto_jobs_per_language_per_day) || 1)
-    const since = new Date(Date.now() - 30 * 60 * 60_000).toISOString()
-    const { data: recentJobs } = await supabase.from('lead_scrape_jobs').select('language, created_at, state')
-      .eq('user_id', userId).gte('created_at', since)
-    const today = stockholmDateKey(new Date())
-    const counts = new Map<Language, number>()
-    for (const job of recentJobs ?? []) {
-      if (!['queued', 'dispatched', 'running', 'importing', 'completed'].includes(String(job.state))) continue
-      if (job.language === 'sv' || job.language === 'en') {
-        if (stockholmDateKey(new Date(job.created_at)) === today) counts.set(job.language, (counts.get(job.language) ?? 0) + 1)
-      }
-    }
-    if ([...counts.values()].every((count) => count >= maxPerLanguage)) return { state: mode, dispatched: false, reason: 'daily automatic sourcing limit reached' }
-  }
-
   const languages: Language[] = request.language ? [request.language] : ['sv', 'en']
   const coverage = await Promise.all(languages.map((language) => getCoverage(supabase, userId, language, settings)))
+  // There is one Maps worker and one deliberate source pipeline. A second
+  // request waits for the first job to import, so stock is recalculated from
+  // real lead counts before another city × niche is chosen.
+  const { data: activeJobs, error: activeJobsError } = await supabase.from('lead_scrape_jobs').select('id, search_query')
+    .eq('user_id', userId).in('state', ['queued', 'dispatched', 'running', 'importing']).limit(1)
+  if (activeJobsError) throw activeJobsError
+  if (activeJobs?.length) return { state: mode, dispatched: false, coverage, reason: `sourcing already in progress: ${activeJobs[0].search_query}` }
   const candidate = await findCandidate(supabase, userId, request, coverage)
-  if (!candidate) return { state: mode, dispatched: false, coverage, reason: 'no eligible market needs a run' }
+  if (!candidate) return {
+    state: mode, dispatched: false, coverage,
+    reason: coverage.map((item: any) => `${item.language}: ${item.reason}`).join(' · ') || 'no eligible market needs a run',
+  }
 
   const { data: active } = await supabase.from('lead_scrape_jobs')
     .select('id').eq('market_id', candidate.id).in('state', ['queued', 'dispatched', 'running', 'importing']).limit(1)
@@ -98,7 +113,10 @@ async function planAndDispatch(supabase: any, userId: string, request: { action:
     market_id: candidate.id,
     language: candidate.language,
     search_query: candidate.search_query,
-    max_results: Math.min(MAX_RESULTS_PER_JOB, Math.max(1, Number(candidate.max_results) || 75)),
+    // The worker never needs to fetch a full market when a small final batch
+    // reaches the stock target. The +tolerance leaves room for one normal
+    // result batch without allowing repeated oversupply.
+    max_results: Math.min(MAX_RESULTS_PER_JOB, Math.max(1, Number(candidate.remaining_discovery_capacity) || Number(candidate.max_results) || 75)),
     state: 'queued',
   }
   const { data: job, error: createError } = await supabase.from('lead_scrape_jobs').insert(jobRow).select('*').single()
@@ -117,20 +135,58 @@ async function planAndDispatch(supabase: any, userId: string, request: { action:
   }
 }
 
-function stockholmDateKey(value: Date): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Stockholm', year: 'numeric', month: '2-digit', day: '2-digit' }).format(value)
-}
-
 async function getCoverage(supabase: any, userId: string, language: Language, settings: State) {
   const { data: senders } = await supabase.from('senders').select('daily_limit, from_email').eq('is_active', true)
   const domains = language === 'en' ? ['foremp.eu', 'foremp.one'] : ['foremp.email']
   const dailyCapacity = (senders ?? []).filter((sender: any) => domains.some((domain) => String(sender.from_email ?? '').toLowerCase().endsWith(`@${domain}`)))
     .reduce((total: number, sender: any) => total + Math.max(0, Number(sender.daily_limit) || 0), 0)
-  const target = Math.max(1, dailyCapacity || 10) * Math.max(1, Number(settings.buffer_days) || DEFAULT_BUFFER_DAYS)
-  const { count } = await supabase.from('site_leads').select('id', { count: 'exact', head: true })
-    .eq('user_id', userId).eq('language', language)
-    .in('status', ['pending_audit', 'auditing', 'needs_site', 'generating', 'awaiting_approval'])
-  return { language, available: count ?? 0, daily_capacity: dailyCapacity, target, deficit: Math.max(0, target - (count ?? 0)) }
+  const stockMultiplier = Math.max(1, Math.min(10, Number(settings.lead_stock_multiplier) || LEAD_STOCK_MULTIPLIER))
+  const tolerance = Math.max(0, Math.min(20, Number(settings.stock_tolerance) || STOCK_TOLERANCE))
+  const backlogMultiplier = Math.max(1, Math.min(6, Number(settings.backlog_multiplier) || BACKLOG_MULTIPLIER))
+  const [
+    { count: pipelineCount },
+    { count: unsentApprovedCount },
+    { count: auditBacklog },
+    { count: reviewBacklog },
+    { count: buildBacklog },
+  ] = await Promise.all([
+    // These statuses all represent leads which can still become an outbound
+    // first email. They are the usable stock, not merely raw imported rows.
+    supabase.from('site_leads').select('id', { count: 'exact', head: true })
+      .eq('user_id', userId).eq('language', language)
+      .in('status', ['pending_audit', 'auditing', 'awaiting_audit_approval', 'needs_site', 'generating', 'awaiting_approval']),
+    supabase.from('site_leads').select('id', { count: 'exact', head: true })
+      .eq('user_id', userId).eq('language', language)
+      .in('status', ['approved', 'auto_approved']).is('last_email_sent_at', null),
+    supabase.from('site_leads').select('id', { count: 'exact', head: true })
+      .eq('user_id', userId).eq('language', language).in('status', ['pending_audit', 'auditing']),
+    supabase.from('site_leads').select('id', { count: 'exact', head: true })
+      .eq('user_id', userId).eq('language', language).in('status', ['awaiting_audit_approval', 'awaiting_approval', 'needs_triage']),
+    supabase.from('site_leads').select('id', { count: 'exact', head: true })
+      .eq('user_id', userId).eq('language', language).in('status', ['needs_site', 'generating']),
+  ])
+  const daily = Math.max(1, dailyCapacity || 10)
+  const target = daily * stockMultiplier
+  const stock = (pipelineCount ?? 0) + (unsentApprovedCount ?? 0)
+  const backlogCap = Math.max(MIN_BACKLOG_CAP, daily * backlogMultiplier)
+  const upperStockLimit = target + tolerance
+  const remainingDiscoveryCapacity = Math.max(0, upperStockLimit - stock)
+  let reason = 'stock target reached'
+  if ((auditBacklog ?? 0) >= backlogCap) reason = `audit backlog is ${auditBacklog}/${backlogCap}`
+  else if ((reviewBacklog ?? 0) >= backlogCap) reason = `approval backlog is ${reviewBacklog}/${backlogCap}`
+  else if ((buildBacklog ?? 0) >= backlogCap) reason = `build backlog is ${buildBacklog}/${backlogCap}`
+  else if (stock < target - tolerance) reason = 'needs sourcing'
+  const shouldSource = stock < target - tolerance
+    && (auditBacklog ?? 0) < backlogCap
+    && (reviewBacklog ?? 0) < backlogCap
+    && (buildBacklog ?? 0) < backlogCap
+    && remainingDiscoveryCapacity > 0
+  return {
+    language, daily_capacity: dailyCapacity, stock, target, tolerance,
+    upper_stock_limit: upperStockLimit, remaining_discovery_capacity: remainingDiscoveryCapacity,
+    audit_backlog: auditBacklog ?? 0, review_backlog: reviewBacklog ?? 0,
+    build_backlog: buildBacklog ?? 0, backlog_cap: backlogCap, should_source: shouldSource, reason,
+  }
 }
 
 async function findCandidate(supabase: any, userId: string, request: { action: 'plan' | 'run_now'; requestedMarketId: string | null; language: Language | null }, coverage: any[]) {
@@ -139,29 +195,124 @@ async function findCandidate(supabase: any, userId: string, request: { action: '
   if (request.language) query = query.eq('language', request.language)
   const { data: markets, error } = await query
   if (error) throw error
+  const { data: history, error: historyError } = await supabase.from('lead_scrape_history')
+    .select('language, city_key, niche_key').eq('user_id', userId)
+  if (historyError) throw historyError
+  const completed = new Set((history ?? []).map((row: any) => `${row.language}:${row.city_key}:${row.niche_key}`))
   const now = Date.now()
   for (const market of markets ?? []) {
     const marketCoverage = coverage.find((item) => item.language === market.language)
-    if (request.action === 'plan' && (!marketCoverage || marketCoverage.deficit <= 0)) continue
-    if (request.action === 'plan' && await automaticLimitReached(supabase, userId, market.language)) continue
+    // Manual "run now" is still subject to stock and backlog controls. It is
+    // a request to choose the next safe market, not a way to flood the queue.
+    if (!marketCoverage || !marketCoverage.should_source) continue
+    // Completed coverage is permanent until a future explicit re-run tool is
+    // added. Cooldowns alone are not enough: they would repeat local work.
+    if (market.niche_key && completed.has(`${market.language}:${cityKey(market.city)}:${market.niche_key}`)) continue
     const last = market.last_scraped_at ? Date.parse(market.last_scraped_at) : 0
     if (last && now - last < Number(market.cooldown_days) * 86_400_000) continue
-    return market
+    return {
+      ...market,
+      remaining_discovery_capacity: Math.min(
+        Number(market.max_results) || 75,
+        Number(marketCoverage.remaining_discovery_capacity) || 0,
+      ),
+    }
   }
   return null
 }
 
-async function automaticLimitReached(supabase: any, userId: string, language: Language): Promise<boolean> {
-  const { data: settingsRow } = await supabase.from('app_settings').select('value').eq('key', 'lead_sourcing_state').maybeSingle()
-  const settings = (settingsRow?.value ?? {}) as State
-  const maxPerLanguage = Math.max(1, Number(settings.max_auto_jobs_per_language_per_day) || 1)
-  const { data: rows } = await supabase.from('lead_scrape_jobs').select('created_at, state')
-    .eq('user_id', userId).eq('language', language).gte('created_at', new Date(Date.now() - 30 * 60 * 60_000).toISOString())
-  const today = stockholmDateKey(new Date())
-  return (rows ?? []).filter((row: any) =>
-    ['queued', 'dispatched', 'running', 'importing', 'completed'].includes(String(row.state)) &&
-    stockholmDateKey(new Date(row.created_at)) === today,
-  ).length >= maxPerLanguage
+async function ensureLegacyHistory(supabase: any, userId: string) {
+  const rows = LEGACY_SCRAPE_COVERAGE.map((item) => ({
+    user_id: userId,
+    language: item.language,
+    city_key: cityKey(item.city),
+    niche_key: item.nicheKey,
+    city: item.city,
+    source: 'legacy_local',
+    source_note: item.sourceFile,
+  }))
+  if (!rows.length) return
+  const { error } = await supabase.from('lead_scrape_history').upsert(rows, {
+    onConflict: 'user_id,language,city_key,niche_key',
+    ignoreDuplicates: true,
+  })
+  if (error) throw error
+}
+
+function cityKey(value: unknown): string {
+  return String(value ?? '').trim().toLocaleLowerCase('sv-SE').normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/\s+/g, '-')
+}
+
+function canonicalNicheKey(value: unknown): string {
+  const text = String(value ?? '').trim().toLocaleLowerCase('sv-SE')
+  if (/(hair|frisör|frisor|salong|barber)/.test(text)) return 'hair_salon'
+  if (/(electric|elektr|elfirma|elinstall)/.test(text)) return 'electrician'
+  if (/(plumb|rörmok|vvs)/.test(text)) return 'plumber'
+  if (/(roof|taklägg|takfirma)/.test(text)) return 'roofer'
+  if (/(paint|målare|malare)/.test(text)) return 'painter'
+  if (/(auto|garage|mekanik|bilverk)/.test(text)) return 'auto_workshop'
+  return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 48) || 'other'
+}
+
+function searchTerm(language: Language, nicheKey: string, supplied: string): string {
+  const defaults: Record<string, { sv: string; en: string }> = {
+    hair_salon: { sv: 'frisör', en: 'hair salon' },
+    electrician: { sv: 'elektriker', en: 'electrician' },
+    plumber: { sv: 'rörmokare', en: 'plumber' },
+    roofer: { sv: 'takläggare', en: 'roofer' },
+    painter: { sv: 'målare', en: 'painter' },
+    auto_workshop: { sv: 'bilverkstad', en: 'auto repair shop' },
+  }
+  return defaults[nicheKey]?.[language] ?? supplied
+}
+
+async function addMatrix(supabase: any, userId: string, language: Language, rawCities: unknown[], rawNiches: unknown[]) {
+  const cities = [...new Set(rawCities.map((value) => String(value ?? '').trim()).filter((value) => value.length >= 2 && value.length <= 80))].slice(0, 30)
+  const niches = [...new Set(rawNiches.map((value) => String(value ?? '').trim()).filter((value) => value.length >= 2 && value.length <= 80))].slice(0, 12)
+  if (!cities.length || !niches.length) throw new Error('add at least one place and one niche')
+  if (cities.length * niches.length > 100) throw new Error('a maximum of 100 place × niche combinations can be added at once')
+  await ensureLegacyHistory(supabase, userId)
+  const { data: history, error: historyError } = await supabase.from('lead_scrape_history')
+    .select('city_key, niche_key').eq('user_id', userId).eq('language', language)
+  if (historyError) throw historyError
+  const completed = new Set((history ?? []).map((row: any) => `${row.city_key}:${row.niche_key}`))
+  const countryCode = language === 'sv' ? 'SE' : 'GB'
+  const countryName = language === 'sv' ? 'Sverige' : 'UK'
+  const rows = cities.flatMap((city) => niches.map((niche) => {
+    const nicheKey = canonicalNicheKey(niche)
+    const isCovered = completed.has(`${cityKey(city)}:${nicheKey}`)
+    return {
+      user_id: userId, language, country_code: countryCode, city,
+      category: niche, niche_key: nicheKey,
+      search_query: `${searchTerm(language, nicheKey, niche)} ${city} ${countryName}`,
+      is_enabled: !isCovered, priority: 100, max_results: 75, cooldown_days: 90,
+    }
+  }))
+  let added = 0
+  for (const row of rows) {
+    const { data: existing, error: existingError } = await supabase.from('lead_markets').select('id')
+      .eq('user_id', userId).eq('language', language).eq('country_code', countryCode)
+      .eq('city', row.city).eq('niche_key', row.niche_key).limit(1)
+    if (existingError) throw existingError
+    if (!existing?.length) {
+      const { error: insertError } = await supabase.from('lead_markets').insert(row)
+      // The pre-existing unique search-query index remains the race-safe
+      // fallback if two planner requests arrive at once.
+      if (insertError && insertError.code !== '23505') throw insertError
+      if (!insertError) added++
+    }
+  }
+  // Older market rows may have existed before history was introduced. Keep
+  // their visible switch honest as well; findCandidate independently checks
+  // history, so this is a UX safeguard rather than the only protection.
+  for (const row of rows.filter((item) => !item.is_enabled)) {
+    const { error: disableError } = await supabase.from('lead_markets').update({ is_enabled: false })
+      .eq('user_id', userId).eq('language', language).eq('country_code', countryCode)
+      .eq('city', row.city).eq('niche_key', row.niche_key)
+    if (disableError) throw disableError
+  }
+  return { added, already_covered: rows.filter((row) => !row.is_enabled).length, combinations: rows.length }
 }
 
 async function dispatchWorker(job: any): Promise<{ worker_job_id?: string }> {
