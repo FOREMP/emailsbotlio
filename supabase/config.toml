@@ -23,3 +23,7 @@ project_id = "eyliwidiljmzllsmytdh"
   [functions.lead-scrape-status]
     # Authenticated with a timestamped HMAC from the private Lightsail worker.
     verify_jwt = false
+  [functions.lead-sourcing]
+    # Browser requests require a Supabase session; the function separately
+    # verifies ownership before it can create or cancel a job.
+    verify_jwt = true

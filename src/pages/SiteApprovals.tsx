@@ -1,6 +1,5 @@
-// Approve, regenerate or park generated demo sites for site leads.
-// Only leads with status = 'awaiting_approval' block outreach; also shows
-// in-flight, failed and reset rows so regenerations never seem to disappear.
+// Review an audit before a build is allowed, then approve, regenerate or park
+// generated demo sites. Audit and email approval are separate human gates.
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -25,7 +24,7 @@ type LeadRow = {
   status: string;
   audit_score: number | null;
   audit_reason: string | null;
-  audit_details: { weaknesses?: string[] } | null;
+  audit_details: { weaknesses?: string[]; recommended_status?: "needs_site" | "site_good_enough" } | null;
   demo_url: string | null;
   generated_site_id: string | null;
   feedback: string | null;
@@ -34,6 +33,7 @@ type LeadRow = {
 };
 
 const STATUS_BADGE: Record<string, string> = {
+  awaiting_audit_approval: "bg-sky-600",
   awaiting_approval: "bg-indigo-500",
   generating: "bg-purple-500",
   failed: "bg-red-500",
@@ -43,7 +43,7 @@ const STATUS_BADGE: Record<string, string> = {
   needs_site: "bg-amber-500",
 };
 
-const APPROVAL_STATUSES = ["awaiting_approval", "generating", "failed", "approved", "auto_approved", "site_good_enough", "needs_triage", "needs_site"] as const;
+const APPROVAL_STATUSES = ["awaiting_audit_approval", "awaiting_approval", "generating", "failed", "approved", "auto_approved", "site_good_enough", "needs_triage", "needs_site"] as const;
 const APPROVALS_PAGE_SIZE = 20;
 
 function isCanonicalDemoUrl(value?: string | null): boolean {
@@ -66,7 +66,7 @@ export default function SiteApprovals() {
   const [regenMode, setRegenMode] = useState<"keep" | "template" | "freeform">("keep");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [ticking, setTicking] = useState(false);
-  const [filter, setFilter] = useState<string>("awaiting_approval");
+  const [filter, setFilter] = useState<string>("awaiting_audit_approval");
   const [languageFilter, setLanguageFilter] = useState<string>("all");
   const [page, setPage] = useState(1);
   // The lead list is heavy (two iframes per row), so it stays collapsed until
@@ -352,6 +352,29 @@ export default function SiteApprovals() {
     load();
   };
 
+  const approveAuditForBuild = async (row: LeadRow) => {
+    setBusyId(row.id);
+    try {
+      const { error: updateError } = await supabase
+        .from("site_leads")
+        .update({ status: "needs_site" })
+        .eq("id", row.id)
+        .eq("status", "awaiting_audit_approval");
+      if (updateError) throw updateError;
+
+      // Use the ordinary bounded queue: this action cannot bypass daily
+      // generation limits or concurrency protection.
+      const { error: tickError } = await supabase.functions.invoke("process-site-leads", { body: {} });
+      if (tickError) throw tickError;
+      toast({ title: "Godkänd för bygge", description: `${row.company_name} har lagts i byggkön.` });
+      await load();
+    } catch (e) {
+      toast({ title: "Kunde inte köa hemsidan", description: (e as Error).message, variant: "destructive" });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const submitRegen = async () => {
     if (!regen) return;
     if (!feedback.trim()) {
@@ -455,7 +478,7 @@ export default function SiteApprovals() {
         <div>
           <h1 className="text-2xl font-bold">Site Approvals</h1>
           <p className="text-sm text-muted-foreground">
-            Godkänn eller ge feedback på autogenererade demo-sajter innan de går ut i email.
+            Granska audit först, sedan godkänn eller ge feedback på demo-sajter innan de går ut i email.
           </p>
         </div>
         <Button variant="outline" onClick={runTick} disabled={ticking} className="gap-2">
@@ -466,6 +489,7 @@ export default function SiteApprovals() {
 
       <div className="flex flex-wrap gap-2">
         {[
+          { key: "awaiting_audit_approval", label: "Audit att ta ställning" },
           { key: "awaiting_approval", label: "Väntar godkännande" },
           { key: "approved", label: "Godkända" },
           { key: "site_good_enough", label: "Bra nog / auto-parkerade" },
@@ -567,6 +591,16 @@ export default function SiteApprovals() {
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
+                {row.status === "awaiting_audit_approval" && (
+                  <>
+                    <Button size="sm" onClick={() => approveAuditForBuild(row)} disabled={busyId === row.id} className="gap-2">
+                      <Check className="h-4 w-4" /> Godkänn för hemsida
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => notNeeded(row)} disabled={busyId === row.id} className="gap-2">
+                      <XCircle className="h-4 w-4" /> Ingen hemsida behövs
+                    </Button>
+                  </>
+                )}
                 {row.status === "awaiting_approval" && (
                   <>
                     <Button size="sm" onClick={() => approve(row)} disabled={busyId === row.id} className="gap-2">
@@ -602,6 +636,11 @@ export default function SiteApprovals() {
               <div className="text-sm bg-muted/50 rounded-md p-3">
                 <div className="font-medium mb-1">Audit</div>
                 {row.audit_reason && <div className="text-muted-foreground">{row.audit_reason}</div>}
+                {row.audit_details?.recommended_status && (
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    AI-rekommendation: {row.audit_details.recommended_status === "needs_site" ? "bygg en ny hemsida" : "befintlig hemsida räcker"}.
+                  </div>
+                )}
                 {row.audit_details?.weaknesses?.length && (
                   <ul className="mt-2 list-disc list-inside text-muted-foreground space-y-0.5">
                     {row.audit_details.weaknesses.map((w, i) => <li key={i}>{w}</li>)}

@@ -71,11 +71,12 @@ async function planAndDispatch(supabase: any, userId: string, request: { action:
   if (request.action === 'plan') {
     const maxPerLanguage = Math.max(1, Number(settings.max_auto_jobs_per_language_per_day) || 1)
     const since = new Date(Date.now() - 30 * 60 * 60_000).toISOString()
-    const { data: recentJobs } = await supabase.from('lead_scrape_jobs').select('language, created_at')
+    const { data: recentJobs } = await supabase.from('lead_scrape_jobs').select('language, created_at, state')
       .eq('user_id', userId).gte('created_at', since)
     const today = stockholmDateKey(new Date())
     const counts = new Map<Language, number>()
     for (const job of recentJobs ?? []) {
+      if (!['queued', 'dispatched', 'running', 'importing', 'completed'].includes(String(job.state))) continue
       if (job.language === 'sv' || job.language === 'en') {
         if (stockholmDateKey(new Date(job.created_at)) === today) counts.set(job.language, (counts.get(job.language) ?? 0) + 1)
       }
@@ -154,10 +155,13 @@ async function automaticLimitReached(supabase: any, userId: string, language: La
   const { data: settingsRow } = await supabase.from('app_settings').select('value').eq('key', 'lead_sourcing_state').maybeSingle()
   const settings = (settingsRow?.value ?? {}) as State
   const maxPerLanguage = Math.max(1, Number(settings.max_auto_jobs_per_language_per_day) || 1)
-  const { data: rows } = await supabase.from('lead_scrape_jobs').select('created_at')
+  const { data: rows } = await supabase.from('lead_scrape_jobs').select('created_at, state')
     .eq('user_id', userId).eq('language', language).gte('created_at', new Date(Date.now() - 30 * 60 * 60_000).toISOString())
   const today = stockholmDateKey(new Date())
-  return (rows ?? []).filter((row: any) => stockholmDateKey(new Date(row.created_at)) === today).length >= maxPerLanguage
+  return (rows ?? []).filter((row: any) =>
+    ['queued', 'dispatched', 'running', 'importing', 'completed'].includes(String(row.state)) &&
+    stockholmDateKey(new Date(row.created_at)) === today,
+  ).length >= maxPerLanguage
 }
 
 async function dispatchWorker(job: any): Promise<{ worker_job_id?: string }> {

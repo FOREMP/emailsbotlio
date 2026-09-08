@@ -96,7 +96,7 @@ export default function LeadSourcing() {
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div>
         <div className="flex items-center gap-2"><MapPinned className="h-5 w-5 text-primary" /><h1 className="text-2xl font-semibold">Lead sourcing</h1></div>
-        <p className="mt-1 text-sm text-muted-foreground">Hämtar endast från marknader du har godkänt. Nya leads går alltid genom vanlig audit och approval.</p>
+        <p className="mt-1 text-sm text-muted-foreground">Hämtar endast från marknader du har godkänt. Nya leads auditeras först och väntar sedan på ditt beslut innan en hemsida får byggas.</p>
       </div>
       <div className="flex gap-2">
         <Select value={language} onValueChange={(value) => setLanguage(value as any)}><SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Alla språk</SelectItem><SelectItem value="sv">Svenska</SelectItem><SelectItem value="en">English</SelectItem></SelectContent></Select>

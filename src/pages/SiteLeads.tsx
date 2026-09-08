@@ -70,6 +70,7 @@ const ROLE_LABELS: Record<ImportRole, string> = {
 const STATUS_OPTIONS = [
   "pending_audit",
   "auditing",
+  "awaiting_audit_approval",
   "site_good_enough",
   "needs_site",
   "generating",
@@ -82,6 +83,7 @@ const STATUS_OPTIONS = [
 const STATUS_COLORS: Record<string, string> = {
   pending_audit: "bg-slate-500",
   auditing: "bg-blue-500",
+  awaiting_audit_approval: "bg-sky-600",
   site_good_enough: "bg-green-500",
   needs_site: "bg-amber-500",
   generating: "bg-purple-500",

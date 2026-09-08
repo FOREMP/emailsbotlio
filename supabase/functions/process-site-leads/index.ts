@@ -5,7 +5,8 @@
 //      when live, failed when the site pipeline errored).
 //   2. AUDIT — for up to AUDIT_PER_TICK pending_audit leads: scrape with
 //      Firecrawl, score 1-10 with Gemini, extract 2-3 concrete weaknesses.
-//      Score ≥ 7 → site_good_enough (no outreach). Else → needs_site.
+//      The score becomes a recommendation, then waits for an operator audit
+//      decision. An audit must never start a website build by itself.
 //   3. GENERATE — enforce daily cap DAILY_GEN_CAP by counting leads that
 //      already moved into generating/awaiting_approval/approved today. If
 //      capacity is left, take exactly GEN_PER_TICK needs_site leads, create a
@@ -648,10 +649,15 @@ async function auditOne(
 
   if (unreachable || !markdown) {
     await supabase.from('site_leads').update({
-      status: 'needs_site',
+      // A failed scrape strongly suggests a replacement, but it still needs
+      // the same human decision as a normal audit before spending capacity.
+      status: 'awaiting_audit_approval',
       audit_score: 1,
       audit_reason: unreachable ? 'Could not reach existing website.' : 'Site returned empty content.',
-      audit_details: { weaknesses: ['Ingen nåbar eller läsbar hemsida idag.'] },
+      audit_details: {
+        weaknesses: ['Ingen nåbar eller läsbar hemsida idag.'],
+        recommended_status: 'needs_site',
+      },
     }).eq('id', row.id)
     return
   }
@@ -702,13 +708,18 @@ async function auditOne(
   let parsed: { score: number; reason: string; weaknesses?: string[] } = { score: 5, reason: 'unparsed' }
   try { parsed = JSON.parse(aiData.choices?.[0]?.message?.content ?? '{}') } catch (_) { /* keep default */ }
   const score = Math.max(1, Math.min(10, Math.round(parsed.score)))
-  const nextStatus = score >= 7 ? 'site_good_enough' : 'needs_site'
+  // Preserve the model recommendation without letting the model decide to
+  // create a site. The operator explicitly moves the lead into the queue.
+  const recommendedStatus = score >= 7 ? 'site_good_enough' : 'needs_site'
 
   await supabase.from('site_leads').update({
-    status: nextStatus,
+    status: 'awaiting_audit_approval',
     audit_score: score,
     audit_reason: (parsed.reason ?? '').slice(0, 500),
-    audit_details: { weaknesses: (parsed.weaknesses ?? []).slice(0, 5) },
+    audit_details: {
+      weaknesses: (parsed.weaknesses ?? []).slice(0, 5),
+      recommended_status: recommendedStatus,
+    },
   }).eq('id', row.id)
 }
 
