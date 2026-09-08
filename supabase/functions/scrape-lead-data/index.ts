@@ -66,13 +66,13 @@ Deno.serve(async (req) => {
 
     // ---- 1. Find a working root URL by scraping variants (with screenshot) ----
     const candidates = buildUrlCandidates(site.source_url)
-    const attempts: { url: string; status: number; apiStatus: number; title?: string; error?: string }[] = []
+    const attempts: { url: string; status: number; apiStatus: number; provider: 'firecrawl' | 'botlio_scraper'; title?: string; error?: string }[] = []
     let rootScrape: any = null
     let usedUrl = site.source_url
 
     for (const candidate of candidates) {
-      const { data, status, apiStatus, title, error } = await scrapeOne(provider, candidate, true)
-      attempts.push({ url: candidate, status, apiStatus, title: (title || '').slice(0, 60), error })
+      const { data, status, apiStatus, provider: providerUsed, title, error } = await scrapeOne(provider, candidate, true)
+      attempts.push({ url: candidate, status, apiStatus, provider: providerUsed, title: (title || '').slice(0, 60), error })
       const badTitle = /(400|401|403|404|500|502|503|504)\s*(bad request|unauthorized|forbidden|not found|error|gateway|unavailable)|access denied|cloudflare|attention required/i
       const looksBad = (status && status >= 400) || badTitle.test(title || '')
       if (data && !looksBad && (data.markdown || '').trim().length > 300) {
@@ -88,16 +88,17 @@ Deno.serve(async (req) => {
       )
       if (providerFailure) {
         const message = providerFailure.error || `${provider} failed with HTTP ${providerFailure.apiStatus}`
-        const errorCode = pipelineErrorCode(provider, providerFailure.apiStatus, message)
+        const failedProvider = providerFailure.provider ?? provider
+        const errorCode = pipelineErrorCode(failedProvider, providerFailure.apiStatus, message)
         const incident = await recordPipelineFailure(supabase, {
-          provider, sourceFunction: 'scrape-lead-data', message,
+          provider: failedProvider, sourceFunction: 'scrape-lead-data', message,
           httpStatus: providerFailure.apiStatus, siteLeadId: site.site_lead_id ?? null,
           generatedSiteId: generated_site_id,
         })
         await supabase.from('generated_sites').update({
-          status: 'failed', error_message: `${provider} ${errorCode}: ${message}`,
+          status: 'failed', error_message: `${failedProvider} ${errorCode}: ${message}`,
         }).eq('id', generated_site_id)
-        return json({ error: message, provider, error_code: errorCode, pipeline_paused: incident.isPaused }, providerFailure.apiStatus === 402 ? 402 : 503)
+        return json({ error: message, provider: failedProvider, error_code: errorCode, pipeline_paused: incident.isPaused }, providerFailure.apiStatus === 402 ? 402 : 503)
       }
       await supabase.from('generated_sites').update({
         status: 'failed',
@@ -143,6 +144,8 @@ Deno.serve(async (req) => {
       ?? null
 
     const scraped = {
+      provider_used: rootScrape.provider_used ?? provider,
+      fallback_from: rootScrape.fallback_from ?? null,
       title: rootScrape.metadata?.title ?? '',
       description: rootScrape.metadata?.description ?? '',
       summary: rootScrape.summary ?? '',
@@ -166,6 +169,8 @@ Deno.serve(async (req) => {
 
     return json({
       ok: true,
+      provider_used: rootScrape.provider_used ?? provider,
+      fallback_from: rootScrape.fallback_from ?? null,
       pages_scraped: Object.keys(pages),
       about_url: aboutUrl,
       services_url: servicesUrl,
@@ -179,15 +184,15 @@ Deno.serve(async (req) => {
   }
 })
 
-async function scrapeOne(provider: 'firecrawl' | 'botlio_scraper', url: string, includeScreenshot: boolean): Promise<{ data: any | null; status: number; apiStatus: number; title: string; error: string }> {
+async function scrapeOne(provider: 'firecrawl' | 'botlio_scraper', url: string, includeScreenshot: boolean): Promise<{ data: any | null; status: number; apiStatus: number; provider: 'firecrawl' | 'botlio_scraper'; title: string; error: string }> {
   try {
     const payload = await scrapeUrl(provider, url, { screenshot: includeScreenshot })
     const status = payload?.metadata?.statusCode ?? 200
     const title = payload?.metadata?.title ?? ''
-    return { data: payload, status, apiStatus: 200, title, error: '' }
+    return { data: payload, status, apiStatus: 200, provider: payload.provider_used ?? provider, title, error: '' }
   } catch (error) {
     const typed = error instanceof ScraperError ? error : null
-    return { data: null, status: typed?.status ?? 0, apiStatus: typed?.status ?? 0, title: '', error: error instanceof Error ? error.message : String(error) }
+    return { data: null, status: typed?.status ?? 0, apiStatus: typed?.status ?? 0, provider: typed?.provider ?? provider, title: '', error: error instanceof Error ? error.message : String(error) }
   }
 }
 

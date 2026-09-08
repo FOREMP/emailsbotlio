@@ -20,6 +20,7 @@ SELECT cron.schedule(
   WHERE EXISTS (
     SELECT 1 FROM public.site_leads
     WHERE status IN ('pending_audit','needs_site','generating')
+       OR (status = 'awaiting_approval' AND auto_send = true)
   );
   $$
 );

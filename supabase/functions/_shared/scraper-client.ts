@@ -11,6 +11,8 @@ export type ScraperPayload = {
   branding?: { colors?: string[]; fonts?: string[]; images?: string[] } | null
   screenshot?: string | null
   source_url_used?: string
+  provider_used?: ScrapeProvider
+  fallback_from?: ScrapeProvider
 }
 
 export class ScraperError extends Error {
@@ -34,7 +36,29 @@ export async function selectedScrapeProvider(supabase: any): Promise<ScrapeProvi
     console.error('site_scrape_provider read failed; keeping Firecrawl default', error)
     return 'firecrawl'
   }
-  return (data?.value as any)?.provider === 'botlio_scraper' ? 'botlio_scraper' : 'firecrawl'
+  if ((data?.value as any)?.provider !== 'botlio_scraper') return 'firecrawl'
+
+  // A selected provider is a preference, not permission to stop the whole
+  // pipeline. If the worker is not configured (or its circuit is open), use
+  // Firecrawl immediately instead of producing a batch of identical failures.
+  const workerUrl = String(Deno.env.get('SCRAPER_WORKER_URL') ?? '').trim()
+  const workerSecret = Deno.env.get('SCRAPER_SHARED_SECRET') ?? Deno.env.get('SCRAPER_WORKER_SECRET')
+  if (!workerUrl || !workerSecret) {
+    console.warn('Botlio scraper selected but worker secrets are incomplete; using Firecrawl')
+    return 'firecrawl'
+  }
+
+  const { data: breaker, error: breakerError } = await supabase
+    .from('site_pipeline_breakers')
+    .select('is_paused')
+    .eq('provider', 'botlio_scraper')
+    .maybeSingle()
+  if (breakerError) console.warn('Botlio scraper breaker read failed; trying worker normally', breakerError)
+  if (breaker?.is_paused) {
+    console.warn('Botlio scraper circuit is paused; using Firecrawl')
+    return 'firecrawl'
+  }
+  return 'botlio_scraper'
 }
 
 export async function scrapeUrl(
@@ -42,17 +66,43 @@ export async function scrapeUrl(
   url: string,
   options: { screenshot?: boolean } = {},
 ): Promise<ScraperPayload> {
-  return provider === 'botlio_scraper'
-    ? scrapeWithBotlioWorker(url, options)
-    : scrapeWithFirecrawl(url, options)
+  if (provider === 'firecrawl') {
+    return markProvider(await scrapeWithFirecrawl(url, options), 'firecrawl')
+  }
+
+  try {
+    return markProvider(await scrapeWithBotlioWorker(url, options), 'botlio_scraper')
+  } catch (primaryError) {
+    const primary = asScraperError(primaryError, 'botlio_scraper')
+    console.warn(`Botlio scraper failed (${primary.status}): ${primary.message}; trying Firecrawl fallback`)
+    try {
+      return markProvider(await scrapeWithFirecrawl(url, options), 'firecrawl', 'botlio_scraper')
+    } catch (fallbackError) {
+      throw combinedFailure(primary, asScraperError(fallbackError, 'firecrawl'))
+    }
+  }
 }
 
 export async function mapUrl(provider: ScrapeProvider, url: string): Promise<string[]> {
   if (provider === 'botlio_scraper') {
-    const data = await scrapeWithBotlioWorker(url, { screenshot: false })
-    return Array.isArray(data.links) ? data.links.filter((value): value is string => typeof value === 'string') : []
+    try {
+      const data = await scrapeWithBotlioWorker(url, { screenshot: false })
+      return cleanLinks(data.links)
+    } catch (primaryError) {
+      const primary = asScraperError(primaryError, 'botlio_scraper')
+      console.warn(`Botlio map failed (${primary.status}): ${primary.message}; trying Firecrawl fallback`)
+      try {
+        return await mapWithFirecrawl(url)
+      } catch (fallbackError) {
+        throw combinedFailure(primary, asScraperError(fallbackError, 'firecrawl'))
+      }
+    }
   }
 
+  return mapWithFirecrawl(url)
+}
+
+async function mapWithFirecrawl(url: string): Promise<string[]> {
   const key = Deno.env.get('FIRECRAWL_API_KEY')
   if (!key) throw new ScraperError('FIRECRAWL_API_KEY missing', 'firecrawl', 503, false)
   let response: Response
@@ -69,6 +119,29 @@ export async function mapUrl(provider: ScrapeProvider, url: string): Promise<str
   if (!response.ok) throw providerError('firecrawl', response.status, body)
   const links = body?.links ?? body?.data?.links ?? []
   return links.map((value: any) => typeof value === 'string' ? value : value?.url).filter((value: unknown): value is string => typeof value === 'string')
+}
+
+function cleanLinks(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+function markProvider(payload: ScraperPayload, provider: ScrapeProvider, fallbackFrom?: ScrapeProvider): ScraperPayload {
+  return { ...payload, provider_used: provider, ...(fallbackFrom ? { fallback_from: fallbackFrom } : {}) }
+}
+
+function asScraperError(error: unknown, provider: ScrapeProvider): ScraperError {
+  return error instanceof ScraperError
+    ? error
+    : new ScraperError(errorMessage(error), provider, 0, true)
+}
+
+function combinedFailure(primary: ScraperError, fallback: ScraperError): ScraperError {
+  return new ScraperError(
+    `Primary ${primary.provider} failed: ${primary.message}; Firecrawl fallback failed: ${fallback.message}`.slice(0, 900),
+    fallback.provider,
+    fallback.status || primary.status,
+    primary.retryable || fallback.retryable,
+  )
 }
 
 async function scrapeWithFirecrawl(url: string, options: { screenshot?: boolean }): Promise<ScraperPayload> {
