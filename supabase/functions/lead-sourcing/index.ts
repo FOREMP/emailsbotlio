@@ -162,21 +162,27 @@ async function getCoverage(supabase: any, userId: string, language: Language, se
   const stockMultiplier = Math.max(1, Math.min(10, Number(settings.lead_stock_multiplier) || LEAD_STOCK_MULTIPLIER))
   const tolerance = Math.max(0, Math.min(20, Number(settings.stock_tolerance) || STOCK_TOLERANCE))
   const backlogMultiplier = Math.max(1, Math.min(6, Number(settings.backlog_multiplier) || BACKLOG_MULTIPLIER))
+  // Match the sourcing intake rule: a lead only has usable outbound value when
+  // it has both a website to audit/build from and an email to contact. This is
+  // deliberately repeated at count time so a future manual or legacy import
+  // cannot silently inflate the stock target.
+  const contactableLeads = (statuses: string[], onlyUnsentApproved = false) => {
+    let query = supabase.from('site_leads').select('id', { count: 'exact', head: true })
+      .eq('user_id', userId).eq('language', language)
+      .not('email', 'is', null).neq('email', '')
+      .not('website', 'is', null).neq('website', '')
+      .in('status', statuses)
+    if (onlyUnsentApproved) query = query.is('last_email_sent_at', null)
+    return query
+  }
   const stockQueries = await Promise.all([
     // These statuses all represent leads which can still become an outbound
     // first email. They are the usable stock, not merely raw imported rows.
-    supabase.from('site_leads').select('id', { count: 'exact', head: true })
-      .eq('user_id', userId).eq('language', language)
-      .in('status', ['pending_audit', 'auditing', 'awaiting_audit_approval', 'needs_site', 'generating', 'awaiting_approval']),
-    supabase.from('site_leads').select('id', { count: 'exact', head: true })
-      .eq('user_id', userId).eq('language', language)
-      .in('status', ['approved', 'auto_approved']).is('last_email_sent_at', null),
-    supabase.from('site_leads').select('id', { count: 'exact', head: true })
-      .eq('user_id', userId).eq('language', language).in('status', ['pending_audit', 'auditing']),
-    supabase.from('site_leads').select('id', { count: 'exact', head: true })
-      .eq('user_id', userId).eq('language', language).in('status', ['awaiting_audit_approval', 'awaiting_approval', 'needs_triage']),
-    supabase.from('site_leads').select('id', { count: 'exact', head: true })
-      .eq('user_id', userId).eq('language', language).in('status', ['needs_site', 'generating']),
+    contactableLeads(['pending_audit', 'auditing', 'awaiting_audit_approval', 'needs_site', 'generating', 'awaiting_approval']),
+    contactableLeads(['approved', 'auto_approved'], true),
+    contactableLeads(['pending_audit', 'auditing']),
+    contactableLeads(['awaiting_audit_approval', 'awaiting_approval', 'needs_triage']),
+    contactableLeads(['needs_site', 'generating']),
   ])
   const queryFailure = stockQueries.find((result: any) => result.error)
   if (queryFailure?.error) throw queryFailure.error
