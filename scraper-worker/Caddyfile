@@ -1,4 +1,10 @@
 {$SCRAPER_HOSTNAME} {
   encode zstd gzip
-  reverse_proxy scraper:3000
+  @lead_jobs path /v1/lead-jobs /v1/lead-jobs/*
+  handle @lead_jobs {
+    reverse_proxy lead_runner:3100
+  }
+  handle {
+    reverse_proxy scraper:3000
+  }
 }

@@ -17,3 +17,9 @@ project_id = "eyliwidiljmzllsmytdh"
     verify_jwt = false
   [functions.resume-site-pipeline]
     verify_jwt = true
+  [functions.ingest-sourced-leads]
+    # Authenticated with a timestamped HMAC from the private Lightsail worker.
+    verify_jwt = false
+  [functions.lead-scrape-status]
+    # Authenticated with a timestamped HMAC from the private Lightsail worker.
+    verify_jwt = false

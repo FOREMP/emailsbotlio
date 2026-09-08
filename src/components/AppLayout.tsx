@@ -2,7 +2,7 @@ import { ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Send, Users, Mail, FileSpreadsheet, Globe, BarChart3,
-  Sparkles, Target, CheckCircle2, ChevronDown, Rocket,
+  Sparkles, Target, CheckCircle2, ChevronDown, Rocket, MapPinned,
 } from "lucide-react";
 import Header from "@/components/Header";
 import SitePipelineAlert from "@/components/SitePipelineAlert";
@@ -22,6 +22,7 @@ const websiteTabs = [
   { to: "/site-leads", label: "Leads & Generator", icon: Target },
   { to: "/site-approvals", label: "Approvals", icon: CheckCircle2 },
   { to: "/site-outreach", label: "Demo Outreach", icon: Rocket },
+  { to: "/lead-sourcing", label: "Lead sourcing", icon: MapPinned },
 
 ];
 

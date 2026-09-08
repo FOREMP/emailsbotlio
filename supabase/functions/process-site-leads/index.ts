@@ -197,6 +197,11 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Sourcing has its own durable queue. This merely asks it to check the
+    // approved markets; it never makes an AI call. Imported leads subsequently
+    // enter pending_audit, where AUDIT_PER_TICK keeps model traffic bounded.
+    await invokeFn(supabaseUrl, serviceKey, 'lead-sourcing', { action: 'auto_tick' })
+      .catch((error) => report.errors.push(`lead sourcing: ${error.message}`))
 
     return json({ ok: true, ...report })
   } catch (err) {

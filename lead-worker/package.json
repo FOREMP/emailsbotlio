@@ -1,0 +1,6 @@
+{
+  "name": "botlio-lead-worker",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" }
+}

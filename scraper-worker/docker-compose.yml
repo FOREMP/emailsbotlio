@@ -26,7 +26,45 @@ services:
       - caddy_data:/data
       - caddy_config:/config
 
+  # Google Maps stays private on the Docker network. Only the small lead
+  # gateway is reachable through Caddy and it requires an HMAC signature.
+  maps:
+    # The project's own documented Docker image. Set MAPS_SCRAPER_IMAGE to a
+    # tested version tag in .env before a future upgrade.
+    image: ${MAPS_SCRAPER_IMAGE:-gosom/google-maps-scraper}
+    restart: unless-stopped
+    command: ["-web", "-addr", ":8080", "-data-folder", "/data", "-c", "1", "-browser-pool-size", "1", "-pages-per-browser", "1"]
+    volumes:
+      - maps_data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 1800m
+    cpus: 1.0
+
+  lead_runner:
+    build: ../lead-worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: 3100
+      MAPS_API_URL: http://maps:8080
+      LEAD_WORKER_DATA_DIR: /var/lib/botlio-leads
+    volumes:
+      - lead_worker_data:/var/lib/botlio-leads
+    depends_on:
+      - maps
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 300m
+    cpus: 0.35
+
 volumes:
   scraper_screenshots:
   caddy_data:
   caddy_config:
+  maps_data:
+  lead_worker_data:
