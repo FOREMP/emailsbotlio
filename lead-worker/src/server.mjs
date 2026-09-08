@@ -105,13 +105,13 @@ async function submitMapsJob(job) {
   return id
 }
 function jobState(value) { return String(value?.Status || value?.status || '').toLowerCase() }
-async function waitForMapsJob(id, job) {
+async function waitForMapsJob(id, sourceJob) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    if (job.cancel_requested || cancelledJobs.has(job.job_id)) throw new CancelledJobError()
-    const job = await fetchJson(`${mapsApiUrl}/api/v1/jobs/${encodeURIComponent(id)}`)
-    const state = jobState(job)
-    if (state === 'ok' || state === 'completed') return job
+    if (sourceJob.cancel_requested || cancelledJobs.has(sourceJob.job_id)) throw new CancelledJobError()
+    const mapsJob = await fetchJson(`${mapsApiUrl}/api/v1/jobs/${encodeURIComponent(id)}`)
+    const state = jobState(mapsJob)
+    if (state === 'ok' || state === 'completed') return mapsJob
     if (state === 'failed' || state === 'cancelled') throw new Error(`Maps job ${state}`)
     await new Promise((resolve) => setTimeout(resolve, 5_000))
   }
