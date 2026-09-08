@@ -37,7 +37,8 @@ Do not expose port 8080 or 3100 in the firewall. Caddy receives only
 ## Capacity and safety
 
 - One Maps browser and one Maps job run at a time.
-- Results are capped at 150 and first runs use 75.
+- Each approved Maps search retains every result returned by the scraper. The
+  Supabase stock and backlog controls decide whether another search can start.
 - The Maps worker makes no NVIDIA or LLM calls.
 - Existing website audit requests retain their own worker and Firecrawl fallback.
 - The Supabase audit queue remains capped at `AUDIT_PER_TICK = 3`.

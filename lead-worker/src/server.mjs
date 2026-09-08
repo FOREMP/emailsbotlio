@@ -44,7 +44,12 @@ function validateJob(value) {
   if (!/^[0-9a-f-]{36}$/i.test(String(value.job_id || ''))) throw new Error('invalid job_id')
   if (typeof value.query !== 'string' || value.query.trim().length < 3 || value.query.length > 180) throw new Error('invalid query')
   if (!['sv', 'en'].includes(value.language)) throw new Error('invalid language')
-  const maxResults = Math.max(1, Math.min(150, Number(value.max_results) || 75))
+  // Zero is an intentional sentinel: retain every row returned by this Maps
+  // job. The Supabase stock/backlog gates decide whether to run another job.
+  const requestedMax = Number(value.max_results)
+  const maxResults = Number.isFinite(requestedMax) && requestedMax >= 0
+    ? Math.floor(requestedMax)
+    : 0
   return { job_id: value.job_id, query: value.query.trim(), language: value.language, max_results: maxResults }
 }
 async function persistQueue() {
@@ -91,7 +96,10 @@ async function submitMapsJob(job) {
       name: `botlio-${job.job_id}`,
       keywords: [job.query],
       lang: job.language,
-      depth: 1,
+      // A shallow one-scroll job was effectively a second hidden cap. Depth
+      // 10 is the scraper's documented deep-search setting; CSV rows are no
+      // longer truncated after the search completes.
+      depth: 10,
       email: true,
       extra_reviews: false,
       max_time: Math.ceil(timeoutMs / 1000),
@@ -149,7 +157,8 @@ function parseCsv(text) {
 async function downloadRows(mapsJobId, maxResults) {
   const response = await fetch(`${mapsApiUrl}/api/v1/jobs/${encodeURIComponent(mapsJobId)}/download`)
   if (!response.ok) throw new Error(`Maps CSV download ${response.status}`)
-  return parseCsv(await response.text()).slice(0, maxResults)
+  const rows = parseCsv(await response.text())
+  return maxResults > 0 ? rows.slice(0, maxResults) : rows
 }
 async function ingestRows(job, rows) {
   const totals = { imported: 0, duplicates: 0, rejected: 0, failed: 0 }

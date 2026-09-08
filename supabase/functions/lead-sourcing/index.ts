@@ -6,7 +6,6 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
-const MAX_RESULTS_PER_JOB = 150
 const LEAD_STOCK_MULTIPLIER = 4
 const STOCK_TOLERANCE = 5
 const BACKLOG_MULTIPLIER = 2
@@ -70,6 +69,23 @@ Deno.serve(async (req) => {
       const result = await addMatrix(supabase, userId, language, cities, niches)
       return json({ ok: true, ...result })
     }
+    if (body?.action === 'status') {
+      // Status must be read-only: refreshing the dashboard must not create
+      // database writes or alter the sourcing queue.
+      const { data: settingsRow, error: settingsError } = await supabase.from('app_settings')
+        .select('value').eq('key', 'lead_sourcing_state').maybeSingle()
+      if (settingsError) throw settingsError
+      const settings = ((settingsRow?.value ?? {}) as State)
+      const coverage = await Promise.all((['sv', 'en'] as Language[]).map((language) => getCoverage(supabase, userId, language, settings)))
+      const { data: activeJobs, error: activeJobsError } = await supabase.from('lead_scrape_jobs')
+        .select('id, language, search_query, state, created_at').eq('user_id', userId)
+        .in('state', ['queued', 'dispatched', 'running', 'importing']).order('created_at').limit(1)
+      if (activeJobsError) throw activeJobsError
+      const candidate = activeJobs?.length ? null : await findCandidate(supabase, userId, {
+        action: 'plan', requestedMarketId: null, language: null,
+      }, coverage)
+      return json({ ok: true, coverage, active_job: activeJobs?.[0] ?? null, next_market: candidate ?? null })
+    }
     const action = body?.action === 'run_now' ? 'run_now' : 'plan'
     const requestedMarketId = typeof body?.market_id === 'string' ? body.market_id : null
     const language = body?.language === 'en' ? 'en' : body?.language === 'sv' ? 'sv' : null
@@ -113,10 +129,10 @@ async function planAndDispatch(supabase: any, userId: string, request: { action:
     market_id: candidate.id,
     language: candidate.language,
     search_query: candidate.search_query,
-    // The worker never needs to fetch a full market when a small final batch
-    // reaches the stock target. The +tolerance leaves room for one normal
-    // result batch without allowing repeated oversupply.
-    max_results: Math.min(MAX_RESULTS_PER_JOB, Math.max(1, Number(candidate.remaining_discovery_capacity) || Number(candidate.max_results) || 75)),
+    // Zero means "download every result returned by this one Maps search".
+    // The stock/backlog gates decide whether another search is permitted after
+    // import; a result cap would silently discard valid businesses instead.
+    max_results: 0,
     state: 'queued',
   }
   const { data: job, error: createError } = await supabase.from('lead_scrape_jobs').insert(jobRow).select('*').single()
@@ -228,7 +244,6 @@ async function findCandidate(supabase: any, userId: string, request: { action: '
     return {
       ...market,
       remaining_discovery_capacity: Math.min(
-        Number(market.max_results) || 75,
         Number(marketCoverage.remaining_discovery_capacity) || 0,
       ),
     }
@@ -323,7 +338,7 @@ async function addMatrix(supabase: any, userId: string, language: Language, rawC
       category: niche, niche_key: nicheKey,
       search_key: 'all',
       search_query: `${searchTerm(language, nicheKey, niche)} ${city} ${countryName}`,
-      is_enabled: !isCovered, priority: 100, max_results: 75, cooldown_days: 90,
+      is_enabled: !isCovered, priority: 100, max_results: 0, cooldown_days: 90,
     }
   }))
   let added = 0
