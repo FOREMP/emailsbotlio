@@ -21,6 +21,8 @@ SCRAPER_SHARED_SECRET=the-existing-secret
 SUPABASE_URL=https://eyliwidiljmzllsmytdh.supabase.co
 SCRAPER_HOSTNAME=scraper.foremp.eu
 MAPS_SCRAPER_IMAGE=gosom/google-maps-scraper
+LEAD_JOB_TIMEOUT_SECONDS=1800
+MAPS_REQUEST_TIMEOUT_SECONDS=25
 ```
 
 From `/opt/botlio-scraper/scraper-worker`, build and start the added services:
@@ -36,7 +38,9 @@ Do not expose port 8080 or 3100 in the firewall. Caddy receives only
 
 ## Capacity and safety
 
-- One Maps browser and one Maps job run at a time.
+- One Maps browser and one Maps job run at a time. A deep search may use up to
+  30 minutes; on a timeout the worker cancels the underlying Maps job so it
+  cannot block the next search.
 - Each approved Maps search retains every result returned by the scraper. The
   Supabase stock and backlog controls decide whether another search can start.
 - The Maps worker makes no NVIDIA or LLM calls.

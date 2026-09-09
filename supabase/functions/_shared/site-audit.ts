@@ -263,7 +263,10 @@ async function scoreAudit(
     : ''
   const routed = await callRoutedChat({
     supabase,
-    nvidiaModel: 'qwen/qwen3.5-122b-a10b',
+    // The previous Qwen vision route was retired by NVIDIA in July 2026.
+    // Kimi K2.5 is an active NVIDIA-hosted multimodal model, so it can still
+    // judge the homepage screenshot as well as the scraped text.
+    nvidiaModel: 'moonshotai/kimi-k2.5',
     openrouterModel: options.secondOpinion ? 'openai/gpt-4.1-mini' : 'google/gemini-2.5-flash',
     preferredProvider: options.secondOpinion ? 'openrouter' : undefined,
     title: options.secondOpinion ? 'Botlio Site Audit Second Opinion' : 'Botlio Site Audit',

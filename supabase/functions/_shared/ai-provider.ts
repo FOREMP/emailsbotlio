@@ -115,6 +115,10 @@ async function request(
       delete requestBody.response_format
       if (model.startsWith('deepseek-ai/')) requestBody.reasoning_effort = 'none'
       if (model.startsWith('qwen/')) requestBody.chat_template_kwargs = { enable_thinking: false }
+      // Kimi's instant mode avoids spending the short audit request budget on
+      // reasoning traces. It still accepts image_url content for screenshot
+      // based website audits.
+      if (model.startsWith('moonshotai/kimi-')) requestBody.chat_template_kwargs = { thinking: false }
     }
     const response = await fetch(provider === 'nvidia' ? NVIDIA_URL : OPENROUTER_URL, {
       method: 'POST',

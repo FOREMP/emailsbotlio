@@ -1,5 +1,5 @@
-// Review an audit before a build is allowed, then approve, regenerate or park
-// generated demo sites. Audit and email approval are separate human gates.
+// The audit is the normal decision point: an operator can park a good site,
+// build and send automatically, or explicitly opt into a manual demo review.
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -352,21 +352,41 @@ export default function SiteApprovals() {
     load();
   };
 
-  const approveAuditForBuild = async (row: LeadRow) => {
+  const approveAuditForBuild = async (row: LeadRow, autoSend: boolean) => {
+    if (autoSend && !row.email) {
+      toast({
+        title: "Saknar email",
+        description: "Välj bygg för granskning eller lägg till en mailadress innan direktutskick.",
+        variant: "destructive",
+      });
+      return;
+    }
     setBusyId(row.id);
     try {
-      const { error: updateError } = await supabase
+      const { data: updated, error: updateError } = await supabase
         .from("site_leads")
-        .update({ status: "needs_site" })
+        .update({
+          status: "needs_site",
+          auto_send: autoSend,
+          triaged_at: new Date().toISOString(),
+        })
         .eq("id", row.id)
-        .eq("status", "awaiting_audit_approval");
+        .eq("status", "awaiting_audit_approval")
+        .select("id")
+        .maybeSingle();
       if (updateError) throw updateError;
+      if (!updated) throw new Error("Leaden har redan ändrats. Uppdatera listan och försök igen.");
 
       // Use the ordinary bounded queue: this action cannot bypass daily
       // generation limits or concurrency protection.
       const { error: tickError } = await supabase.functions.invoke("process-site-leads", { body: {} });
       if (tickError) throw tickError;
-      toast({ title: "Godkänd för bygge", description: `${row.company_name} har lagts i byggkön.` });
+      toast({
+        title: autoSend ? "Köad för bygge och utskick" : "Köad för bygge och granskning",
+        description: autoSend
+          ? `${row.company_name} skickas automatiskt först när demon har en stabil publik länk.`
+          : `${row.company_name} visas för manuell granskning när demon är klar.`,
+      });
       await load();
     } catch (e) {
       toast({ title: "Kunde inte köa hemsidan", description: (e as Error).message, variant: "destructive" });
@@ -478,7 +498,7 @@ export default function SiteApprovals() {
         <div>
           <h1 className="text-2xl font-bold">Site Approvals</h1>
           <p className="text-sm text-muted-foreground">
-            Granska audit först, sedan godkänn eller ge feedback på demo-sajter innan de går ut i email.
+            Ta beslutet efter audit: parkera, bygg och skicka automatiskt, eller välj en frivillig manuell demo-granskning.
           </p>
         </div>
         <Button variant="outline" onClick={runTick} disabled={ticking} className="gap-2">
@@ -490,7 +510,7 @@ export default function SiteApprovals() {
       <div className="flex flex-wrap gap-2">
         {[
           { key: "awaiting_audit_approval", label: "Audit att ta ställning" },
-          { key: "awaiting_approval", label: "Väntar godkännande" },
+          { key: "awaiting_approval", label: "Manuell demo-granskning" },
           { key: "approved", label: "Godkända" },
           { key: "site_good_enough", label: "Bra nog / auto-parkerade" },
           { key: "generating", label: "Genererar / regenereras" },
@@ -593,8 +613,11 @@ export default function SiteApprovals() {
               <div className="flex flex-wrap gap-2">
                 {row.status === "awaiting_audit_approval" && (
                   <>
-                    <Button size="sm" onClick={() => approveAuditForBuild(row)} disabled={busyId === row.id} className="gap-2">
-                      <Check className="h-4 w-4" /> Godkänn för hemsida
+                    <Button size="sm" onClick={() => approveAuditForBuild(row, true)} disabled={busyId === row.id} className="gap-2">
+                      <Check className="h-4 w-4" /> Bygg & skicka automatiskt
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => approveAuditForBuild(row, false)} disabled={busyId === row.id} className="gap-2">
+                      <RefreshCw className="h-4 w-4" /> Bygg för granskning
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => notNeeded(row)} disabled={busyId === row.id} className="gap-2">
                       <XCircle className="h-4 w-4" /> Ingen hemsida behövs

@@ -9,7 +9,11 @@ const supabaseUrl = String(process.env.SUPABASE_URL || '').replace(/\/$/, '')
 const mapsApiUrl = String(process.env.MAPS_API_URL || 'http://maps:8080').replace(/\/$/, '')
 const dataDir = process.env.LEAD_WORKER_DATA_DIR || '/var/lib/botlio-leads'
 const maxQueued = Math.max(1, Number(process.env.MAX_QUEUED_LEAD_JOBS || 10))
-const timeoutMs = Math.max(180, Number(process.env.LEAD_JOB_TIMEOUT_SECONDS || 900)) * 1000
+// Deep Google Maps searches deliberately run serially on a small instance.
+// Fifteen minutes was shorter than a normal depth-10 + email-enrichment job,
+// so a healthy search was repeatedly killed before it could return a CSV.
+const timeoutMs = Math.max(300, Number(process.env.LEAD_JOB_TIMEOUT_SECONDS || 1_800)) * 1000
+const mapsRequestTimeoutMs = Math.max(5_000, Number(process.env.MAPS_REQUEST_TIMEOUT_SECONDS || 25)) * 1000
 const queuePath = join(dataDir, 'queue.json')
 let queue = []
 let active = null
@@ -82,11 +86,20 @@ async function postSupabase(functionName, payload) {
   if (!response.ok) throw new Error(`${functionName} ${response.status}: ${value?.error || 'unknown error'}`)
   return value
 }
-async function fetchJson(url, init = {}) {
-  const response = await fetch(url, init)
-  const value = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(`Maps service ${response.status}: ${value?.message || value?.error || 'unknown error'}`)
-  return value
+async function fetchJson(url, init = {}, requestTimeoutMs = mapsRequestTimeoutMs) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), requestTimeoutMs)
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal })
+    const value = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(`Maps service ${response.status}: ${value?.message || value?.error || 'unknown error'}`)
+    return value
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error(`Maps service did not respond within ${Math.round(requestTimeoutMs / 1000)}s`)
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
 }
 async function submitMapsJob(job) {
   // The official web runner accepts this exact schema and stores its own
@@ -117,7 +130,21 @@ async function waitForMapsJob(id, sourceJob) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (sourceJob.cancel_requested || cancelledJobs.has(sourceJob.job_id)) throw new CancelledJobError()
-    const mapsJob = await fetchJson(`${mapsApiUrl}/api/v1/jobs/${encodeURIComponent(id)}`)
+    let mapsJob
+    let lastStatusError
+    // A short internal Docker hiccup should not turn a long-running Maps
+    // search into a failed lead source job. Do retry status reads, but keep a
+    // hard timeout so a wedged Maps API cannot leave the job "running" forever.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        mapsJob = await fetchJson(`${mapsApiUrl}/api/v1/jobs/${encodeURIComponent(id)}`)
+        break
+      } catch (error) {
+        lastStatusError = error
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 2_000 * (attempt + 1)))
+      }
+    }
+    if (!mapsJob) throw lastStatusError || new Error('Maps job status was unavailable')
     const state = jobState(mapsJob)
     if (state === 'ok' || state === 'completed') return mapsJob
     if (state === 'failed' || state === 'cancelled') throw new Error(`Maps job ${state}`)
@@ -195,6 +222,10 @@ async function runNext() {
       await cancelMapsJob(job.maps_job_id)
       await postSupabase('lead-scrape-status', { job_id: job.job_id, state: 'cancelled', error_message: 'Cancelled by user' }).catch((reportError) => console.error('status report failed', reportError))
     } else {
+      // A timed-out or otherwise failed source job must not leave its Maps
+      // browser task alive. Orphaned tasks monopolise the one-browser Maps
+      // service and cause every later search to time out behind them.
+      await cancelMapsJob(job.maps_job_id)
       console.error('lead job failed', job.job_id, message)
       await postSupabase('lead-scrape-status', { job_id: job.job_id, state: 'failed', error_message: message }).catch((reportError) => console.error('status report failed', reportError))
     }

@@ -5,7 +5,7 @@
 //      when live, failed when the site pipeline errored).
 //   2. AUDIT — for up to AUDIT_PER_TICK pending_audit leads: scrape with
 //      Firecrawl, score 1-10 with Gemini, extract 2-3 concrete weaknesses.
-//      Scores above 7 are automatically parked as site_good_enough; all
+//      Scores of 7 or more are automatically parked as site_good_enough; all
 //      other results wait for an operator audit decision. An audit must never
 //      start a website build by itself.
 //   3. GENERATE — enforce daily cap DAILY_GEN_CAP by counting leads that
@@ -66,7 +66,7 @@ Deno.serve(async (req) => {
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   const supabase = createClient(supabaseUrl, serviceKey)
 
-  const report = { reconciled: 0, auto_synced: 0, recovered: 0, audited: 0, generated: 0, capacity: 0, errors: [] as string[] }
+  const report = { reconciled: 0, auto_synced: 0, recovered: 0, audited: 0, auto_parked: 0, generated: 0, capacity: 0, errors: [] as string[] }
 
   // Manual override from the Site Leads UI: build these leads right now,
   // ignoring the automation switch and the daily cap.
@@ -134,6 +134,11 @@ Deno.serve(async (req) => {
         report.errors.push(`audit ${row.id}: ${(e as Error).message}`)
       }
     }
+
+    // Repair rows scored by the previous threshold. This is deliberately
+    // limited to leads still awaiting an audit decision; it never changes a
+    // lead that an operator has already chosen to build, review, or send.
+    report.auto_parked = await parkHighQualityAudits(supabase, report)
 
     // ---------------- 3. GENERATE -----------------
     // Daily generation cap = today's outreach send capacity (sum of active
@@ -629,9 +634,9 @@ async function auditOne(
       supabase,
       scrapeProvider,
     )
-    // "More than 7" is deliberately strict: 7 stays in manual review while
-    // only clearly strong sites (8–10) are parked automatically.
-    const recommendedStatus = result.score > 7 ? 'site_good_enough' : 'needs_site'
+    // A 7 is already a good enough existing site. Only scores 1–6 should
+    // consume an operator decision and possibly a generated demo.
+    const recommendedStatus = result.score >= 7 ? 'site_good_enough' : 'needs_site'
     const nextStatus = recommendedStatus === 'site_good_enough'
       ? 'site_good_enough'
       : 'awaiting_audit_approval'
@@ -718,6 +723,31 @@ async function auditOne(
     }).eq('id', row.id)
     return
   }
+}
+
+// The policy is score 7–10 = existing site is good enough. Older versions
+// placed a score of exactly 7 into a manual queue, so normal ticks repair
+// those untouched rows without any destructive bulk migration.
+async function parkHighQualityAudits(
+  supabase: ReturnType<typeof createClient>,
+  report: { errors: string[] },
+): Promise<number> {
+  const { data, error } = await supabase
+    .from('site_leads')
+    .update({
+      status: 'site_good_enough',
+      auto_send: false,
+      triaged_at: new Date().toISOString(),
+    })
+    .in('status', ['awaiting_audit_approval', 'needs_triage'])
+    .gte('audit_score', 7)
+    .select('id')
+
+  if (error) {
+    report.errors.push(`auto-park high-quality audits: ${error.message}`)
+    return 0
+  }
+  return data?.length ?? 0
 }
 
 // ---------------------------------------------------------------------------

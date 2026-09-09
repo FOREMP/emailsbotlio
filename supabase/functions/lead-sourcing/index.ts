@@ -10,6 +10,10 @@ const LEAD_STOCK_MULTIPLIER = 4
 const STOCK_TOLERANCE = 5
 const BACKLOG_MULTIPLIER = 2
 const MIN_BACKLOG_CAP = 10
+const STALE_JOB_MINUTES = 45
+const TIMEOUT_CIRCUIT_WINDOW_MINUTES = 90
+const TIMEOUT_CIRCUIT_FAILURES = 2
+const FAILED_MARKET_COOLDOWN_HOURS = 6
 
 type Language = 'sv' | 'en'
 type State = {
@@ -106,6 +110,19 @@ async function planAndDispatch(supabase: any, userId: string, request: { action:
   const mode = settings.state === 'auto' || settings.state === 'paused' ? settings.state : 'manual'
   if (request.action === 'plan' && mode !== 'auto') return { state: mode, dispatched: false, reason: 'automatic sourcing is not enabled' }
   if (mode === 'paused') return { state: mode, dispatched: false, reason: 'lead sourcing is paused' }
+
+  // A process restart or a wedged internal Maps request can otherwise leave
+  // one row "running" indefinitely, which prevents every future source run.
+  await recoverStaleJobs(supabase, userId)
+
+  const timeoutCircuit = await recentTimeoutCircuit(supabase, userId)
+  if (timeoutCircuit.open) {
+    return {
+      state: mode,
+      dispatched: false,
+      reason: `lead worker timeout protection is active (${timeoutCircuit.failures} failures in the last ${TIMEOUT_CIRCUIT_WINDOW_MINUTES} minutes)`,
+    }
+  }
 
   const languages: Language[] = request.language ? [request.language] : ['sv', 'en']
   const coverage = await Promise.all(languages.map((language) => getCoverage(supabase, userId, language, settings)))
@@ -221,6 +238,11 @@ async function findCandidate(supabase: any, userId: string, request: { action: '
   const { data: history, error: historyError } = await supabase.from('lead_scrape_history')
     .select('language, city_key, niche_key, search_key').eq('user_id', userId)
   if (historyError) throw historyError
+  const failedSince = new Date(Date.now() - FAILED_MARKET_COOLDOWN_HOURS * 3_600_000).toISOString()
+  const { data: recentFailures, error: recentFailuresError } = await supabase.from('lead_scrape_jobs')
+    .select('market_id').eq('user_id', userId).eq('state', 'failed').gte('completed_at', failedSince)
+  if (recentFailuresError) throw recentFailuresError
+  const recentlyFailedMarkets = new Set((recentFailures ?? []).map((row: any) => row.market_id).filter(Boolean))
   // Older local coverage has search_key = "all", meaning the entire family
   // was already searched in that city. New catalogue rows have a specific
   // search key, so restaurant/bistro/bar searches can each run once without
@@ -248,6 +270,10 @@ async function findCandidate(supabase: any, userId: string, request: { action: '
     const { data: markets, error } = await query
     if (error) throw error
     for (const market of markets ?? []) {
+      // Do not immediately repeat an individual market that has just failed.
+      // The scheduler can make useful progress with another city × niche once
+      // the global timeout circuit allows a new attempt.
+      if (recentlyFailedMarkets.has(market.id)) continue
       const marketCoverage = coverage.find((item) => item.language === market.language)
       // Manual "run now" is still subject to stock and backlog controls. It is
       // a request to choose the next safe market, not a way to flood the queue.
@@ -268,6 +294,38 @@ async function findCandidate(supabase: any, userId: string, request: { action: '
     }
   }
   return null
+}
+
+async function recoverStaleJobs(supabase: any, userId: string) {
+  const staleBefore = new Date(Date.now() - STALE_JOB_MINUTES * 60_000).toISOString()
+  const { data: stale, error } = await supabase.from('lead_scrape_jobs')
+    .select('id, worker_job_id, search_query')
+    .eq('user_id', userId)
+    .in('state', ['queued', 'dispatched', 'running', 'importing'])
+    .lt('updated_at', staleBefore)
+  if (error) throw error
+  for (const job of stale ?? []) {
+    // Best effort: an old worker may already be gone, but cancel when it is
+    // still alive before releasing the database scheduling lock.
+    await cancelWorker(job).catch((cancelError) => console.warn('stale lead job cancellation failed', job.id, cancelError))
+    const { error: updateError } = await supabase.from('lead_scrape_jobs').update({
+      state: 'failed',
+      completed_at: new Date().toISOString(),
+      error_message: `Worker heartbeat expired after ${STALE_JOB_MINUTES} minutes`,
+    }).eq('id', job.id).in('state', ['queued', 'dispatched', 'running', 'importing'])
+    if (updateError) throw updateError
+  }
+}
+
+async function recentTimeoutCircuit(supabase: any, userId: string) {
+  const since = new Date(Date.now() - TIMEOUT_CIRCUIT_WINDOW_MINUTES * 60_000).toISOString()
+  const { count, error } = await supabase.from('lead_scrape_jobs').select('id', { count: 'exact', head: true })
+    .eq('user_id', userId).eq('state', 'failed')
+    .ilike('error_message', '%Maps job timed out%')
+    .gte('completed_at', since)
+  if (error) throw error
+  const failures = count ?? 0
+  return { failures, open: failures >= TIMEOUT_CIRCUIT_FAILURES }
 }
 
 async function ensureLegacyHistory(supabase: any, userId: string) {
