@@ -181,7 +181,7 @@ async function planAndDispatch(supabase: any, userId: string, request: { action:
 async function getCoverage(supabase: any, userId: string, language: Language, settings: State) {
   const { data: senders, error: senderError } = await supabase.from('senders').select('daily_limit, from_email').eq('is_active', true)
   if (senderError) throw senderError
-  const domains = language === 'en' ? ['foremp.eu', 'foremp.one'] : ['foremp.email']
+  const domains = language === 'en' ? ['foremp.eu'] : ['foremp.email', 'foremp.one']
   const dailyCapacity = (senders ?? []).filter((sender: any) => domains.some((domain) => String(sender.from_email ?? '').toLowerCase().endsWith(`@${domain}`)))
     .reduce((total: number, sender: any) => total + Math.max(0, Number(sender.daily_limit) || 0), 0)
   const stockMultiplier = Math.max(1, Math.min(10, Number(settings.lead_stock_multiplier) || LEAD_STOCK_MULTIPLIER))

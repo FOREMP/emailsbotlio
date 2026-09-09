@@ -45,7 +45,10 @@ const AUDIT_AUTO_PARK_SCORE = 7
 const GEN_PER_TICK = 6      // how many new pipelines may START per tick
 const MAX_CONCURRENT_GEN = 24 // how many leads may be mid-pipeline at once
 const DAILY_GEN_CAP_FALLBACK = 16  // used only if we can't read sender limits
-const OUTREACH_DOMAINS = ['foremp.email', 'foremp.eu'] as const
+const OUTREACH_DOMAINS_BY_LANGUAGE = {
+  sv: ['foremp.email', 'foremp.one'],
+  en: ['foremp.eu'],
+} as const
 const GHOST_LIST_NAME = 'Site Leads (auto)'
 
 function isCanonicalDemoUrl(value?: string | null): boolean {
@@ -150,26 +153,38 @@ Deno.serve(async (req) => {
     report.auto_parked = await parkHighQualityAudits(supabase, report)
 
     // ---------------- 3. GENERATE -----------------
-    // Daily generation cap = today's outreach send capacity (sum of active
-    // sender daily_limits on the outreach domain). Keeps sites-created/day in
-    // lockstep with contacts-emailed/day so we never build stock we can't send.
+    // Keep independent Swedish and English build budgets. A busy Swedish day
+    // must never consume the English site's capacity (or vice versa).
     const { data: dailySenders } = await supabase
       .from('senders')
       .select('daily_limit, from_email')
       .eq('is_active', true)
-    const dailyCap = (dailySenders ?? [])
-      .filter((r: any) => OUTREACH_DOMAINS.some((domain) => String(r.from_email ?? '').toLowerCase().endsWith(`@${domain}`)))
-      .reduce((s: number, r: any) => s + (r.daily_limit ?? 0), 0)
-      || DAILY_GEN_CAP_FALLBACK
+    const dailyCaps = (['sv', 'en'] as const).reduce((caps, language) => {
+      caps[language] = (dailySenders ?? [])
+        .filter((r: any) => OUTREACH_DOMAINS_BY_LANGUAGE[language]
+          .some((domain) => String(r.from_email ?? '').toLowerCase().endsWith(`@${domain}`)))
+        .reduce((sum: number, r: any) => sum + Math.max(0, Number(r.daily_limit) || 0), 0)
+      return caps
+    }, { sv: 0, en: 0 } as Record<'sv' | 'en', number>)
+    if (dailyCaps.sv + dailyCaps.en === 0) dailyCaps.sv = DAILY_GEN_CAP_FALLBACK
 
     // Count builds actually STARTED today. Using site_leads.updated_at made
     // approvals of older leads eat today's quota, starving generation.
     const today = new Date().toISOString().slice(0, 10)
-    const { count: doneToday } = await supabase
+    const { data: builtToday } = await supabase
       .from('generated_sites')
-      .select('id', { count: 'exact', head: true })
+      .select('language')
       .gte('created_at', `${today}T00:00:00Z`)
-    const capacity = Math.max(0, dailyCap - (doneToday ?? 0))
+    const usedToday = { sv: 0, en: 0 }
+    for (const site of builtToday ?? []) {
+      const language = site.language === 'en' ? 'en' : 'sv'
+      usedToday[language]++
+    }
+    const languageCapacity = {
+      sv: Math.max(0, dailyCaps.sv - usedToday.sv),
+      en: Math.max(0, dailyCaps.en - usedToday.en),
+    }
+    const capacity = languageCapacity.sv + languageCapacity.en
     report.capacity = capacity
 
     if (capacity > 0) {
@@ -193,15 +208,27 @@ Deno.serve(async (req) => {
           .not('website', 'is', null)
           .not('email', 'is', null)
           .order('audit_score', { ascending: true, nullsFirst: false })
-          .limit(take)
+          // Read a few extra rows so one language at capacity cannot hide
+          // eligible work for the other language at the front of the queue.
+          .limit(Math.max(take * 4, take))
 
-        if (!needsSite?.length) {
+        const selected: any[] = []
+        const remaining = { ...languageCapacity }
+        for (const lead of needsSite ?? []) {
+          const language = lead.language === 'en' ? 'en' : 'sv'
+          if (remaining[language] <= 0) continue
+          selected.push(lead)
+          remaining[language]--
+          if (selected.length >= take) break
+        }
+
+        if (!selected.length) {
           // Nothing to build right now — the tick simply idles and picks up
           // new needs_site leads as soon as the audit phase produces them.
           report.errors.push('idle: no needs_site leads ready')
         }
 
-        for (const lead of needsSite ?? []) {
+        for (const lead of selected) {
           try {
             await startGeneration(supabase, supabaseUrl, serviceKey, lead as any)
             report.generated++
