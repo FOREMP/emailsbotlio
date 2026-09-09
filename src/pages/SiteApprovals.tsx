@@ -199,6 +199,19 @@ export default function SiteApprovals() {
     }
   };
 
+  // A mutation can be committed before a follow-up fetch sees it (and the
+  // approval list intentionally caches its expensive iframe rows). Remove the
+  // handled lead locally first so the next audit card is immediately usable.
+  // `load()` below still reconciles the exact totals with the database.
+  const removeHandledRow = (row: LeadRow) => {
+    setRows((current) => current.filter((item) => item.id !== row.id));
+    setTotalCount((current) => Math.max(0, current - 1));
+    setCounts((current) => ({
+      ...current,
+      [row.status]: Math.max(0, (current[row.status] ?? 0) - 1),
+    }));
+  };
+
   const approve = async (row: LeadRow) => {
     if (!row.email) {
       return toast({ title: "Saknar email", description: "Kan inte enrolla utan email på leaden.", variant: "destructive" });
@@ -329,8 +342,9 @@ export default function SiteApprovals() {
         .update({ status: "approved", approved_at: new Date().toISOString() })
         .eq("id", row.id);
 
+      removeHandledRow(row);
       toast({ title: "Godkänd & enrollad", description: `${row.company_name} börjar få mail inom några minuter (${row.language === "en" ? "EN" : "SV"}).` });
-      load();
+      void load();
     } catch (e) {
       toast({ title: "Kunde inte godkänna", description: (e as Error).message, variant: "destructive" });
     } finally {
@@ -340,7 +354,6 @@ export default function SiteApprovals() {
 
 
   const notNeeded = async (row: LeadRow) => {
-    if (!confirm(`Markera ${row.company_name} som "behövs ej" och parkera?`)) return;
     setBusyId(row.id);
     const { error } = await supabase
       .from("site_leads")
@@ -348,8 +361,9 @@ export default function SiteApprovals() {
       .eq("id", row.id);
     setBusyId(null);
     if (error) return toast({ title: "Fel", description: error.message, variant: "destructive" });
+    removeHandledRow(row);
     toast({ title: "Parkerad" });
-    load();
+    void load();
   };
 
   const approveAuditForBuild = async (row: LeadRow, autoSend: boolean) => {
@@ -377,17 +391,30 @@ export default function SiteApprovals() {
       if (updateError) throw updateError;
       if (!updated) throw new Error("Leaden har redan ändrats. Uppdatera listan och försök igen.");
 
+      // The durable status change is enough to take the lead out of this
+      // queue. Do this before the optional immediate worker tick, otherwise a
+      // slow/cached reload leaves the same card visible until the browser is
+      // refreshed.
+      removeHandledRow(row);
+
       // Use the ordinary bounded queue: this action cannot bypass daily
       // generation limits or concurrency protection.
       const { error: tickError } = await supabase.functions.invoke("process-site-leads", { body: {} });
-      if (tickError) throw tickError;
+      if (tickError) {
+        toast({
+          title: "Köad — byggstarten väntar",
+          description: "Leaden är sparad i byggkön och plockas upp automatiskt av nästa orchestrator-körning.",
+        });
+        void load();
+        return;
+      }
       toast({
         title: autoSend ? "Köad för bygge och utskick" : "Köad för bygge och granskning",
         description: autoSend
           ? `${row.company_name} skickas automatiskt först när demon har en stabil publik länk.`
           : `${row.company_name} visas för manuell granskning när demon är klar.`,
       });
-      await load();
+      void load();
     } catch (e) {
       toast({ title: "Kunde inte köa hemsidan", description: (e as Error).message, variant: "destructive" });
     } finally {
