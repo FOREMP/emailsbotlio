@@ -17,7 +17,9 @@ Deno.serve(async (req) => {
     if (Number.isInteger(body.duplicate_count)) patch.duplicate_count = Math.max(0, body.duplicate_count)
     if (Number.isInteger(body.rejected_count)) patch.rejected_count = Math.max(0, body.rejected_count)
     if (typeof body.error_message === 'string') patch.error_message = body.error_message.slice(0, 800)
-    if (body.state === 'running') patch.started_at = new Date().toISOString()
+    // Later "running" messages are heartbeats. Keep updated_at current via
+    // the table trigger, but retain the original start time for observability.
+    if (body.state === 'running' && body.started === true) patch.started_at = new Date().toISOString()
     if (['completed', 'failed', 'cancelled'].includes(body.state)) patch.completed_at = new Date().toISOString()
     const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
     const { error } = await supabase.from('lead_scrape_jobs').update(patch).eq('id', body.job_id)

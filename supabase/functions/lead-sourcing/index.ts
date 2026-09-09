@@ -40,8 +40,16 @@ Deno.serve(async (req) => {
       // path. It cannot be triggered with a browser or anon token.
       const { data: owners, error } = await supabase.from('lead_markets').select('user_id').eq('is_enabled', true)
       if (error) throw error
+      // A market might be paused after its job started. Its owner must still
+      // be visited so stale-job recovery can release the worker lock.
+      const { data: activeJobOwners, error: activeOwnersError } = await supabase
+        .from('lead_scrape_jobs')
+        .select('user_id')
+        .in('state', ['queued', 'dispatched', 'running', 'importing'])
+      if (activeOwnersError) throw activeOwnersError
       const runs = []
-      for (const userId of [...new Set((owners ?? []).map((row: any) => row.user_id).filter(Boolean))]) {
+      const userIds = [...new Set([...(owners ?? []), ...(activeJobOwners ?? [])].map((row: any) => row.user_id).filter(Boolean))]
+      for (const userId of userIds) {
         try { runs.push(await planAndDispatch(supabase, userId as string, { action: 'plan', requestedMarketId: null, language: null })) }
         catch (error) { runs.push({ dispatched: false, reason: error instanceof Error ? error.message : String(error) }) }
       }
@@ -108,12 +116,12 @@ async function planAndDispatch(supabase: any, userId: string, request: { action:
   const { data: settingsRow } = await supabase.from('app_settings').select('value').eq('key', 'lead_sourcing_state').maybeSingle()
   const settings = ((settingsRow?.value ?? {}) as State)
   const mode = settings.state === 'auto' || settings.state === 'paused' ? settings.state : 'manual'
+
+  // Recovery is safe and must happen regardless of whether new sourcing is
+  // paused or manual. It only finalizes jobs whose worker heartbeat expired.
+  await recoverStaleJobs(supabase, userId)
   if (request.action === 'plan' && mode !== 'auto') return { state: mode, dispatched: false, reason: 'automatic sourcing is not enabled' }
   if (mode === 'paused') return { state: mode, dispatched: false, reason: 'lead sourcing is paused' }
-
-  // A process restart or a wedged internal Maps request can otherwise leave
-  // one row "running" indefinitely, which prevents every future source run.
-  await recoverStaleJobs(supabase, userId)
 
   const timeoutCircuit = await recentTimeoutCircuit(supabase, userId)
   if (timeoutCircuit.open) {
@@ -311,7 +319,10 @@ async function recoverStaleJobs(supabase: any, userId: string) {
     const { error: updateError } = await supabase.from('lead_scrape_jobs').update({
       state: 'failed',
       completed_at: new Date().toISOString(),
-      error_message: `Worker heartbeat expired after ${STALE_JOB_MINUTES} minutes`,
+      // Keep the error in the same failure family as a Maps timeout so the
+      // global circuit breaker stops a broken worker from consuming every
+      // scheduled run.
+      error_message: `Maps job timed out: worker heartbeat expired after ${STALE_JOB_MINUTES} minutes`,
     }).eq('id', job.id).in('state', ['queued', 'dispatched', 'running', 'importing'])
     if (updateError) throw updateError
   }

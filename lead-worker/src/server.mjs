@@ -14,6 +14,7 @@ const maxQueued = Math.max(1, Number(process.env.MAX_QUEUED_LEAD_JOBS || 10))
 // so a healthy search was repeatedly killed before it could return a CSV.
 const timeoutMs = Math.max(300, Number(process.env.LEAD_JOB_TIMEOUT_SECONDS || 1_800)) * 1000
 const mapsRequestTimeoutMs = Math.max(5_000, Number(process.env.MAPS_REQUEST_TIMEOUT_SECONDS || 25)) * 1000
+const heartbeatMs = Math.max(10_000, Number(process.env.LEAD_JOB_HEARTBEAT_SECONDS || 30)) * 1000
 const queuePath = join(dataDir, 'queue.json')
 let queue = []
 let active = null
@@ -67,7 +68,12 @@ async function restoreQueue() {
   try {
     const saved = JSON.parse(await readFile(queuePath, 'utf8'))
     queue = Array.isArray(saved.queue) ? saved.queue : []
-    if (saved.active?.job_id) queue.unshift(saved.active)
+    if (saved.active?.job_id) {
+      // If only the lead runner restarted, its old Maps task can still be
+      // using the one browser. Cancel it before re-queuing a clean attempt.
+      await cancelMapsJob(saved.active.maps_job_id)
+      queue.unshift(saved.active)
+    }
   } catch { /* first start */ }
 }
 async function signBody(body) {
@@ -126,10 +132,17 @@ async function submitMapsJob(job) {
   return id
 }
 function jobState(value) { return String(value?.Status || value?.status || '').toLowerCase() }
-async function waitForMapsJob(id, sourceJob) {
+async function waitForMapsJob(id, sourceJob, heartbeat) {
   const deadline = Date.now() + timeoutMs
+  let nextHeartbeatAt = 0
   while (Date.now() < deadline) {
     if (sourceJob.cancel_requested || cancelledJobs.has(sourceJob.job_id)) throw new CancelledJobError()
+    if (Date.now() >= nextHeartbeatAt) {
+      // A deep Maps run can take many minutes. A heartbeat differentiates it
+      // from a worker that died immediately after accepting the job.
+      await heartbeat()
+      nextHeartbeatAt = Date.now() + heartbeatMs
+    }
     let mapsJob
     let lastStatusError
     // A short internal Docker hiccup should not turn a long-running Maps
@@ -201,13 +214,17 @@ async function runNext() {
   active = queue.shift(); await persistQueue()
   const job = active
   try {
-    await postSupabase('lead-scrape-status', { job_id: job.job_id, state: 'running' })
+    await postSupabase('lead-scrape-status', { job_id: job.job_id, state: 'running', started: true })
     if (isCancelled(job)) throw new CancelledJobError()
     const mapsJobId = await submitMapsJob(job)
     job.maps_job_id = mapsJobId; await persistQueue()
     if (isCancelled(job)) { await cancelMapsJob(mapsJobId); throw new CancelledJobError() }
     await postSupabase('lead-scrape-status', { job_id: job.job_id, state: 'running', worker_job_id: mapsJobId })
-    await waitForMapsJob(mapsJobId, job)
+    await waitForMapsJob(mapsJobId, job, () => postSupabase('lead-scrape-status', {
+      job_id: job.job_id,
+      state: 'running',
+      worker_job_id: mapsJobId,
+    }))
     if (isCancelled(job)) throw new CancelledJobError()
     const rows = await downloadRows(mapsJobId, job.max_results)
     if (isCancelled(job)) throw new CancelledJobError()
@@ -239,7 +256,14 @@ await restoreQueue(); void runNext()
 createServer(async (req, res) => {
   try {
     const path = new URL(req.url || '/', 'http://localhost').pathname
-    if (req.method === 'GET' && path === '/health') return json(res, 200, { ok: true, service: 'botlio-lead-worker', active_job: active?.job_id || null, queued: queue.length })
+    if (req.method === 'GET' && (path === '/health' || path === '/v1/lead-jobs/health')) {
+      return json(res, 200, {
+        ok: true,
+        service: 'botlio-lead-worker',
+        active_job: active?.job_id || null,
+        queued: queue.length,
+      })
+    }
     const cancelMatch = path.match(/^\/v1\/lead-jobs\/([0-9a-f-]{36})\/cancel$/i)
     if (req.method !== 'POST' || (path !== '/v1/lead-jobs' && !cancelMatch)) return json(res, 404, { error: 'not found' })
     const raw = await readBody(req)

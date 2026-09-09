@@ -23,6 +23,7 @@ SCRAPER_HOSTNAME=scraper.foremp.eu
 MAPS_SCRAPER_IMAGE=gosom/google-maps-scraper
 LEAD_JOB_TIMEOUT_SECONDS=1800
 MAPS_REQUEST_TIMEOUT_SECONDS=25
+LEAD_JOB_HEARTBEAT_SECONDS=30
 ```
 
 From `/opt/botlio-scraper/scraper-worker`, build and start the added services:
@@ -35,6 +36,8 @@ curl -fsS https://scraper.foremp.eu/health
 
 Do not expose port 8080 or 3100 in the firewall. Caddy receives only
 `/v1/lead-jobs`, and that route requires the timestamped HMAC signature.
+`/v1/lead-jobs/health` is the sole read-only exception and reveals queue
+health only; it never exposes leads or secrets.
 
 ## Capacity and safety
 

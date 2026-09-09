@@ -114,6 +114,11 @@ Deno.serve(async (req) => {
     const autoState = ((autoRow as any)?.value?.state ?? 'running') as string
     if (autoState !== 'running') {
       report.errors.push(`skip audit+generate: automation is ${autoState}`)
+      // Lead sourcing is a separate durable pipeline. Keep its watchdog
+      // alive while website generation is paused, or a dead Maps task can
+      // hold the sourcing lock forever.
+      await invokeFn(supabaseUrl, serviceKey, 'lead-sourcing', { action: 'auto_tick' })
+        .catch((error) => report.errors.push(`lead sourcing: ${error.message}`))
       return json({ ok: true, ...report })
     }
 
