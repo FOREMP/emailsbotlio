@@ -178,7 +178,7 @@ export default function SiteOutreach() {
       const chunk = visibleEnrollmentIds.slice(i, i + 200);
       const { data, error } = await supabase
         .from("sent_emails")
-        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject, body, open_count, contact_id, tracking_enabled, tracking_route, tracking_url")
+        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject, open_count, contact_id, tracking_enabled, tracking_route, tracking_url")
         .in("enrollment_id", chunk)
         .order("sent_at", { ascending: false });
       if (error) {

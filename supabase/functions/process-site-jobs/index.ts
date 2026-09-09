@@ -963,31 +963,33 @@ Deno.serve(async (req) => {
           .update({ updated_at: new Date().toISOString() })
           .eq('id', generated_site_id)
           .then(() => {}, () => {})
-      }, 60_000)
+      // Stale recovery waits ten minutes. A four-minute heartbeat is enough to
+      // prove liveness without rewriting the row once per minute.
+      }, 4 * 60_000)
 
       try {
         const existingFiles = (site.generated_files ?? {}) as Record<string, string>
         const step = await runFreeformStep(ffCtx, existingFiles)
 
         if (step.done) {
+          const changed = JSON.stringify(existingFiles) !== JSON.stringify(step.files)
           await supabase.from('generated_sites').update({
             status: 'generated',
             error_message: null,
-            generated_files: step.files,
+            ...(changed ? { generated_files: step.files } : {}),
             gen_progress: step.progress,
-            updated_at: new Date().toISOString(),
           }).eq('id', generated_site_id)
         } else {
           // More work to do — re-queue and let cron continue next minute.
           // Progress was made, so the retry counter resets.
+          const changed = JSON.stringify(existingFiles) !== JSON.stringify(step.files)
           await supabase.from('generated_sites').update({
             status: 'queued',
             queued_at: new Date().toISOString(),
             error_message: null,
             attempts: 0,
-            generated_files: step.files,
+            ...(changed ? { generated_files: step.files } : {}),
             gen_progress: step.progress,
-            updated_at: new Date().toISOString(),
           }).eq('id', generated_site_id)
 
           // Kick the worker immediately so a full site doesn't take 6 minutes.
@@ -1067,7 +1069,7 @@ Deno.serve(async (req) => {
           .update({ updated_at: new Date().toISOString() })
           .eq('id', generated_site_id)
           .then(() => {}, () => {})
-      }, 60_000)
+      }, 4 * 60_000)
       try {
         const systemPrompt = SKIP_POLISH
           ? `${nc.systemPrompt}\n\n--- SPRÅKKRAV (skriv färdig, publicerbar copy direkt) ---\n${nc.polishSystemPrompt}`

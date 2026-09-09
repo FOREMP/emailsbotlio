@@ -703,6 +703,16 @@ async function auditOne(
         : {}),
     }).eq('id', row.id)
     if (updateError) throw new Error(`save audit: ${updateError.message}`)
+    if (result.scrapeCache) {
+      const { error: cacheError } = await supabase.from('site_scrape_cache').upsert({
+        site_lead_id: row.id,
+        url: result.url,
+        payload: result.scrapeCache,
+        created_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 3 * 86_400_000).toISOString(),
+      }, { onConflict: 'site_lead_id' })
+      if (cacheError) console.warn(`audit scrape cache unavailable for ${row.id}: ${cacheError.message}`)
+    }
     return
   } catch (error) {
     const typed = error instanceof ScraperError ? error : null

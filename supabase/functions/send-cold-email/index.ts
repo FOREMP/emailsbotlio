@@ -143,7 +143,17 @@ function startOfStockholmDayUtc(now = new Date()): Date {
     month: '2-digit',
     day: '2-digit',
   }).formatToParts(now).map((p) => [p.type, p.value])) as any
-  return new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), 0, 0, 0))
+  const guess = new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), 0, 0, 0))
+  const localParts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: STOCKHOLM_TZ, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(guess).map((p) => [p.type, p.value])) as any
+  const localInstant = Date.UTC(
+    Number(localParts.year), Number(localParts.month) - 1, Number(localParts.day),
+    Number(localParts.hour), Number(localParts.minute), Number(localParts.second),
+  )
+  return new Date(guess.getTime() - (localInstant - guess.getTime()))
 }
 
 Deno.serve(async (req) => {
@@ -177,6 +187,7 @@ Deno.serve(async (req) => {
     model,                 // optional per-node model override
     subject_override,      // forces subject verbatim (used for follow-ups: "Re: <original>")
     is_followup,           // hint to AI it's a follow-up nudge
+    reservation_id,       // scheduler capacity reservation; manual sends may omit
     unsubscribe_base_url,  // optional override
   } = body ?? {}
 
@@ -229,6 +240,27 @@ Deno.serve(async (req) => {
   }
   if (!chosenSender) {
     return new Response(JSON.stringify({ error: 'sender not found' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+  }
+
+  if (reservation_id) {
+    const { data: reservation, error: reservationError } = await supabase
+      .from('email_send_reservations')
+      .select('id, sender_id, enrollment_id, user_id, is_followup, expires_at, consumed_at')
+      .eq('id', reservation_id)
+      .maybeSingle()
+    const valid = reservation
+      && !reservation.consumed_at
+      && new Date(reservation.expires_at).getTime() > Date.now()
+      && reservation.sender_id === chosenSender.id
+      && reservation.enrollment_id === enrollment_id
+      && reservation.user_id === user_id
+      && reservation.is_followup === !!is_followup
+    if (reservationError || !valid) {
+      return new Response(JSON.stringify({ error: 'invalid or expired capacity reservation' }), {
+        status: 409,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
   }
 
   // Look up domain registry → derive reply-to + sender subdomain
@@ -421,6 +453,7 @@ Deno.serve(async (req) => {
     tracking_enabled: trackingEnabled,
     tracking_url: tracking?.url ?? null,
     tracking_route: tracking?.route ?? 'none',
+    is_followup: !!is_followup,
     message_id: messageId,
   })
   if (insertError) {
@@ -428,6 +461,23 @@ Deno.serve(async (req) => {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
+  }
+
+  // The queued email now holds the capacity slot. Consume the temporary
+  // reservation so it is not counted a second time.
+  if (reservation_id) {
+    const { error: consumeError } = await supabase
+      .from('email_send_reservations')
+      .update({ consumed_at: new Date().toISOString() })
+      .eq('id', reservation_id)
+      .is('consumed_at', null)
+    if (consumeError) {
+      await supabase.from('sent_emails').delete().eq('id', messageId).eq('status', 'queued')
+      return new Response(JSON.stringify({ error: 'could not consume capacity reservation', detail: consumeError.message }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
   }
 
   // Send directly via the Lovable email API (no queue dependency)

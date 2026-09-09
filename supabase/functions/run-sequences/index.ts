@@ -6,7 +6,6 @@ const corsHeaders = {
 }
 
 const MAX_PER_RUN = 200
-const PER_DOMAIN_DAILY_CAP = 80
 const STOCKHOLM_TZ = 'Europe/Stockholm'
 
 function msFromUnit(n: number, unit: string): number {
@@ -153,23 +152,6 @@ function minutesLeftInWindow(now = new Date()): number {
   return Math.max(1, SEND_WINDOW_END * 60 - (parts.hour * 60 + parts.minute))
 }
 
-function senderBaseQuota(sender: any): number {
-  const daily = Number(sender?.daily_limit ?? 0)
-  const target = Number(sender?.warmup_target ?? daily)
-  if (!sender?.warmup_enabled || !sender?.warmup_started_at) return daily
-  const day = Math.max(1, Math.floor((Date.now() - new Date(sender.warmup_started_at).getTime()) / 86_400_000) + 1)
-  const ramp = day <= 6 ? day * 5 : 30 + (day - 6) * 10
-  return Math.min(daily, target, Math.max(5, ramp))
-}
-
-function senderFollowupQuota(sender: any): number {
-  const base = senderBaseQuota(sender)
-  const multiplier = Math.max(1, Number(sender?.followup_multiplier ?? 3))
-  if (!sender?.warmup_enabled || !sender?.warmup_started_at) return base * multiplier
-  const warmExtra = Math.max(3, Math.ceil(base * 0.5))
-  return Math.min(base * multiplier, warmExtra)
-}
-
 async function countSequenceFirstTouchesToday(
   supabase: SupabaseClient<any, any, any>,
   sequenceId: string,
@@ -178,62 +160,13 @@ async function countSequenceFirstTouchesToday(
   const cached = cache.get(sequenceId)
   if (cached !== undefined) return cached
 
-  const dayStartIso = startOfStockholmDayUtc().toISOString()
-  const enrollmentIds: string[] = []
-  for (let from = 0; ; from += 1000) {
-    const { data, error } = await supabase
-      .from('enrollments')
-      .select('id')
-      .eq('sequence_id', sequenceId)
-      .order('id', { ascending: true })
-      .range(from, from + 999)
-    if (error) throw new Error(`sequence enrollment read failed: ${error.message}`)
-    const page = data ?? []
-    enrollmentIds.push(...page.map((row: any) => row.id as string))
-    if (page.length < 1000) break
-  }
-  if (!enrollmentIds.length) {
-    cache.set(sequenceId, 0)
-    return 0
-  }
-
-  const touchedToday = new Set<string>()
-  for (let i = 0; i < enrollmentIds.length; i += 200) {
-    const chunk = enrollmentIds.slice(i, i + 200)
-    const { data, error } = await supabase
-      .from('sent_emails')
-      .select('enrollment_id')
-      .in('enrollment_id', chunk)
-      .in('status', COUNTED_SEND_STATUSES)
-      .gte('sent_at', dayStartIso)
-    if (error) throw new Error(`today sequence sends read failed: ${error.message}`)
-    for (const row of (data ?? []) as any[]) {
-      if (row.enrollment_id) touchedToday.add(row.enrollment_id as string)
-    }
-  }
-
-  if (!touchedToday.size) {
-    cache.set(sequenceId, 0)
-    return 0
-  }
-
-  const hadEarlierSend = new Set<string>()
-  const todayIds = Array.from(touchedToday)
-  for (let i = 0; i < todayIds.length; i += 200) {
-    const chunk = todayIds.slice(i, i + 200)
-    const { data, error } = await supabase
-      .from('sent_emails')
-      .select('enrollment_id')
-      .in('enrollment_id', chunk)
-      .in('status', COUNTED_SEND_STATUSES)
-      .lt('sent_at', dayStartIso)
-    if (error) throw new Error(`historical send read failed: ${error.message}`)
-    for (const row of (data ?? []) as any[]) {
-      if (row.enrollment_id) hadEarlierSend.add(row.enrollment_id as string)
-    }
-  }
-
-  const count = todayIds.filter((id) => !hadEarlierSend.has(id)).length
+  // One indexed aggregate replaces paging every enrollment and then probing
+  // sent_emails twice per chunk. The result is cached for the rest of the tick.
+  const { data, error } = await supabase.rpc('get_sequence_first_touch_count', {
+    _sequence_id: sequenceId,
+  })
+  if (error) throw new Error(`sequence first-touch count failed: ${error.message}`)
+  const count = Math.max(0, Number(data ?? 0))
   cache.set(sequenceId, count)
   return count
 }
@@ -256,6 +189,21 @@ Deno.serve(async (req) => {
     .limit(1)
   if (!dueProbe.error && (dueProbe.data?.length ?? 0) === 0) {
     return new Response(JSON.stringify({ ok: true, idle: true }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    })
+  }
+
+  // Outside business hours no sender, history, graph or capacity data can lead
+  // to a send. Move due rows to the next real window in one write and stop.
+  if (!insideSendWindow()) {
+    const resumeAt = nextSendWindowStartUtc()
+    const { error } = await supabase
+      .from('enrollments')
+      .update({ next_send_at: resumeAt.toISOString() })
+      .in('status', ['active', 'waiting_capacity'])
+      .or(`next_send_at.is.null,next_send_at.lte.${nowIso}`)
+    if (error) throw new Error(`outside-window deferral failed: ${error.message}`)
+    return new Response(JSON.stringify({ ok: true, idle: true, outside_send_window: true, resumes_at: resumeAt.toISOString() }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   }
@@ -327,7 +275,7 @@ Deno.serve(async (req) => {
     dueUserIds.length
       ? supabase
           .from('senders')
-          .select('id, user_id, from_email')
+          .select('id, user_id, from_email, daily_limit, followup_multiplier, warmup_enabled, warmup_started_at, warmup_target')
           .in('user_id', dueUserIds)
           .eq('is_active', true)
       : Promise.resolve({ data: [], error: null }),
@@ -350,6 +298,31 @@ Deno.serve(async (req) => {
     const list = activeSendersByUser.get(row.user_id as string) ?? []
     list.push(row)
     activeSendersByUser.set(row.user_id as string, list)
+  }
+
+  type Capacity = {
+    first_remaining: number
+    followup_remaining: number
+    first_last_sent_at: string | null
+    followup_last_sent_at: string | null
+    sender_domain: string
+    domain_remaining: number
+  }
+  const capacityBySender = new Map<string, Capacity>()
+  const activeSenderIds = (sendersResult.data ?? []).map((row: any) => row.id as string)
+  if (activeSenderIds.length) {
+    const { data, error } = await supabase.rpc('get_sender_capacity_snapshot', { _sender_ids: activeSenderIds })
+    if (error) throw new Error(`sender capacity snapshot failed: ${error.message}`)
+    for (const row of data ?? []) {
+      capacityBySender.set(row.sender_id as string, {
+        first_remaining: Number(row.first_remaining ?? 0),
+        followup_remaining: Number(row.followup_remaining ?? 0),
+        first_last_sent_at: row.first_last_sent_at ?? null,
+        followup_last_sent_at: row.followup_last_sent_at ?? null,
+        sender_domain: String(row.sender_domain ?? ''),
+        domain_remaining: Number(row.domain_remaining ?? 0),
+      })
+    }
   }
 
   const dueEmails = Array.from(new Set(
@@ -380,47 +353,23 @@ Deno.serve(async (req) => {
   const errors: any[] = []
   const firstTouchCountCache = new Map<string, number>()
 
-  // Per-tick cache of domain usage for the current Stockholm day.
-  const domainSentToday = new Map<string, number>()
   // First touches and follow-ups use separate clocks so a follow-up backlog
   // cannot continually postpone new outreach from the same sender.
   const senderLastSentAt = new Map<string, number>()
-  const domainCounted = new Set<string>() // domains we've already initialised from DB
-
-  const domainCap = new Map<string, number>()
-
-  async function getDomainRemaining(domain: string): Promise<number> {
-    if (!domainCounted.has(domain)) {
-      // Fetch all sender ids for this domain (any user) — domain reputation is shared regardless of user
-      const { data: dSenders } = await supabase
-        .from('senders')
-        .select('id, from_email, daily_limit, followup_multiplier, warmup_enabled, warmup_started_at, warmup_target, is_active')
-        .ilike('from_email', `%@${domain}`)
-      const ids = (dSenders ?? []).map((s: any) => s.id)
-      const dynCap = (dSenders ?? [])
-        .filter((s: any) => s.is_active !== false)
-        .reduce((sum: number, sender: any) => sum + senderBaseQuota(sender) + senderFollowupQuota(sender), 0)
-      domainCap.set(domain, Math.min(PER_DOMAIN_DAILY_CAP, Math.max(1, dynCap)))
-      let used = 0
-      if (ids.length > 0) {
-        const startOfDay = startOfStockholmDayUtc()
-        const { count } = await supabase
-          .from('sent_emails')
-          .select('id', { count: 'exact', head: true })
-          .in('sender_id', ids)
-          .in('status', COUNTED_SEND_STATUSES)
-          .gte('sent_at', startOfDay.toISOString())
-        used = count ?? 0
-      }
-      domainSentToday.set(domain, used)
-      domainCounted.add(domain)
-    }
-    return Math.max(0, (domainCap.get(domain) ?? PER_DOMAIN_DAILY_CAP) - (domainSentToday.get(domain) ?? 0))
+  const capacityRemaining = (senderId: string, followup: boolean) => {
+    const snapshot = capacityBySender.get(senderId)
+    return snapshot ? (followup ? snapshot.followup_remaining : snapshot.first_remaining) : 0
   }
 
-
-  function bumpDomain(domain: string) {
-    domainSentToday.set(domain, (domainSentToday.get(domain) ?? 0) + 1)
+  function bumpCapacity(senderId: string, followup: boolean) {
+    const snapshot = capacityBySender.get(senderId)
+    if (!snapshot) return
+    if (followup) snapshot.followup_remaining = Math.max(0, snapshot.followup_remaining - 1)
+    else snapshot.first_remaining = Math.max(0, snapshot.first_remaining - 1)
+    snapshot.domain_remaining = Math.max(0, snapshot.domain_remaining - 1)
+    for (const other of capacityBySender.values()) {
+      if (other.sender_domain === snapshot.sender_domain) other.domain_remaining = snapshot.domain_remaining
+    }
   }
 
   // Per-invocation cache of sequence graphs — avoids re-reading nodes/edges
@@ -714,23 +663,21 @@ Deno.serve(async (req) => {
         // STICKY SENDER: if this enrollment already has an assigned sender from
         // a prior send, reuse it so the recipient sees the same From across the
         // first email and every follow-up (matches subject-based threading).
-        const isSenderEligible = async (sid: string): Promise<{ ok: boolean; reason?: string }> => {
+        const isSenderEligible = (sid: string): { ok: boolean; reason?: string } => {
           const match = verifiedActive.find((s: any) => s.id === sid)
           if (!match) return { ok: false, reason: 'sender no longer active or domain unverified' }
           const dom = (match.from_email as string).split('@')[1]
           if (allowedDomains.length > 0 && !allowedDomains.includes(dom)) {
             return { ok: false, reason: `assigned sender is not on ${domainLabel}` }
           }
-          const { data: rem } = await supabase.rpc('sender_capacity_remaining', { _sender_id: sid, _is_followup: isFollowupEnr })
-          if ((rem ?? 0) <= 0) return { ok: false, reason: isFollowupEnr ? 'assigned sender at follow-up daily cap' : 'assigned sender at daily cap' }
-          const domRem = await getDomainRemaining(dom)
-          if (domRem <= 0) return { ok: false, reason: `domain ${dom} at daily cap` }
+          if (capacityRemaining(sid, isFollowupEnr) <= 0) return { ok: false, reason: isFollowupEnr ? 'assigned sender at follow-up daily cap' : 'assigned sender at daily cap' }
+          if ((capacityBySender.get(sid)?.domain_remaining ?? 0) <= 0) return { ok: false, reason: `domain ${dom} at daily cap` }
 
           return { ok: true }
         }
 
         if (enr.assigned_sender_id) {
-          const check = await isSenderEligible(enr.assigned_sender_id)
+          const check = isSenderEligible(enr.assigned_sender_id)
           if (check.ok) {
             preSenderId = enr.assigned_sender_id
             console.log(`[enr ${enr.id}] reusing sticky sender ${preSenderId}`)
@@ -800,11 +747,8 @@ Deno.serve(async (req) => {
               candidates = filtered
             }
             for (const c of candidates.sort(() => Math.random() - 0.5)) {
-              const { data: rem } = await supabase.rpc('sender_capacity_remaining', { _sender_id: c.id, _is_followup: isFollowupEnr })
-              if ((rem ?? 0) <= 0) continue
-              const dom = (c.from_email as string).split('@')[1]
-              const domRem = await getDomainRemaining(dom)
-              if (domRem <= 0) continue
+              if (capacityRemaining(c.id, isFollowupEnr) <= 0) continue
+              if ((capacityBySender.get(c.id)?.domain_remaining ?? 0) <= 0) continue
               preSenderId = c.id; break
             }
           }
@@ -826,8 +770,7 @@ Deno.serve(async (req) => {
           continue
         }
         if (cfg.sender_strategy === 'specific' && !enr.assigned_sender_id) {
-          const { data: rem } = await supabase.rpc('sender_capacity_remaining', { _sender_id: preSenderId, _is_followup: isFollowupEnr })
-          if ((rem ?? 0) <= 0) {
+          if (capacityRemaining(preSenderId, isFollowupEnr) <= 0) {
             const tomorrow = nextStockholmMidnightUtc()
             const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
             await supabase.from('enrollments').update({
@@ -843,41 +786,19 @@ Deno.serve(async (req) => {
           }
         }
 
-        if (!insideSendWindow()) {
-          const resumeAt = nextSendWindowStartUtc()
-          await supabase.from('enrollments').update({
-            next_send_at: resumeAt.toISOString(),
-            status: 'active',
-            last_error: 'outside sending window (weekdays 09–16 Stockholm)',
-            error_at: nowIso,
-          }).eq('id', enr.id)
-          console.log(`[enr ${enr.id}] outside send window → wait until ${resumeAt.toISOString()}`)
-          continue
-        }
-
         const pacingKind = isFollowupEnr ? 'followup' : 'first_touch'
         const pacingKey = `${preSenderId}:${pacingKind}`
         {
-          const { data: remainingQuota } = await supabase.rpc('sender_capacity_remaining', {
-            _sender_id: preSenderId,
-            _is_followup: isFollowupEnr,
-          })
+          const remainingQuota = capacityRemaining(preSenderId, isFollowupEnr)
           const minutesLeft = minutesLeftInWindow()
           const spacing = Math.max(3, Math.min(25, Math.round(minutesLeft / Math.max(1, Number(remainingQuota ?? 1)))))
           const gapMinutes = spacing + Math.floor(Math.random() * 5)
 
           let lastAt = senderLastSentAt.get(pacingKey)
           if (lastAt === undefined) {
-            const { data: lastRow } = await supabase
-              .from('sent_emails')
-              .select('sent_at')
-              .eq('sender_id', preSenderId)
-              .eq('tracking_enabled', isFollowupEnr)
-              .in('status', COUNTED_SEND_STATUSES)
-              .order('sent_at', { ascending: false })
-              .limit(1)
-              .maybeSingle()
-            lastAt = lastRow?.sent_at ? new Date(lastRow.sent_at).getTime() : 0
+            const snapshot = capacityBySender.get(preSenderId)
+            const lastSent = isFollowupEnr ? snapshot?.followup_last_sent_at : snapshot?.first_last_sent_at
+            lastAt = lastSent ? new Date(lastSent).getTime() : 0
             senderLastSentAt.set(pacingKey, lastAt)
           }
 
@@ -926,6 +847,39 @@ Deno.serve(async (req) => {
           }
         }
 
+        // The in-memory snapshot makes selection cheap. This single transaction
+        // is the final authority immediately before sending and prevents two
+        // overlapping scheduler runs from consuming the same capacity.
+        const dailyCap = sequenceDailyCap(nodes ?? [])
+        const { data: reservationRows, error: reservationError } = await supabase.rpc('reserve_email_send', {
+          _sender_id: preSenderId,
+          _enrollment_id: enr.id,
+          _contact_id: enr.contact_id,
+          _user_id: enr.user_id,
+          _sequence_id: enr.sequence_id,
+          _is_followup: isFollowup,
+          _sequence_daily_cap: dailyCap,
+        })
+        if (reservationError) throw new Error(`capacity reservation failed: ${reservationError.message}`)
+        const reservation = reservationRows?.[0]
+        if (!reservation?.reservation_id) {
+          const tomorrow = nextStockholmMidnightUtc()
+          const upstreamSched = findUpstreamScheduleId(nodes ?? [], edges ?? [], currentNode.id)
+          const terminal = reservation?.reason === 'sequence_complete'
+          await supabase.from('enrollments').update(terminal ? {
+            status: 'completed', current_step: 4, next_send_at: null, deferred_at: null,
+            attempt_count: 0, last_error: null, error_at: null,
+          } : {
+            current_node_id: upstreamSched ?? enr.current_node_id,
+            next_send_at: tomorrow.toISOString(), deferred_at: nowIso,
+            status: reservation?.reason === 'already_sent_today' ? 'active' : 'waiting_capacity',
+            last_error: `send deferred: ${reservation?.reason ?? 'capacity unavailable'}`,
+            error_at: nowIso,
+          }).eq('id', enr.id)
+          continue
+        }
+        const reservationId = reservation.reservation_id as string
+
         const r = await supabase.functions.invoke('send-cold-email', {
           body: {
             user_id: enr.user_id,
@@ -945,10 +899,12 @@ Deno.serve(async (req) => {
             model: cfg.model,
             subject_override: subjectOverride,
             is_followup: isFollowup,
+            reservation_id: reservationId,
           },
         })
         const skipped = (r.data as any)?.skipped
         if (skipped) {
+          await supabase.from('email_send_reservations').delete().eq('id', reservationId).is('consumed_at', null)
           if (skipped === 'sequence_limit_reached') {
             await supabase.from('enrollments').update({
               status: 'completed',
@@ -996,8 +952,28 @@ Deno.serve(async (req) => {
             console.warn(`[enr ${enr.id}] send skipped: invalid_demo_url → deferred until ${deferredTo.toISOString()}`)
             continue
           }
+
+          if (skipped === 'suppressed' || skipped === 'do_not_contact') {
+            await supabase.from('enrollments').update({
+              status: 'stopped',
+              next_send_at: null,
+              deferred_at: null,
+              last_error: skipped,
+              error_at: nowIso,
+            }).eq('id', enr.id)
+            continue
+          }
+
+          // Unknown skip responses are never counted as a successful send.
+          await supabase.from('enrollments').update({
+            next_send_at: nextSendWindowStartUtc().toISOString(),
+            last_error: `send skipped: ${skipped}`,
+            error_at: nowIso,
+          }).eq('id', enr.id)
+          continue
         }
         if (r.error || (r.data as any)?.error) {
+          await supabase.from('email_send_reservations').delete().eq('id', reservationId).is('consumed_at', null)
           const msg = (r.data as any)?.error || r.error?.message || 'unknown send error'
           const nextAttempt = (enr.attempt_count ?? 0) + 1
           console.error(`[enr ${enr.id}] send-cold-email failed (attempt ${nextAttempt}/${MAX_ATTEMPTS}): ${msg}`)
@@ -1024,18 +1000,10 @@ Deno.serve(async (req) => {
         }
         sent++
         senderLastSentAt.set(pacingKey, Date.now())
-        // Bump per-domain in-memory counter so subsequent enrollments in this same
-        // tick respect PER_DOMAIN_DAILY_CAP without re-querying the DB.
-        {
-          const senderRow = (anyActive ?? []).find((s: any) => s.id === preSenderId)
-          const dom = senderRow ? (senderRow.from_email as string).split('@')[1] : null
-          if (dom) bumpDomain(dom)
-        }
+        bumpCapacity(preSenderId, isFollowup)
         if (!isFollowup) {
-          firstTouchCountCache.set(
-            enr.sequence_id,
-            (firstTouchCountCache.get(enr.sequence_id) ?? 0) + 1,
-          )
+          const cachedCount = firstTouchCountCache.get(enr.sequence_id)
+          if (cachedCount !== undefined) firstTouchCountCache.set(enr.sequence_id, cachedCount + 1)
         }
         console.log(`[enr ${enr.id}] email sent (sender=${preSenderId})`)
 

@@ -187,58 +187,39 @@ async function getCoverage(supabase: any, userId: string, language: Language, se
   const stockMultiplier = Math.max(1, Math.min(10, Number(settings.lead_stock_multiplier) || LEAD_STOCK_MULTIPLIER))
   const tolerance = Math.max(0, Math.min(20, Number(settings.stock_tolerance) || STOCK_TOLERANCE))
   const backlogMultiplier = Math.max(1, Math.min(6, Number(settings.backlog_multiplier) || BACKLOG_MULTIPLIER))
-  // Match the sourcing intake rule: a lead only has usable outbound value when
-  // it has both a website to audit/build from and an email to contact. This is
-  // deliberately repeated at count time so a future manual or legacy import
-  // cannot silently inflate the stock target.
-  const contactableLeads = (statuses: string[], onlyUnsentApproved = false) => {
-    let query = supabase.from('site_leads').select('id', { count: 'exact', head: true })
-      .eq('user_id', userId).eq('language', language)
-      .not('email', 'is', null).neq('email', '')
-      .not('website', 'is', null).neq('website', '')
-      .in('status', statuses)
-    if (onlyUnsentApproved) query = query.is('last_email_sent_at', null)
-    return query
-  }
-  const stockQueries = await Promise.all([
-    // These statuses all represent leads which can still become an outbound
-    // first email. They are the usable stock, not merely raw imported rows.
-    contactableLeads(['pending_audit', 'auditing', 'awaiting_audit_approval', 'needs_site', 'generating', 'awaiting_approval']),
-    contactableLeads(['approved', 'auto_approved'], true),
-    contactableLeads(['pending_audit', 'auditing']),
-    contactableLeads(['awaiting_audit_approval', 'awaiting_approval', 'needs_triage']),
-    contactableLeads(['needs_site', 'generating']),
-  ])
-  const queryFailure = stockQueries.find((result: any) => result.error)
-  if (queryFailure?.error) throw queryFailure.error
-  const [
-    { count: pipelineCount },
-    { count: unsentApprovedCount },
-    { count: auditBacklog },
-    { count: reviewBacklog },
-    { count: buildBacklog },
-  ] = stockQueries as any[]
+  // One grouped scan replaces five exact-count requests over the same lead set.
+  const { data: stockRows, error: stockError } = await supabase.rpc('get_lead_stock_counts', {
+    _user_id: userId,
+    _language: language,
+  })
+  if (stockError) throw stockError
+  const stockCounts = stockRows?.[0] ?? {}
+  const pipelineCount = Number(stockCounts.pipeline_count ?? 0)
+  const unsentApprovedCount = Number(stockCounts.unsent_approved_count ?? 0)
+  const auditBacklog = Number(stockCounts.audit_backlog ?? 0)
+  const reviewBacklog = Number(stockCounts.review_backlog ?? 0)
+  const buildBacklog = Number(stockCounts.build_backlog ?? 0)
   const daily = Math.max(1, dailyCapacity || 10)
   const target = daily * stockMultiplier
-  const stock = (pipelineCount ?? 0) + (unsentApprovedCount ?? 0)
+  const stock = pipelineCount + unsentApprovedCount
   const backlogCap = Math.max(MIN_BACKLOG_CAP, daily * backlogMultiplier)
   const upperStockLimit = target + tolerance
   const remainingDiscoveryCapacity = Math.max(0, upperStockLimit - stock)
   let reason = 'stock target reached'
-  if ((auditBacklog ?? 0) >= backlogCap) reason = `audit backlog is ${auditBacklog}/${backlogCap}`
-  else if ((reviewBacklog ?? 0) >= backlogCap) reason = `approval backlog is ${reviewBacklog}/${backlogCap}`
-  else if ((buildBacklog ?? 0) >= backlogCap) reason = `build backlog is ${buildBacklog}/${backlogCap}`
+  if (auditBacklog >= backlogCap) reason = `audit backlog is ${auditBacklog}/${backlogCap}`
+  else if (reviewBacklog >= backlogCap) reason = `approval backlog is ${reviewBacklog}/${backlogCap}`
+  else if (buildBacklog >= backlogCap) reason = `build backlog is ${buildBacklog}/${backlogCap}`
   else if (stock < target - tolerance) reason = 'needs sourcing'
   const shouldSource = stock < target - tolerance
-    && (auditBacklog ?? 0) < backlogCap
-    && (reviewBacklog ?? 0) < backlogCap
-    && (buildBacklog ?? 0) < backlogCap
+    && auditBacklog < backlogCap
+    && reviewBacklog < backlogCap
+    && buildBacklog < backlogCap
     && remainingDiscoveryCapacity > 0
   return {
     language, daily_capacity: dailyCapacity, stock, target, tolerance,
     upper_stock_limit: upperStockLimit, remaining_discovery_capacity: remainingDiscoveryCapacity,
-    audit_backlog: auditBacklog ?? 0, review_backlog: reviewBacklog ?? 0,
-    build_backlog: buildBacklog ?? 0, backlog_cap: backlogCap, should_source: shouldSource, reason,
+    audit_backlog: auditBacklog, review_backlog: reviewBacklog,
+    build_backlog: buildBacklog, backlog_cap: backlogCap, should_source: shouldSource, reason,
   }
 }
 

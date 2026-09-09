@@ -136,16 +136,13 @@ export default function SiteLeads() {
   const [scrapeProvider, setScrapeProvider] = useState<"firecrawl" | "botlio_scraper">("firecrawl");
 
   const loadCounts = async () => {
-    const totalQuery = supabase.from("site_leads").select("id", { count: "exact", head: true });
-    const statusQueries = STATUS_OPTIONS.map((status) =>
-      supabase.from("site_leads").select("id", { count: "exact", head: true }).eq("status", status)
-    );
-    const [totalRes, ...statusRes] = await Promise.all([totalQuery, ...statusQueries]);
-    setTotalCount(totalRes.count ?? 0);
+    const { data, error } = await (supabase as any).rpc("get_site_lead_counts", { p_language: null });
+    if (error) throw error;
     const nextCounts: Record<string, number> = {};
-    STATUS_OPTIONS.forEach((status, idx) => {
-      nextCounts[status] = statusRes[idx].count ?? 0;
-    });
+    for (const row of data ?? []) {
+      const count = Number(row.count ?? 0);
+      nextCounts[row.status] = (nextCounts[row.status] ?? 0) + count;
+    }
     setCounts(nextCounts);
   };
 

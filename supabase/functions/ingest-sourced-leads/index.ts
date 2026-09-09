@@ -22,99 +22,45 @@ Deno.serve(async (req) => {
     if (jobError || !job) return json({ error: 'lead sourcing job not found' }, 404)
     if (['completed', 'failed', 'cancelled'].includes(job.state)) return json({ error: 'job is closed' }, 409)
 
-    let imported = 0, duplicates = 0, rejected = 0, failed = 0
-    for (const row of rows) {
+    const prepared = rows.map((row) => {
       const lead = prepareMapsLead(row)
-      if (!lead || !isContactableLead(lead)) {
-        rejected++
-        await recordResult(supabase, jobId, lead, 'rejected', 'missing a usable website or email')
-        continue
+      return {
+        contactable: Boolean(lead && isContactableLead(lead)),
+        place_id: lead?.placeId ?? null,
+        company_name: lead?.companyName ?? String(row.title ?? row.name ?? '').slice(0, 800),
+        normalized_name: lead?.normalizedName ?? '',
+        website: lead?.website ?? null,
+        email: lead?.email ?? null,
+        domain: lead?.domain ?? null,
+        phone: lead?.phone ?? null,
+        address: lead?.address ?? null,
+        category: lead?.category ?? null,
+        rating: lead?.rating ?? null,
+        reviews_count: lead?.reviewsCount ?? null,
+        niche: lead?.niche ?? 'other',
+        snapshot: lead?.snapshot ?? {},
       }
-      // The unique indexes below are the final race-safe barrier. Check the
-      // practical identifiers first as well: older CSV leads may not have a
-      // Google place ID, or may have been imported before domain normalisation
-      // existed. Never create a second outreach candidate for the same inbox.
-      const existing = await findExistingLead(supabase, job.user_id, lead)
-      if (existing) {
-        duplicates++
-        await recordResult(supabase, jobId, lead, 'duplicate', 'matches an existing lead')
-        continue
-      }
-      const { data: inserted, error } = await supabase.from('site_leads').insert({
-        user_id: job.user_id,
-        company_name: lead.companyName,
-        company_name_normalized: lead.normalizedName,
-        domain: lead.domain,
-        domain_normalized: lead.domain,
-        website: lead.website,
-        email: lead.email,
-        phone: lead.phone,
-        address: lead.address,
-        category: lead.category,
-        rating: lead.rating,
-        reviews_count: lead.reviewsCount,
-        language: job.language,
-        niche: lead.niche,
-        status: 'pending_audit',
-        source_provider: 'google_maps',
-        source_place_id: lead.placeId,
-        source_job_id: jobId,
-        source_market_id: job.market_id,
-      }).select('id').single()
-      if (error) {
-        if (error.code === '23505') {
-          duplicates++
-          await recordResult(supabase, jobId, lead, 'duplicate', 'already imported')
-        } else {
-          failed++
-          await recordResult(supabase, jobId, lead, 'failed', error.message.slice(0, 400))
-        }
-        continue
-      }
-      imported++
-      await recordResult(supabase, jobId, lead, 'imported', null, inserted?.id ?? null)
-    }
+    })
+    const { data: batchRows, error: batchError } = await supabase.rpc('ingest_sourced_leads_batch', {
+      _job_id: jobId,
+      _user_id: job.user_id,
+      _language: job.language,
+      _rows: prepared,
+    })
+    if (batchError) throw new Error(`batch import failed: ${batchError.message}`)
+    const totals = batchRows?.[0] ?? { imported: 0, duplicates: 0, rejected: 0, failed: 0 }
     await supabase.from('lead_scrape_jobs').update({ state: 'importing' }).eq('id', jobId)
-    return json({ ok: true, imported, duplicates, rejected, failed })
+    return json({
+      ok: true,
+      imported: Number(totals.imported ?? 0),
+      duplicates: Number(totals.duplicates ?? 0),
+      rejected: Number(totals.rejected ?? 0),
+      failed: Number(totals.failed ?? 0),
+    })
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : String(error) }, 500)
   }
 })
-
-async function findExistingLead(supabase: any, userId: string, lead: NonNullable<ReturnType<typeof prepareMapsLead>>): Promise<boolean> {
-  const checks: Array<PromiseLike<any>> = []
-  const forUser = () => supabase.from('site_leads').select('id').eq('user_id', userId).limit(1)
-
-  if (lead.placeId) {
-    checks.push(forUser().eq('source_provider', 'google_maps').eq('source_place_id', lead.placeId))
-  }
-  if (lead.domain) {
-    checks.push(forUser().eq('company_name_normalized', lead.normalizedName).eq('domain_normalized', lead.domain))
-  }
-  if (lead.email) {
-    checks.push(forUser().eq('email', lead.email))
-  }
-  if (lead.website) {
-    checks.push(forUser().eq('website', lead.website))
-  }
-
-  const results = await Promise.all(checks)
-  const failure = results.find((result) => result.error)
-  if (failure?.error) throw new Error(`duplicate check failed: ${failure.error.message}`)
-  return results.some((result) => Boolean(result.data?.length))
-}
-
-async function recordResult(supabase: any, jobId: string, lead: ReturnType<typeof prepareMapsLead>, outcome: string, reason: string | null, siteLeadId: string | null = null) {
-  if (!lead) return
-  const { error } = await supabase.from('lead_scrape_results').insert({
-    job_id: jobId, place_id: lead.placeId, company_name: lead.companyName, website: lead.website,
-    email: lead.email, outcome, rejection_reason: reason, site_lead_id: siteLeadId, source_snapshot: lead.snapshot,
-  })
-  // A retried chunk can legitimately attempt to write the same Google place.
-  // Its first outcome is already retained; the site_leads unique indexes still
-  // protect the actual lead record.
-  if (error && error.code !== '23505') console.error('lead scrape result write failed', error)
-}
 
 function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } })

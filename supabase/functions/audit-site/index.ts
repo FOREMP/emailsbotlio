@@ -29,7 +29,7 @@ Deno.serve(async (req) => {
 
     const { data: site, error: siteErr } = await supabase
       .from('generated_sites')
-      .select('id, contact_id, source_url, language')
+      .select('id, contact_id, source_url, language, site_lead_id')
       .eq('id', generated_site_id)
       .single()
     if (siteErr || !site) return json({ error: 'site not found' }, 404)
@@ -99,6 +99,16 @@ Deno.serve(async (req) => {
       error_message: null,
     }).eq('id', generated_site_id)
     if (updateError) throw new Error(`save audit: ${updateError.message}`)
+    if (site.site_lead_id && result.scrapeCache) {
+      const { error: cacheError } = await supabase.from('site_scrape_cache').upsert({
+        site_lead_id: site.site_lead_id,
+        url: targetUrl,
+        payload: result.scrapeCache,
+        created_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 3 * 86_400_000).toISOString(),
+      }, { onConflict: 'site_lead_id' })
+      if (cacheError) console.warn(`audit scrape cache unavailable: ${cacheError.message}`)
+    }
 
     return json({
       score: result.score,

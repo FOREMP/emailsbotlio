@@ -42,6 +42,8 @@ export interface AuditResult {
   secondProviderUsed: string | null
   secondModelUsed: string | null
   secondOpinionError: string | null
+  /** Short-lived compact scrape reused by generation to avoid a second homepage capture. */
+  scrapeCache: Record<string, unknown> | null
 }
 
 export type WebsitePresence =
@@ -59,6 +61,7 @@ export interface ScrapeResult {
   blocked: boolean
   providerUsed: string
   fallbackFrom: string | null
+  cachePayload: Record<string, unknown> | null
 }
 
 export function guardedAuditScore(
@@ -92,6 +95,7 @@ export async function scrapeForAudit(url: string, provider: ScrapeProvider): Pro
   const empty: ScrapeResult = {
     markdown: '', title: '', description: '', screenshot: null, blocked: true,
     providerUsed: provider, fallbackFrom: null,
+    cachePayload: null,
   }
   if (!url) return empty
   const payload: ScraperPayload = await scrapeUrl(provider, url, { screenshot: true })
@@ -105,6 +109,20 @@ export async function scrapeForAudit(url: string, provider: ScrapeProvider): Pro
     blocked: false,
     providerUsed: payload.provider_used ?? provider,
     fallbackFrom: payload.fallback_from ?? null,
+    cachePayload: {
+      markdown: String(payload.markdown ?? '').slice(0, 12_000),
+      summary: String(payload.summary ?? '').slice(0, 2_000),
+      screenshot: typeof payload.screenshot === 'string' ? payload.screenshot.slice(0, 2_000) : null,
+      metadata: {
+        title: String(payload.metadata?.title ?? '').slice(0, 500),
+        description: String(payload.metadata?.description ?? '').slice(0, 1_000),
+        statusCode: payload.metadata?.statusCode ?? 200,
+      },
+      links: Array.isArray(payload.links) ? payload.links.filter((x): x is string => typeof x === 'string').slice(0, 60) : [],
+      branding: payload.branding ?? null,
+      provider_used: payload.provider_used ?? provider,
+      fallback_from: payload.fallback_from ?? null,
+    },
   }
 }
 
@@ -359,6 +377,7 @@ export async function auditWebsite(
       secondProviderUsed: null,
       secondModelUsed: null,
       secondOpinionError: null,
+      scrapeCache: scraped.cachePayload,
     }
   }
 
@@ -421,5 +440,6 @@ export async function auditWebsite(
     secondProviderUsed: second?.provider ?? null,
     secondModelUsed: second?.model ?? null,
     secondOpinionError,
+    scrapeCache: scraped.cachePayload,
   }
 }

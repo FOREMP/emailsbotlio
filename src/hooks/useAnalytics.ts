@@ -58,28 +58,18 @@ export const useSentEmails = (filters: AnalyticsFilters) => {
     queryFn: async () => {
       let q = supabase
         .from("sent_emails")
-        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject, tracking_enabled, tracking_route, tracking_url")
+        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject, tracking_enabled, tracking_route, tracking_url, enrollments!inner(sequence_id)")
         .order("sent_at", { ascending: false })
         .limit(2000);
       const since = rangeToSince(filters.range);
       if (since) q = q.gte("sent_at", since.toISOString());
       if (filters.senderId !== "all") q = q.eq("sender_id", filters.senderId);
+      if (filters.sequenceId !== "all") q = q.eq("enrollments.sequence_id", filters.sequenceId);
       const { data, error } = await q;
       if (error) throw error;
-      let rows = (data ?? []) as SentEmailRow[];
-      if (filters.sequenceId !== "all") {
-        const enrollmentIds = await getSequenceEnrollmentIds(filters.sequenceId);
-        const set = new Set(enrollmentIds);
-        rows = rows.filter((r) => r.enrollment_id && set.has(r.enrollment_id));
-      }
-      return rows;
+      return (data ?? []).map(({ enrollments: _enrollments, ...row }: any) => row) as SentEmailRow[];
     },
   });
-};
-
-const getSequenceEnrollmentIds = async (sequenceId: string) => {
-  const { data } = await supabase.from("enrollments").select("id").eq("sequence_id", sequenceId);
-  return (data ?? []).map((r) => r.id);
 };
 
 export const useSequences = () =>

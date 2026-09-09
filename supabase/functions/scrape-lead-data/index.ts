@@ -70,7 +70,29 @@ Deno.serve(async (req) => {
     let rootScrape: any = null
     let usedUrl = site.source_url
 
-    for (const candidate of candidates) {
+    // Auditing already captured the homepage and screenshot. Reuse that recent
+    // evidence, then fetch only missing internal pages below.
+    if (site.site_lead_id) {
+      const { data: cached } = await supabase.from('site_scrape_cache')
+        .select('url, payload, expires_at')
+        .eq('site_lead_id', site.site_lead_id)
+        .gt('expires_at', new Date().toISOString())
+        .maybeSingle()
+      if (cached?.payload && String(cached.payload.markdown ?? '').trim().length > 300) {
+        rootScrape = cached.payload
+        usedUrl = cached.url || usedUrl
+        attempts.push({
+          url: usedUrl,
+          status: 200,
+          apiStatus: 200,
+          provider: (cached.payload.provider_used ?? provider) as 'firecrawl' | 'botlio_scraper',
+          title: String(cached.payload.metadata?.title ?? '').slice(0, 60),
+          error: '',
+        })
+      }
+    }
+
+    for (const candidate of rootScrape ? [] : candidates) {
       const { data, status, apiStatus, provider: providerUsed, title, error } = await scrapeOne(provider, candidate, true)
       attempts.push({ url: candidate, status, apiStatus, provider: providerUsed, title: (title || '').slice(0, 60), error })
       const badTitle = /(400|401|403|404|500|502|503|504)\s*(bad request|unauthorized|forbidden|not found|error|gateway|unavailable)|access denied|cloudflare|attention required/i
@@ -166,6 +188,10 @@ Deno.serve(async (req) => {
       status: 'scraped',
       scraped_content: scraped,
     }).eq('id', generated_site_id).eq('status', 'scraping')
+
+    if (site.site_lead_id) {
+      await supabase.from('site_scrape_cache').delete().eq('site_lead_id', site.site_lead_id)
+    }
 
     return json({
       ok: true,
