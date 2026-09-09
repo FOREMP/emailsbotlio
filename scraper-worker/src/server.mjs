@@ -123,7 +123,11 @@ function stripHtml(value = '') { return decode(value.replace(/<script\b[^>]*>[\s
 function attribute(html, name) { return html.match(new RegExp(`<meta[^>]+(?:name|property)=["']${name}["'][^>]+content=["']([^"']*)["']|<meta[^>]+content=["']([^"']*)["'][^>]+(?:name|property)=["']${name}["']`, 'i'))?.slice(1).find(Boolean) || '' }
 function unique(items, limit = 200) { return [...new Set(items.filter(Boolean))].slice(0, limit) }
 
-function analyseHtml(html, baseUrl, status = 200) {
+function extractColours(value) {
+  return unique([...String(value || '').matchAll(/#[0-9a-fA-F]{3,8}\b|rgba?\([^)]{3,80}\)/g)].map((m) => m[0].toLowerCase()), 32)
+}
+
+function analyseHtml(html, baseUrl, status = 200, renderedColours = []) {
   const title = decode(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '')
   const description = decode(attribute(html, 'description') || attribute(html, 'og:description'))
   const main = html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/i)?.[1] || html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1] || html
@@ -136,7 +140,9 @@ function analyseHtml(html, baseUrl, status = 200) {
   for (const match of html.matchAll(/<(?:img|source)\b[^>]*(?:src|srcset)=["']([^"'\s,]+)[^"']*["']/gi)) {
     try { images.push(new URL(match[1], baseUrl).toString()) } catch { /* ignore */ }
   }
-  const colors = unique([...html.matchAll(/#[0-9a-fA-F]{6}\b/g)].map((m) => m[0].toLowerCase()), 12)
+  // Include short hex/RGB values and, when a browser was used, computed visible
+  // colours. External stylesheets otherwise never appear in page.content().
+  const colors = unique([...extractColours(html), ...renderedColours.map((c) => String(c).toLowerCase())], 32)
   const fonts = unique([...html.matchAll(/font-family\s*:\s*([^;}]+)/gi)].map((m) => stripHtml(m[1]).replace(/["']/g, '').split(',')[0].trim()), 8)
   const markdown = `# ${title || 'Website'}\n\n${description ? `${description}\n\n` : ''}${text}`.trim()
   return { metadata: { title, description, statusCode: status }, markdown, links: unique(links), summary: text.slice(0, 500), branding: { colors, fonts, images: unique(images, 20) } }
@@ -162,7 +168,20 @@ async function browserScrape(rawUrl, screenshot) {
     await page.waitForTimeout(900)
     const html = await page.content()
     const finalUrl = page.url()
-    const data = analyseHtml(html, finalUrl, 200)
+    const renderedColours = await page.evaluate(() => {
+      const values = []
+      const add = (value) => { if (typeof value === 'string' && value && value !== 'transparent' && value !== 'rgba(0, 0, 0, 0)') values.push(value) }
+      const root = getComputedStyle(document.documentElement)
+      for (const name of Array.from(document.documentElement.style)) {
+        if (name.startsWith('--') && /(color|primary|secondary|accent|brand|background|surface|text|link|button)/i.test(name)) add(root.getPropertyValue(name).trim())
+      }
+      for (const element of Array.from(document.querySelectorAll('body, header, main, footer, a, button, [class*="btn" i], [class*="hero" i]')).slice(0, 160)) {
+        const style = getComputedStyle(element)
+        add(style.color); add(style.backgroundColor); add(style.borderTopColor)
+      }
+      return [...new Set(values)].slice(0, 80)
+    })
+    const data = analyseHtml(html, finalUrl, 200, renderedColours)
     let screenshotUrl = null
     if (screenshot) {
       if (!publicBaseUrl) throw new Error('PUBLIC_BASE_URL is required for screenshots')

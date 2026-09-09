@@ -14,6 +14,8 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 export interface AuditResult {
   score: number
   reason: string
+  /** Whether the lead has an owned website, not merely a booking/profile page. */
+  websitePresence: WebsitePresence
   /** structural + cosmetic concatenated — kept for existing consumers. */
   weaknesses: string[]
   /** Real deficiencies that make an owner want a new site. */
@@ -41,6 +43,12 @@ export interface AuditResult {
   secondModelUsed: string | null
   secondOpinionError: string | null
 }
+
+export type WebsitePresence =
+  | 'owned_site'
+  | 'third_party_booking_or_profile'
+  | 'no_functional_website'
+  | 'uncertain'
 
 
 export interface ScrapeResult {
@@ -114,6 +122,13 @@ const SYSTEM_PROMPT = [
   '2. SCRAPAD TEXT visar faktiska tjänster, kontaktvägar, företagsidentitet och om innehållet är komplett.',
   'Påstå aldrig att hela sajten saknar innehåll bara för att textutdraget är kort eller blockerat av cookie-banner.',
   '',
+  'Klassificera också "website_presence" strikt utifrån bevisen:',
+  '- "owned_site" = företaget har en egen, faktisk hemsida, även om den är dålig eller gammal.',
+  '- "third_party_booking_or_profile" = länken är bara en bokningssida, katalog/profil, social profil eller marknadsplats och inte företagets egen hemsida.',
+  '- "no_functional_website" = det finns ingen fungerande företagshemsida alls.',
+  '- "uncertain" = underlaget räcker inte för att avgöra. Gissa aldrig.',
+  'En egen sajt med en bokningswidget är fortfarande "owned_site".',
+  '',
   'Webbplatskvalitet 1-10:',
   '  1    = ingen riktig sajt: parkerad domän, trasig sida eller bara tredjepartsprofil.',
   '  2-3  = mycket gammal eller vanskött: trasiga bilder/länkar, fel företagsnamn,',
@@ -146,13 +161,14 @@ const SYSTEM_PROMPT = [
   '- Bedöm ENDAST det du faktiskt ser eller läser. Spekulera inte.',
   '',
   'Svara ENDAST med strikt JSON:',
-  '{"score": <heltal 1-10>, "confidence": "high|medium|low", "reason": "<max 200 tecken, konkret evidens på svenska>", "structural": ["<riktig brist>"], "cosmetic": ["<putsdetalj>"]}',
+  '{"score": <heltal 1-10>, "confidence": "high|medium|low", "website_presence": "owned_site|third_party_booking_or_profile|no_functional_website|uncertain", "reason": "<max 200 tecken, konkret evidens på svenska>", "structural": ["<riktig brist>"], "cosmetic": ["<putsdetalj>"]}',
   'Båda listorna får vara tomma. Punkterna ska vara på svenska, konkreta och användbara som argument i ett kallmail.',
 ].join('\n')
 
 type AuditJudgment = {
   score: number
   confidence: 'high' | 'medium' | 'low'
+  websitePresence: WebsitePresence
   reason: string
   structural: string[]
   cosmetic: string[]
@@ -178,6 +194,7 @@ function parseJudgment(data: unknown, provider: string, model: string, hasScreen
   let parsed: {
     score?: unknown
     confidence?: unknown
+    website_presence?: unknown
     reason?: unknown
     weaknesses?: unknown
     structural?: unknown
@@ -211,10 +228,18 @@ function parseJudgment(data: unknown, provider: string, model: string, hasScreen
     : rawConfidence === 'high' || rawConfidence === 'low'
       ? rawConfidence
       : 'medium'
+  const rawPresence = String(parsed.website_presence ?? '').toLowerCase()
+  const websitePresence: WebsitePresence = rawPresence === 'owned_site'
+    || rawPresence === 'third_party_booking_or_profile'
+    || rawPresence === 'no_functional_website'
+    || rawPresence === 'uncertain'
+    ? rawPresence
+    : 'uncertain'
 
   return {
     score,
     confidence,
+    websitePresence,
     reason: String(parsed.reason ?? '').slice(0, 500),
     structural,
     cosmetic,
@@ -314,6 +339,7 @@ export async function auditWebsite(
       reason: language === 'en'
         ? 'The site returned no reliable visual or text evidence and requires manual review.'
         : 'Sajten gav inget tillförlitligt visuellt eller textbaserat underlag och kräver manuell kontroll.',
+      websitePresence: 'uncertain',
       weaknesses: noSiteIssues,
       structural: noSiteIssues,
       cosmetic: [],
@@ -375,6 +401,7 @@ export async function auditWebsite(
   return {
     score: chosen.score,
     reason: chosen.reason,
+    websitePresence: chosen.websitePresence,
     weaknesses: [...chosen.structural, ...chosen.cosmetic].slice(0, 6),
     structural: chosen.structural,
     cosmetic: chosen.cosmetic,

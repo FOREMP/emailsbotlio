@@ -8,7 +8,19 @@ export type ScraperPayload = {
   markdown?: string
   links?: string[]
   summary?: string
-  branding?: { colors?: string[]; fonts?: string[]; images?: string[] } | null
+  // Firecrawl can return semantic colour roles while the self-hosted scraper
+  // returns a flat list. Keep the provider response intact so the site builder
+  // can normalize either form instead of losing brand information at the edge.
+  branding?: {
+    colors?: string[] | Record<string, unknown>
+    fonts?: string[] | Array<{ family?: string }>
+    images?: string[]
+    components?: Record<string, unknown>
+    styles?: Record<string, unknown>
+    theme?: Record<string, unknown>
+    colorScheme?: string
+    [key: string]: unknown
+  } | null
   screenshot?: string | null
   source_url_used?: string
   provider_used?: ScrapeProvider

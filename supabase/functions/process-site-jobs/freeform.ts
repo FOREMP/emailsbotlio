@@ -1643,16 +1643,19 @@ function palette(ctx: FreeformCtx) {
   const input = ctx.brandPalette || {}
   const bg = color(input.background, salon ? '#f8f1eb' : '#0a0e1a')
   const primary = color(input.primary, salon ? '#8f5563' : '#f97316')
+  const accent = color(input.accent, salon ? '#d7b98d' : '#f59e0b')
   const light = lum(bg) > .56
   return {
     primary,
     secondary: color(input.secondary, salon ? '#bd9075' : '#0ea5e9'),
-    accent: color(input.accent, salon ? '#d7b98d' : '#f59e0b'),
+    accent,
     background: bg,
     surface: color(input.surface, salon ? '#fffaf6' : '#131a2b'),
     text: readable(bg, color(input.textPrimary, light ? '#291f20' : '#f1f5f9'), light ? '#241b1d' : '#ffffff'),
     muted: readable(bg, color(input.textSecondary, light ? '#665756' : '#cbd5e1'), light ? '#5f5150' : '#d8d0ca'),
-    onPrimary: contrast(primary, '#fff') >= contrast(primary, '#241b1d') ? '#fff' : '#241b1d',
+    // The main CTA may be a primary→accent gradient. Select one label colour
+    // that remains readable on both halves rather than only testing primary.
+    onPrimary: readableAcross([primary, accent], color(input.onPrimary, '#fff'), light ? '#241b1d' : '#fff'),
     border: light ? 'rgba(54,42,38,.13)' : 'rgba(255,255,255,.13)',
     shadow: light ? 'rgba(70,50,43,.14)' : 'rgba(0,0,0,.34)',
     glow: light ? 'rgba(215,185,141,.34)' : 'rgba(249,115,22,.18)',
@@ -1660,6 +1663,7 @@ function palette(ctx: FreeformCtx) {
 }
 function color(v: string, f: string): string { const x = String(v || '').trim(); return /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(x) || /^rgb(a)?\([^)]+\)$/i.test(x) ? x : f }
 function readable(bg: string, pref: string, fallback: string): string { return contrast(bg, pref) >= 4.5 ? pref : contrast(bg, fallback) >= 4.5 ? fallback : contrast(bg, '#111') >= contrast(bg, '#fff') ? '#111' : '#fff' }
+function readableAcross(backgrounds: string[], preferred: string, fallback: string): string { const worst = (candidate: string) => Math.min(...backgrounds.map((bg) => contrast(bg, candidate))); if (worst(preferred) >= 4.5) return preferred; if (worst(fallback) >= 4.5) return fallback; return worst('#111') >= worst('#fff') ? '#111' : '#fff' }
 function contrast(a: string, b: string): number { const A = lum(a), B = lum(b), l = Math.max(A, B), d = Math.min(A, B); return (l + .05) / (d + .05) }
 function lum(c: string): number { const r = rgb(c); if (!r) return 0; const a = [r.r, r.g, r.b].map((v) => { const s = v / 255; return s <= .03928 ? s / 12.92 : ((s + .055) / 1.055) ** 2.4 }); return .2126 * a[0] + .7152 * a[1] + .0722 * a[2] }
 function rgb(c: string): { r: number; g: number; b: number } | null { const x = String(c || '').trim().toLowerCase(); if (/^#[0-9a-f]{3}$/i.test(x)) return { r: parseInt(x[1] + x[1], 16), g: parseInt(x[2] + x[2], 16), b: parseInt(x[3] + x[3], 16) }; if (/^#[0-9a-f]{6}$/i.test(x)) return { r: parseInt(x.slice(1, 3), 16), g: parseInt(x.slice(3, 5), 16), b: parseInt(x.slice(5, 7), 16) }; const m = x.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/); return m ? { r: +m[1], g: +m[2], b: +m[3] } : null }

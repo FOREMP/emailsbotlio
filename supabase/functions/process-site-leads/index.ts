@@ -624,7 +624,7 @@ async function syncAutoSendLead(
 // ---------------------------------------------------------------------------
 async function auditOne(
   supabase: ReturnType<typeof createClient>,
-  row: { id: string; website: string; company_name: string; language?: string | null },
+  row: { id: string; website: string; company_name: string; email?: string | null; language?: string | null },
 ) {
   const scrapeProvider = await selectedScrapeProvider(supabase)
   // Vercel is unrelated to auditing and must never block it. AI routing has
@@ -643,10 +643,19 @@ async function auditOne(
       supabase,
       scrapeProvider,
     )
+    // A confirmed booking/profile-only presence is a stronger signal than
+    // the score: it has no owned site to preserve, so it can go directly to
+    // the normal build-and-send queue. "uncertain" never takes this route.
+    const automaticallyNeedsSite = result.confidence !== 'low'
+      && (result.websitePresence === 'third_party_booking_or_profile'
+        || result.websitePresence === 'no_functional_website')
     // A 7 is already a good enough existing site. Only scores 1–6 should
-    // consume an operator decision and possibly a generated demo.
+    // consume an operator decision and possibly a generated demo, unless the
+    // audit has confirmed there is no owned site at all.
     const recommendedStatus = result.score >= AUDIT_AUTO_PARK_SCORE ? 'site_good_enough' : 'needs_site'
-    const nextStatus = recommendedStatus === 'site_good_enough'
+    const nextStatus = automaticallyNeedsSite
+      ? 'needs_site'
+      : recommendedStatus === 'site_good_enough'
       ? 'site_good_enough'
       : 'awaiting_audit_approval'
     // Do not persist large inline screenshot data. Provider-hosted screenshot
@@ -663,7 +672,9 @@ async function auditOne(
         weaknesses: result.weaknesses,
         structural: result.structural,
         cosmetic: result.cosmetic,
-        recommended_status: recommendedStatus,
+        recommended_status: automaticallyNeedsSite ? 'needs_site' : recommendedStatus,
+        website_presence: result.websitePresence,
+        auto_qualified_for_build: automaticallyNeedsSite,
         uncertain: result.uncertain,
         confidence: result.confidence,
         evidence: {
@@ -682,8 +693,13 @@ async function auditOne(
           second_opinion_error: result.secondOpinionError,
         },
       },
-      ...(recommendedStatus === 'site_good_enough'
+      ...(recommendedStatus === 'site_good_enough' && !automaticallyNeedsSite
         ? { triaged_at: new Date().toISOString() }
+        : automaticallyNeedsSite
+          ? {
+              auto_send: Boolean(row.email),
+              triaged_at: new Date().toISOString(),
+            }
         : {}),
     }).eq('id', row.id)
     if (updateError) throw new Error(`save audit: ${updateError.message}`)

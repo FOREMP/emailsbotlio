@@ -821,7 +821,7 @@ Deno.serve(async (req) => {
 
     // Niche-specific visual defaults. Preserve scraped brand colors when present,
     // but never let a salon with incomplete branding inherit the auto-shop palette.
-    const bc = branding.colors ?? {}
+    const bc = (branding.colors && !Array.isArray(branding.colors)) ? branding.colors : {}
     const paletteDefaults = nc.key === 'hair_salon'
       ? {
           primary: '#9a5f6a',
@@ -858,7 +858,10 @@ Deno.serve(async (req) => {
     const brandFonts = Array.isArray(branding.fonts)
       ? branding.fonts.map((f: any) => (typeof f === 'string' ? f : f?.family)).filter(Boolean).slice(0, 4)
       : []
-    const hasRealBranding = !!branding.colors
+    // Firecrawl may return semantic colour roles while the Botlio worker returns
+    // a simple colour list. Treat both as real branding; otherwise a good brand
+    // palette is calculated and then accidentally discarded before rendering.
+    const hasRealBranding = collectBrandColors(branding).length > 0
 
     // Extra manual assets from user
     const extraImages: string[] = Array.isArray(cf.extra_images) ? (cf.extra_images as string[]).filter(Boolean) : []
@@ -1912,7 +1915,7 @@ function deriveBrandColors(
   branding: Record<string, any>,
   defaults: Record<string, string>,
 ): Record<string, string> {
-  const bc = (branding?.colors ?? {}) as Record<string, string>
+  const bc = (!Array.isArray(branding?.colors) && branding?.colors ? branding.colors : {}) as Record<string, string>
   const comp = (branding?.components ?? {}) as Record<string, any>
 
   const raw = [
@@ -1923,6 +1926,9 @@ function deriveBrandColors(
     bc.secondary,
     comp?.buttonSecondary?.background,
     bc.brand,
+    // Some providers expose only an array of values (or nest values under
+    // components/styles). Preserve that signal instead of defaulting the site.
+    ...collectBrandColors(branding),
   ].filter((c): c is string => typeof c === 'string' && !!toHex(c)).map((c) => toHex(c)!)
 
   // Distinct brand-worthy colours, deduped by hue
@@ -1975,6 +1981,45 @@ function deriveBrandColors(
   return { primary: usablePrimary, secondary, accent, background, surface, textPrimary, textSecondary }
 }
 
+/**
+ * Normalize branding from both supported scrapers. Firecrawl has used both a
+ * semantic object and a flat list across API versions; the self-hosted worker
+ * deliberately returns a flat list. Only walk known colour-bearing branches so
+ * hexadecimal fragments in image URLs or unrelated metadata cannot become a
+ * visual theme.
+ */
+function collectBrandColors(branding: Record<string, any>): string[] {
+  const found: string[] = []
+  const seen = new Set<string>()
+  const add = (value: unknown) => {
+    if (typeof value !== 'string') return
+    const tokens = value.match(/#[0-9a-f]{3,8}\b|rgba?\([^)]{3,80}\)/gi) ?? []
+    for (const token of tokens) {
+      const hex = toHex(token)
+      if (hex && !seen.has(hex)) {
+        seen.add(hex)
+        found.push(hex)
+      }
+    }
+  }
+  const visit = (value: unknown, depth = 0) => {
+    if (depth > 5 || found.length >= 40 || value == null) return
+    if (typeof value === 'string') return add(value)
+    if (Array.isArray(value)) return value.forEach((entry) => visit(entry, depth + 1))
+    if (typeof value !== 'object') return
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      if (/(?:color|colour|primary|secondary|accent|brand|background|foreground|text|link|button|surface|theme|palette)/i.test(key)) {
+        visit(entry, depth + 1)
+      }
+    }
+  }
+  visit(branding?.colors)
+  visit(branding?.components)
+  visit(branding?.styles)
+  visit(branding?.theme)
+  return found
+}
+
 function buildAccessiblePalette(
 
   raw: Record<string, string>,
@@ -1990,10 +2035,13 @@ function buildAccessiblePalette(
 ): Record<string, string> {
   const background = cssColor(raw.background, defaults.background)
   const surface = cssColor(raw.surface, defaults.surface)
-  const primary = cssColor(raw.primary, defaults.primary)
+  const rawPrimary = cssColor(raw.primary, defaults.primary)
   const secondary = cssColor(raw.secondary, defaults.secondary)
   const accent = cssColor(raw.accent, defaults.accent)
   const lightTheme = isLightColor(background)
+  // Primary is used for both buttons and small text/eyebrows. Make the fill
+  // sufficiently distinct from the page background before choosing its label.
+  const primary = ensureBrandContrast(rawPrimary, [background, surface], 3)
   const safePrimaryText = lightTheme ? '#2a1f1f' : '#ffffff'
   const safeMutedText = lightTheme ? '#5f5350' : '#d8d0ca'
 
@@ -2005,8 +2053,10 @@ function buildAccessiblePalette(
     surface,
     textPrimary: ensureReadableText([background, surface], cssColor(raw.textPrimary, defaults.textPrimary), defaults.textPrimary, 6.2),
     textSecondary: ensureReadableText([background, surface], cssColor(raw.textSecondary, defaults.textSecondary), safeMutedText, 4.5),
-    onPrimary: pickBestContrast(primary, '#ffffff', safePrimaryText),
-    onPrimaryMuted: pickBestContrast(primary, lightTheme ? '#f8efea' : '#f5ede8', lightTheme ? '#4d403d' : '#f5ede8'),
+    // CTAs use a primary→accent gradient. Test their labels against both ends,
+    // not just the primary half of the gradient.
+    onPrimary: pickBestContrastAcross([primary, accent], '#ffffff', safePrimaryText),
+    onPrimaryMuted: pickBestContrastAcross([primary, accent], lightTheme ? '#f8efea' : '#f5ede8', lightTheme ? '#4d403d' : '#f5ede8'),
   }
 }
 
@@ -2014,11 +2064,31 @@ function ensureReadableText(backgrounds: string[], preferred: string, fallback: 
   const valid = backgrounds.filter((color) => !!parseCssColor(color))
   if (valid.length && valid.every((bg) => contrastRatio(bg, preferred) >= minRatio)) return preferred
   if (valid.length && valid.every((bg) => contrastRatio(bg, fallback) >= minRatio)) return fallback
-  return pickBestContrast(valid[0] || '#ffffff', '#111111', '#ffffff')
+  return pickBestContrastAcross(valid.length ? valid : ['#ffffff'], '#111111', '#ffffff')
 }
 
-function pickBestContrast(background: string, optionA: string, optionB: string): string {
-  return contrastRatio(background, optionA) >= contrastRatio(background, optionB) ? optionA : optionB
+function pickBestContrastAcross(backgrounds: string[], optionA: string, optionB: string): string {
+  const worst = (candidate: string) => Math.min(...backgrounds.map((background) => contrastRatio(background, candidate)))
+  return worst(optionA) >= worst(optionB) ? optionA : optionB
+}
+
+function ensureBrandContrast(color: string, backgrounds: string[], minRatio: number): string {
+  const valid = backgrounds.filter((background) => !!parseCssColor(background))
+  if (!valid.length || valid.every((background) => contrastRatio(color, background) >= minRatio)) return color
+  const hsl = rgbToHsl(color)
+  if (!hsl) return color
+  let best = color
+  let bestScore = Math.min(...valid.map((background) => contrastRatio(color, background)))
+  // Hold hue/saturation steady and find the nearest lightness that is legible.
+  for (const lightness of [0.22, 0.28, 0.34, 0.4, 0.46, 0.52, 0.58, 0.64, 0.7, 0.76]) {
+    const candidate = hslToHex(hsl.h, Math.max(0.26, hsl.s), lightness)
+    const score = Math.min(...valid.map((background) => contrastRatio(candidate, background)))
+    if (score > bestScore) {
+      best = candidate
+      bestScore = score
+    }
+  }
+  return bestScore >= minRatio ? best : best
 }
 
 function isLightColor(color: string): boolean {
