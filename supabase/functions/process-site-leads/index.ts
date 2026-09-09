@@ -38,6 +38,10 @@ const corsHeaders = {
 const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
 
 const AUDIT_PER_TICK = 3    // Firecrawl+Gemini per invocation — keep memory low
+// Sites at this quality are parked automatically. Keep this one value shared
+// by the audit result and the legacy-row repair below: only 1–6 go to the
+// operator's audit decision queue.
+const AUDIT_AUTO_PARK_SCORE = 7
 const GEN_PER_TICK = 6      // how many new pipelines may START per tick
 const MAX_CONCURRENT_GEN = 24 // how many leads may be mid-pipeline at once
 const DAILY_GEN_CAP_FALLBACK = 16  // used only if we can't read sender limits
@@ -615,7 +619,7 @@ async function syncAutoSendLead(
 
 // ---------------------------------------------------------------------------
 // AUDIT — one shared screenshot-first evaluator for every audit entry point.
-// Scores 8–10 are automatically parked as good enough. Scores 1–7 remain in
+// Scores 7–10 are automatically parked as good enough. Scores 1–6 remain in
 // the operator review queue, so borderline sites are never auto-dismissed.
 // ---------------------------------------------------------------------------
 async function auditOne(
@@ -641,7 +645,7 @@ async function auditOne(
     )
     // A 7 is already a good enough existing site. Only scores 1–6 should
     // consume an operator decision and possibly a generated demo.
-    const recommendedStatus = result.score >= 7 ? 'site_good_enough' : 'needs_site'
+    const recommendedStatus = result.score >= AUDIT_AUTO_PARK_SCORE ? 'site_good_enough' : 'needs_site'
     const nextStatus = recommendedStatus === 'site_good_enough'
       ? 'site_good_enough'
       : 'awaiting_audit_approval'
@@ -745,7 +749,7 @@ async function parkHighQualityAudits(
       triaged_at: new Date().toISOString(),
     })
     .in('status', ['awaiting_audit_approval', 'needs_triage'])
-    .gte('audit_score', 7)
+    .gte('audit_score', AUDIT_AUTO_PARK_SCORE)
     .select('id')
 
   if (error) {
