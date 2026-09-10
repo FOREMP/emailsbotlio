@@ -1,6 +1,6 @@
 // The audit is the normal decision point: an operator can park a good site,
 // build and send automatically, or explicitly opt into a manual demo review.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -45,6 +45,7 @@ const STATUS_BADGE: Record<string, string> = {
 
 const APPROVAL_STATUSES = ["awaiting_audit_approval", "awaiting_approval", "generating", "failed", "approved", "auto_approved", "site_good_enough", "needs_triage", "needs_site"] as const;
 const APPROVALS_PAGE_SIZE = 20;
+const APPROVALS_REFRESH_MS = 30_000;
 
 function isCanonicalDemoUrl(value?: string | null): boolean {
   if (!value) return false;
@@ -76,9 +77,12 @@ export default function SiteApprovals() {
   });
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const loadedKeyRef = useRef<string | null>(null);
+  // A mutation can become visible to the client before a later read reaches
+  // the same database snapshot. Remember the old status so a handled card
+  // cannot briefly reappear under the operator's cursor.
+  const handledStatusRef = useRef(new Map<string, string>());
 
-
-  const loadCounts = async () => {
+  const loadCounts = useCallback(async () => {
     const { data, error } = await (supabase as any).rpc("get_site_lead_counts", {
       p_language: languageFilter === "all" ? null : languageFilter,
     });
@@ -89,19 +93,57 @@ export default function SiteApprovals() {
       nextCounts[row.status] = (nextCounts[row.status] ?? 0) + Number(row.count ?? 0);
     }
     setCounts(nextCounts);
-  };
+  }, [languageFilter]);
 
-  const applyListFilters = (query: any, includeLanguage: boolean) => {
+  const applyListFilters = useCallback((query: any, includeLanguage: boolean) => {
     let next = query.in("status", [...APPROVAL_STATUSES]);
     if (filter !== "all") next = next.eq("status", filter);
     if (includeLanguage && languageFilter !== "all") next = next.eq("language", languageFilter);
     return next
-      .order("updated_at", { ascending: false })
+      // Audits are reviewed FIFO. A second immutable tie-breaker makes the
+      // order deterministic even when a batch completes in the same instant.
+      // New audit results therefore append instead of jumping above the card
+      // currently being reviewed.
+      .order("updated_at", { ascending: true })
+      .order("id", { ascending: true })
       .range((page - 1) * APPROVALS_PAGE_SIZE, page * APPROVALS_PAGE_SIZE - 1);
-  };
+  }, [filter, languageFilter, page]);
 
-  const load = async () => {
-    setLoading(true);
+  const reconcileRows = useCallback((incoming: LeadRow[], preserveOrder: boolean) => {
+    const incomingIds = new Set(incoming.map((row) => row.id));
+    for (const id of handledStatusRef.current.keys()) {
+      if (!incomingIds.has(id)) handledStatusRef.current.delete(id);
+    }
+
+    const available = incoming.filter((row) => {
+      const handledStatus = handledStatusRef.current.get(row.id);
+      if (!handledStatus) return true;
+      if (handledStatus === row.status) return false;
+      handledStatusRef.current.delete(row.id);
+      return true;
+    });
+
+    if (!preserveOrder) {
+      setRows(available);
+      return;
+    }
+
+    // Refresh the data inside existing cards, but keep their visual order.
+    // Truly new audits are appended at the bottom of the current page.
+    setRows((current) => {
+      const byId = new Map(available.map((row) => [row.id, row]));
+      const stable = current.flatMap((row) => {
+        const updated = byId.get(row.id);
+        if (!updated) return [];
+        byId.delete(row.id);
+        return [updated];
+      });
+      return [...stable, ...byId.values()];
+    });
+  }, []);
+
+  const load = useCallback(async ({ silent = false, preserveOrder = true } = {}) => {
+    if (!silent) setLoading(true);
     try {
       const { data, error, count } = await applyListFilters(
         supabase
@@ -110,20 +152,18 @@ export default function SiteApprovals() {
         true,
       );
       if (error) throw error;
-      setRows((data ?? []) as LeadRow[]);
+      reconcileRows((data ?? []) as LeadRow[], preserveOrder);
       setTotalCount(count ?? 0);
       await loadCounts();
-      setLoading(false);
+      setLastUpdated(new Date());
+      if (!silent) setLoading(false);
       return;
     } catch (err) {
       const message = (err as Error).message || "";
       const maybeMissingLanguage = /language/i.test(message) || /column/i.test(message);
       if (!maybeMissingLanguage) {
-        toast({ title: "Kunde inte ladda approvals", description: message, variant: "destructive" });
-        setRows([]);
-        setCounts({});
-        setTotalCount(0);
-        setLoading(false);
+        if (!silent) toast({ title: "Kunde inte ladda approvals", description: message, variant: "destructive" });
+        if (!silent) setLoading(false);
         return;
       }
     }
@@ -136,44 +176,69 @@ export default function SiteApprovals() {
         false,
       );
       if (error) throw error;
-      setRows(((data ?? []) as any[]).map((row) => ({ ...row, language: "sv", auto_send: false })) as LeadRow[]);
+      reconcileRows(
+        ((data ?? []) as any[]).map((row) => ({ ...row, language: "sv", auto_send: false })) as LeadRow[],
+        preserveOrder,
+      );
       setTotalCount(count ?? 0);
       await loadCounts();
-      toast({
-        title: "Approvals laddade i kompatibilitetsläge",
-        description: "Språkfältet saknas eller är inte migrerat fullt i databasen ännu. Svenska leads visas ändå.",
-        variant: "destructive",
-      });
+      setLastUpdated(new Date());
+      if (!silent) {
+        toast({
+          title: "Approvals laddade i kompatibilitetsläge",
+          description: "Språkfältet saknas eller är inte migrerat fullt i databasen ännu. Svenska leads visas ändå.",
+          variant: "destructive",
+        });
+      }
     } catch (fallbackErr) {
-      toast({ title: "Kunde inte ladda approvals", description: (fallbackErr as Error).message, variant: "destructive" });
-      setRows([]);
-      setCounts({});
-      setTotalCount(0);
+      if (!silent) {
+        toast({ title: "Kunde inte ladda approvals", description: (fallbackErr as Error).message, variant: "destructive" });
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  };
+  }, [applyListFilters, loadCounts, reconcileRows]);
 
   const listKey = `${filter}|${languageFilter}|${page}`;
 
-  const runLoad = async () => {
+  const runLoad = useCallback(async ({ silent = false } = {}) => {
+    const preserveOrder = loadedKeyRef.current === listKey;
     loadedKeyRef.current = listKey;
-    await load();
-    setLastUpdated(new Date());
-  };
+    await load({ silent, preserveOrder });
+  }, [listKey, load]);
 
-  // Counts are cheap and drive the filter chips, so they load on open.
+  // When the heavy list is closed, keep only its cheap status counters fresh.
+  // An open-list load already refreshes both rows and counters.
   useEffect(() => {
-    loadCounts();
-  }, [filter, languageFilter]);
+    if (!listOpen) void loadCounts().catch(() => undefined);
+  }, [listOpen, loadCounts]);
 
-  // The list itself is only fetched once the section is expanded, and cached
-  // until filters/page change or you hit "Uppdatera".
+  // Fetch the visible page when it is opened or its filters change. The
+  // background refresh below keeps it current after that first load.
   useEffect(() => {
     if (!listOpen) return;
     if (loadedKeyRef.current === listKey) return;
-    runLoad();
-  }, [listKey, listOpen]);
+    void runLoad();
+  }, [listKey, listOpen, runLoad]);
+
+  // Keep counts and visible rows fresh without disturbing an active review.
+  // Polling is deliberately modest and stops doing list work while collapsed;
+  // this avoids adding a noisy Realtime subscription to an already busy DB.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      if (listOpen) void runLoad({ silent: true });
+      else void loadCounts().catch(() => undefined);
+    };
+    const timer = window.setInterval(refresh, APPROVALS_REFRESH_MS);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [listOpen, loadCounts, runLoad]);
 
   useEffect(() => {
     try { localStorage.setItem("approvals-list-open", listOpen ? "1" : "0"); } catch { /* ignore */ }
@@ -190,7 +255,7 @@ export default function SiteApprovals() {
       const { error } = await supabase.functions.invoke("process-site-leads", { body: {} });
       if (error) throw error;
       toast({ title: "Kör orchestrator", description: "Audit + generering triggad manuellt." });
-      await load();
+      await runLoad();
     } catch (e) {
       toast({ title: "Fel", description: (e as Error).message, variant: "destructive" });
     } finally {
@@ -201,8 +266,9 @@ export default function SiteApprovals() {
   // A mutation can be committed before a follow-up fetch sees it (and the
   // approval list intentionally caches its expensive iframe rows). Remove the
   // handled lead locally first so the next audit card is immediately usable.
-  // `load()` below still reconciles the exact totals with the database.
+  // The following quiet refresh still reconciles exact totals with the DB.
   const removeHandledRow = (row: LeadRow) => {
+    handledStatusRef.current.set(row.id, row.status);
     setRows((current) => current.filter((item) => item.id !== row.id));
     setTotalCount((current) => Math.max(0, current - 1));
     setCounts((current) => ({
@@ -343,7 +409,7 @@ export default function SiteApprovals() {
 
       removeHandledRow(row);
       toast({ title: "Godkänd & enrollad", description: `${row.company_name} börjar få mail inom några minuter (${row.language === "en" ? "EN" : "SV"}).` });
-      void load();
+      void runLoad({ silent: true });
     } catch (e) {
       toast({ title: "Kunde inte godkänna", description: (e as Error).message, variant: "destructive" });
     } finally {
@@ -362,7 +428,7 @@ export default function SiteApprovals() {
     if (error) return toast({ title: "Fel", description: error.message, variant: "destructive" });
     removeHandledRow(row);
     toast({ title: "Parkerad" });
-    void load();
+    void runLoad({ silent: true });
   };
 
   const approveAuditForBuild = async (row: LeadRow, autoSend: boolean) => {
@@ -404,7 +470,7 @@ export default function SiteApprovals() {
           title: "Köad — byggstarten väntar",
           description: "Leaden är sparad i byggkön och plockas upp automatiskt av nästa orchestrator-körning.",
         });
-        void load();
+        void runLoad({ silent: true });
         return;
       }
       toast({
@@ -413,7 +479,7 @@ export default function SiteApprovals() {
           ? `${row.company_name} skickas automatiskt först när demon har en stabil publik länk.`
           : `${row.company_name} visas för manuell granskning när demon är klar.`,
       });
-      void load();
+      void runLoad({ silent: true });
     } catch (e) {
       toast({ title: "Kunde inte köa hemsidan", description: (e as Error).message, variant: "destructive" });
     } finally {
@@ -510,7 +576,7 @@ export default function SiteApprovals() {
       setRegen(null);
       setFeedback("");
       setRegenMode("keep");
-      await load();
+      await runLoad();
     } catch (e) {
       toast({ title: "Fel", description: (e as Error).message, variant: "destructive" });
     } finally {
@@ -548,18 +614,18 @@ export default function SiteApprovals() {
             key={f.key}
             size="sm"
             variant={filter === f.key ? "default" : "outline"}
-            onClick={() => setFilter(f.key)}
+            onClick={() => { setPage(1); setFilter(f.key); }}
           >
             {f.label} ({f.key === "all" ? Object.values(counts).reduce((sum, value) => sum + value, 0) : counts[f.key] ?? 0})
           </Button>
         ))}
-        <Button size="sm" variant={languageFilter === "all" ? "default" : "outline"} onClick={() => setLanguageFilter("all")}>
+        <Button size="sm" variant={languageFilter === "all" ? "default" : "outline"} onClick={() => { setPage(1); setLanguageFilter("all"); }}>
           Alla språk
         </Button>
-        <Button size="sm" variant={languageFilter === "sv" ? "default" : "outline"} onClick={() => setLanguageFilter("sv")}>
+        <Button size="sm" variant={languageFilter === "sv" ? "default" : "outline"} onClick={() => { setPage(1); setLanguageFilter("sv"); }}>
           Svenska
         </Button>
-        <Button size="sm" variant={languageFilter === "en" ? "default" : "outline"} onClick={() => setLanguageFilter("en")}>
+        <Button size="sm" variant={languageFilter === "en" ? "default" : "outline"} onClick={() => { setPage(1); setLanguageFilter("en"); }}>
           English
         </Button>
       </div>
@@ -577,8 +643,8 @@ export default function SiteApprovals() {
           <span className="text-xs text-muted-foreground">
             {listOpen
               ? lastUpdated
-                ? `Senast uppdaterad ${lastUpdated.toLocaleTimeString("sv-SE")}`
-                : ""
+                ? `Uppdateras automatiskt · fast ordning · senast ${lastUpdated.toLocaleTimeString("sv-SE")}`
+                : "Uppdateras automatiskt utan att flytta korten"
               : "Klicka för att visa listan"}
           </span>
           <Button
