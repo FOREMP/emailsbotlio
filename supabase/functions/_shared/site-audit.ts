@@ -306,15 +306,20 @@ async function scoreAudit(
     : ''
   const routed = await callRoutedChat({
     supabase,
-    // The previous Qwen vision route was retired by NVIDIA in July 2026.
-    // Kimi K2.5 is an active NVIDIA-hosted multimodal model, so it can still
+    // The previous Qwen and Kimi K2.5 routes were retired by NVIDIA.
+    // Kimi K2.6 is an active NVIDIA-hosted multimodal model, so it can still
     // judge the homepage screenshot as well as the scraped text.
-    nvidiaModel: 'moonshotai/kimi-k2.5',
+    // Use a genuinely independent NVIDIA vision model for the borderline
+    // second opinion. OpenRouter remains only the final provider fallback.
+    nvidiaModel: options.secondOpinion
+      ? 'minimaxai/minimax-m3'
+      : 'moonshotai/kimi-k2.6',
     openrouterModel: options.secondOpinion ? 'openai/gpt-4.1-mini' : 'google/gemini-2.5-flash',
-    preferredProvider: options.secondOpinion ? 'openrouter' : undefined,
-    title: options.secondOpinion ? 'Botlio Site Audit Second Opinion' : 'Botlio Site Audit',
+    preferredProvider: options.secondOpinion ? 'nvidia' : undefined,
+    title: options.secondOpinion ? 'Botlio Audit Second Opinion Fallback' : 'Botlio Site Audit Fallback',
     timeoutMs: 60_000,
     requireJsonObject: true,
+    nvidiaAttempts: 2,
     body: {
       temperature: 0,
       top_p: 1,
@@ -406,8 +411,9 @@ export async function auditWebsite(
   }
   const disagreement = second ? Math.abs(first.score - second.score) : null
 
-  // The independent OpenRouter judge is the tie-breaker in the manual-review
-  // band. We still retain both scores so later calibration can measure it.
+  // The independent NVIDIA vision judge is the tie-breaker in the
+  // manual-review band. We still retain both scores so later calibration can
+  // measure it; OpenRouter is used only if both NVIDIA attempts fail.
   const chosen = second ?? first
   const confidence: AuditResult['confidence'] = !scraped.screenshot
     ? 'low'

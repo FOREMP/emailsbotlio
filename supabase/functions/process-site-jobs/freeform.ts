@@ -21,7 +21,6 @@ import { callRoutedChat } from '../_shared/ai-provider.ts'
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 export const BUILD_MODEL = 'deepseek/deepseek-v4-flash-0731'
 export const BUILD_FALLBACK_MODEL = 'deepseek/deepseek-chat-v3.1'
-export const BUILD_LAST_RESORT_MODEL = 'openai/gpt-4o-mini'
 export const NVIDIA_BUILD_MODEL = 'deepseek-ai/deepseek-v4-flash-0731'
 export const LANG_MODEL = 'openai/gpt-4o-mini'
 const VERSION = 12
@@ -142,12 +141,19 @@ export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<st
       const got = await pageContent(ctx, plan, next)
       content[next.slug] = got.content
       const done = plan.pages.every((p) => content[p.slug])
-      return step(false, files, meta({ ...progress, stage: done ? 'polish_content' : 'content', content, lastStage: `content:${next.slug}`, lastError: got.error ?? progress.lastError, fallbacksUsed: got.source === 'fallback' ? addFallback(progress, `content:${next.slug}`) : progress.fallbacksUsed }), `${got.source} content ready for ${next.slug}${got.model ? ` via ${got.model}` : ''}`)
+      const nextStage: Stage = done ? (isEnglish(ctx) ? 'render' : 'polish_content') : 'content'
+      return step(false, files, meta({ ...progress, stage: nextStage, content, lastStage: `content:${next.slug}`, lastError: got.error ?? progress.lastError, fallbacksUsed: got.source === 'fallback' ? addFallback(progress, `content:${next.slug}`) : progress.fallbacksUsed }), `${got.source} content ready for ${next.slug}${got.model ? ` via ${got.model}` : ''}`)
     }
-    return step(false, files, meta({ ...progress, stage: 'polish_content', content, lastStage: 'content:complete' }), 'v7 content complete')
+    return step(false, files, meta({ ...progress, stage: isEnglish(ctx) ? 'render' : 'polish_content', content, lastStage: 'content:complete' }), 'v7 content complete')
   }
   if (progress.stage === 'polish_content') {
     const content = cleanContentMap(progress.content)
+    // DeepSeek produces strong English copy. The paid GPT pass exists only to
+    // repair Swedish, so English sites go directly to rendering—even when an
+    // older in-flight job resumes from this stage.
+    if (isEnglish(ctx)) {
+      return step(false, files, meta({ ...progress, stage: 'render', content, lastStage: 'polish:skipped-en' }), 'v7 English polish skipped')
+    }
     const polished = Array.isArray(progress.polished) ? progress.polished : []
     const next = plan.pages.find((p) => content[p.slug] && !polished.includes(p.slug))
     if (next) {
@@ -508,8 +514,8 @@ HÅRDA REGLER:
     JSON.stringify(draft),
   ].filter(Boolean).join('\n')
   try {
-    // Deliberately stays on GPT through OpenRouter. NVIDIA controls the build,
-    // not the Swedish language finishing pass.
+    // Deliberately stays on GPT through OpenRouter for Swedish only. English
+    // jobs never enter this stage.
     const raw = await callOpenRouterModel(ctx.openrouterKey, LANG_MODEL, `freeform-v7-polish:${page.slug}`, system, user, 3000, 36_000)
     const parsed = parseJson(raw)
     const c = repairContent(ctx, cleanContent(parsed, ctx, page))
@@ -1567,7 +1573,7 @@ function normalizeProgress(raw: FreeformProgress | null | undefined, files: Reco
   if (stage !== 'done') {
     if (!files['style.css'] || files['style.css'].length < 1200) stage = 'theme'
     else if (plan.pages.some((p) => !content[p.slug])) stage = 'content'
-    else if (plan.pages.some((p) => !(raw?.polished || []).includes(p.slug))) stage = 'polish_content'
+    else if (!isEnglish(ctx) && plan.pages.some((p) => !(raw?.polished || []).includes(p.slug))) stage = 'polish_content'
     else if (plan.pages.some((p) => !files[fileNameFor(p.slug)])) stage = 'render'
     else stage = 'quality_check'
   }
@@ -1672,7 +1678,7 @@ async function callOpenRouterModel(key: string, model: string, label: string, sy
   const controller = new AbortController()
   const id = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const resp = await fetch(OPENROUTER_URL, { method: 'POST', signal: controller.signal, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'HTTP-Referer': 'https://emailsbotlio.lovable.app', 'X-Title': 'Botlio Freeform Site Builder V7' }, body: JSON.stringify({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], temperature: .55, max_tokens: maxTokens, response_format: { type: 'json_object' } }) })
+    const resp = await fetch(OPENROUTER_URL, { method: 'POST', signal: controller.signal, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'HTTP-Referer': 'https://emailsbotlio.lovable.app', 'X-Title': 'Botlio Swedish Site Polish' }, body: JSON.stringify({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], temperature: .55, max_tokens: maxTokens, response_format: { type: 'json_object' } }) })
     if (!resp.ok) throw new Error(`${model} ${resp.status}: ${(await resp.text()).slice(0, 300)}`)
     const data = await resp.json()
     const content = data.choices?.[0]?.message?.content
@@ -1688,42 +1694,23 @@ async function callOpenRouterModel(key: string, model: string, label: string, sy
 }
 
 async function callBuildModelCascade(ctx: FreeformCtx, label: string, system: string, user: string, maxTokens: number): Promise<{ model: string; text: string }> {
-  const errors: string[] = []
-  try {
-    const routed = await callRoutedChat({
-      supabase: ctx.supabase,
-      nvidiaModel: NVIDIA_BUILD_MODEL,
-      openrouterModel: isEnglish(ctx) ? BUILD_FALLBACK_MODEL : BUILD_MODEL,
-      title: 'Botlio Freeform Site Builder V7',
-      timeoutMs: 45_000,
-      requireJsonObject: true,
-      body: {
-        messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-        temperature: .55,
-        max_tokens: maxTokens,
-        response_format: { type: 'json_object' },
-      },
-    })
-    const content = routed.data?.choices?.[0]?.message?.content
-    const text = Array.isArray(content) ? content.map((p: any) => p?.text || '').join('') : String(content || '')
-    if (!text.trim()) throw new Error(`${routed.model} returned empty content`)
-    return { model: `${routed.provider}/${routed.model}`, text }
-  } catch (error) {
-    errors.push((error as Error).message)
-  }
-
-  // Final OpenRouter safety net. This deliberately does not re-enter NVIDIA,
-  // so one unhealthy provider cannot consume the whole Edge Function timeout.
-  const attempts: { model: string; timeoutMs: number }[] = [
-    { model: BUILD_LAST_RESORT_MODEL, timeoutMs: 42_000 },
-  ]
-  for (const attempt of attempts) {
-    try {
-      const text = await callOpenRouterModel(ctx.openrouterKey, attempt.model, label, system, user, maxTokens, attempt.timeoutMs)
-      return { model: attempt.model, text }
-    } catch (error) {
-      errors.push(`${attempt.model}: ${(error as Error).message}`)
-    }
-  }
-  throw new Error(errors.join(' | '))
+  const routed = await callRoutedChat({
+    supabase: ctx.supabase,
+    nvidiaModel: NVIDIA_BUILD_MODEL,
+    openrouterModel: isEnglish(ctx) ? BUILD_FALLBACK_MODEL : BUILD_MODEL,
+    title: 'Botlio Site Content Fallback',
+    timeoutMs: 45_000,
+    requireJsonObject: true,
+    nvidiaAttempts: 2,
+    body: {
+      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+      temperature: .55,
+      max_tokens: maxTokens,
+      response_format: { type: 'json_object' },
+    },
+  })
+  const content = routed.data?.choices?.[0]?.message?.content
+  const text = Array.isArray(content) ? content.map((p: any) => p?.text || '').join('') : String(content || '')
+  if (!text.trim()) throw new Error(`${label}: ${routed.model} returned empty content`)
+  return { model: `${routed.provider}/${routed.model}`, text }
 }

@@ -195,7 +195,7 @@ async function pickReviewSnippets(
     supabase,
     nvidiaModel: 'deepseek-ai/deepseek-v4-flash-0731',
     openrouterModel: 'deepseek/deepseek-chat-v3.1',
-    title: 'Botlio Review Picker',
+    title: 'Botlio Review Picker Fallback',
     timeoutMs: 30_000,
     requireJsonObject: true,
     body: {

@@ -1051,13 +1051,12 @@ Deno.serve(async (req) => {
       'Returnera BARA JSON-objektet med innehållsplanen, inte HTML.',
     ].filter(Boolean).join('\n')
 
-    // Multimodal: DeepSeek V3.1 is text-only, so we don't attach images at all today.
+    // The NVIDIA DeepSeek builder is text-only. Attaching the screenshot here
+    // made an otherwise healthy NVIDIA request fail and unnecessarily fall
+    // through to the vision-capable OpenRouter model. The scraped page text,
+    // palette and image pool already carry the information this planner needs.
     const chosenModel = MODEL
-    const supportsVision = /claude|gpt-4|gpt-5|gemini|llama-.*vision|qwen.*vl/i.test(chosenModel)
     const userContent: any[] = [{ type: 'text', text: userTextParts }]
-    if (screenshotUrl && supportsVision) {
-      userContent.push({ type: 'image_url', image_url: { url: screenshotUrl } })
-    }
 
     // Run AI work synchronously. Background waitUntil has proven unreliable for
     // this long-running job in Supabase Edge.
@@ -1078,7 +1077,7 @@ Deno.serve(async (req) => {
           supabase,
           nvidiaModel: 'deepseek-ai/deepseek-v4-flash-0731',
           openrouterModel: chosenModel,
-          title: 'Botlio Site Generator',
+          title: 'Botlio Legacy Site Generator Fallback',
           timeoutMs: 75_000,
           requireJsonObject: true,
           body: {
@@ -1114,7 +1113,7 @@ Deno.serve(async (req) => {
         // non-hair business under the salon tag gets matching wording everywhere.
         const ncFinal = adaptNicheConfig(nc, parsed)
 
-        const polished = SKIP_POLISH
+        const polished = SKIP_POLISH || siteLead?.language === 'en'
           ? parsed
           : await polishCopyWithClaude({
               plan: parsed,

@@ -21,6 +21,7 @@ import {
 } from '../_shared/site-pipeline-health.ts'
 import { selectedScrapeProvider, ScraperError } from '../_shared/scraper-client.ts'
 import { auditWebsite } from '../_shared/site-audit.ts'
+import { callRoutedChat } from '../_shared/ai-provider.ts'
 import { classifyNiche, templateForNiche, type NicheKey } from '../_shared/niche.ts'
 import {
   blockTemplateFamilyCatalog,
@@ -34,8 +35,6 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
-
-const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1'
 
 const AUDIT_PER_TICK = 3    // Firecrawl+Gemini per invocation — keep memory low
 // Sites at this quality are parked automatically. Keep this one value shared
@@ -65,7 +64,8 @@ function isCanonicalDemoUrl(value?: string | null): boolean {
 }
 const STALE_PIPELINE_MINUTES = 180 // queued work may legitimately wait; don't fail healthy backlog
 const ORPHAN_GRACE_MINUTES = 10   // 'generating' with no generated_sites row = dead job
-const TEMPLATE_PICKER_MODEL = 'deepseek/deepseek-chat-v3.1'
+const TEMPLATE_PICKER_NVIDIA_MODEL = 'deepseek-ai/deepseek-v4-flash-0731'
+const TEMPLATE_PICKER_OPENROUTER_FALLBACK = 'deepseek/deepseek-chat-v3.1'
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
@@ -833,7 +833,7 @@ async function resolveGenerationMode(
   return cachedGenerationMode
 }
 
-async function chooseTemplateFamilyForLead(lead: any): Promise<{
+async function chooseTemplateFamilyForLead(supabase: ReturnType<typeof createClient>, lead: any): Promise<{
   family: BlockTemplateFamily
   source: 'ai' | 'rules'
   reason?: string
@@ -843,19 +843,18 @@ async function chooseTemplateFamilyForLead(lead: any): Promise<{
     niche: lead?.niche ?? null,
     businessName: lead?.company_name ?? null,
   })
-  const lovableKey = Deno.env.get('LOVABLE_API_KEY')
-  if (!lovableKey) return { family: fallback, source: 'rules', reason: 'LOVABLE_API_KEY missing' }
-
   const familyCatalog = blockTemplateFamilyCatalog()
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 12_000)
   try {
-    const resp = await fetch(`${AI_GATEWAY}/chat/completions`, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { 'Lovable-API-Key': lovableKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: TEMPLATE_PICKER_MODEL,
+    const routed = await callRoutedChat({
+      supabase,
+      nvidiaModel: TEMPLATE_PICKER_NVIDIA_MODEL,
+      openrouterModel: TEMPLATE_PICKER_OPENROUTER_FALLBACK,
+      preferredProvider: 'nvidia',
+      nvidiaAttempts: 2,
+      title: 'Botlio Template Picker Fallback',
+      timeoutMs: 20_000,
+      requireJsonObject: true,
+      body: {
         temperature: 0,
         top_p: 1,
         seed: 42,
@@ -889,15 +888,14 @@ async function chooseTemplateFamilyForLead(lead: any): Promise<{
           },
         ],
         response_format: { type: 'json_object' },
-      }),
+      },
     })
-    clearTimeout(timeoutId)
-    const data = await resp.json().catch(() => ({}))
-    if (!resp.ok) {
-      return { family: fallback, source: 'rules', reason: `AI picker failed (${resp.status})` }
-    }
-    const raw = String(data?.choices?.[0]?.message?.content ?? '{}')
-    const parsed = JSON.parse(raw) as { templateFamily?: string; reason?: string; confidence?: number }
+    const content = routed.data?.choices?.[0]?.message?.content
+    const raw = Array.isArray(content)
+      ? content.map((part: any) => part?.text || '').join('')
+      : String(content ?? '{}')
+    const cleaned = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```\s*$/i, '').trim()
+    const parsed = JSON.parse(cleaned) as { templateFamily?: string; reason?: string; confidence?: number }
     const key = parsed?.templateFamily
     if (!key || !(key in BLOCK_TEMPLATE_FAMILIES)) {
       return { family: fallback, source: 'rules', reason: 'AI picker returned unknown family' }
@@ -911,10 +909,8 @@ async function chooseTemplateFamilyForLead(lead: any): Promise<{
     return {
       family: fallback,
       source: 'rules',
-      reason: (err as Error).name === 'AbortError' ? 'AI picker timed out' : `AI picker error: ${(err as Error).message}`,
+      reason: `AI picker error: ${(err as Error).message}`,
     }
-  } finally {
-    clearTimeout(timeoutId)
   }
 }
 
@@ -938,7 +934,7 @@ async function startGeneration(
   // the generated_sites row (previously declared after first use -> TDZ crash).
   const niche = inferLeadNiche(lead)
   const nicheTemplate = templateForNiche(niche)
-  const chosenFamily = await chooseTemplateFamilyForLead({
+  const chosenFamily = await chooseTemplateFamilyForLead(supabase, {
     ...lead,
     niche: lead?.niche ?? niche ?? null,
   })

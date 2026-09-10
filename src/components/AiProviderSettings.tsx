@@ -46,10 +46,10 @@ export function AiProviderSettings() {
         <div>
           <h2 className="font-semibold flex items-center gap-2"><Cpu className="h-4 w-4" /> Website & audit AI</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            NVIDIA can build, classify and audit. OpenRouter is always the automatic fallback.
+            NVIDIA builds, classifies and audits. It reserves capacity and retries once before OpenRouter is used as the final fallback.
           </p>
           <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1.5">
-            <ShieldCheck className="h-3.5 w-3.5" /> Email sending and Swedish GPT copy finishing are not changed by this switch.
+            <ShieldCheck className="h-3.5 w-3.5" /> English sites skip GPT finishing. Swedish website copy still gets the dedicated GPT language pass.
           </p>
         </div>
         <div className="flex gap-2">
@@ -68,4 +68,3 @@ export function AiProviderSettings() {
     </div>
   );
 }
-

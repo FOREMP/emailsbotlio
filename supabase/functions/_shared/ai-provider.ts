@@ -17,18 +17,53 @@ type RoutedAiArgs = {
   timeoutMs?: number
   title?: string
   requireJsonObject?: boolean
+  /** Number of capacity-reserved NVIDIA attempts before the one OpenRouter fallback. */
+  nvidiaAttempts?: number
   /** Used by deterministic callers/tests that must bypass the dashboard choice. */
   preferredProvider?: AiProvider
 }
 
+const PROVIDER_CACHE_MS = 60_000
+let providerCache: { value: AiProvider; expiresAt: number } | null = null
+
+function safeProviderDefault(): AiProvider {
+  const configured = String(Deno.env.get('AI_PRIMARY_PROVIDER') || '').trim().toLowerCase()
+  if (configured === 'nvidia' || configured === 'openrouter') return configured
+  return Deno.env.get('NVIDIA_API_KEY') ? 'nvidia' : 'openrouter'
+}
+
 export async function resolveAiProvider(supabase: any): Promise<AiProvider> {
-  const { data, error } = await supabase
-    .from('app_settings')
-    .select('value')
-    .eq('key', 'ai_primary_provider')
-    .maybeSingle()
-  if (error) console.warn('AI provider setting lookup failed; using OpenRouter:', error.message)
-  return (data?.value as any)?.provider === 'nvidia' ? 'nvidia' : 'openrouter'
+  if (providerCache && providerCache.expiresAt > Date.now()) return providerCache.value
+
+  let data: any = null
+  let lookupError = ''
+  try {
+    const result = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'ai_primary_provider')
+      .maybeSingle()
+    data = result.data
+    lookupError = result.error?.message ?? ''
+  } catch (error) {
+    lookupError = error instanceof Error ? error.message : String(error)
+  }
+  const stored = (data?.value as any)?.provider
+  if (!lookupError && (stored === 'nvidia' || stored === 'openrouter')) {
+    providerCache = { value: stored, expiresAt: Date.now() + PROVIDER_CACHE_MS }
+    return stored
+  }
+
+  // A busy database must not silently turn every AI request into a paid
+  // OpenRouter request. Reuse the last known choice when possible, otherwise
+  // prefer NVIDIA whenever its key exists (or AI_PRIMARY_PROVIDER says so).
+  const fallback = providerCache?.value ?? safeProviderDefault()
+  console.warn(
+    `AI provider setting lookup unavailable; using safe ${fallback} default:`,
+    lookupError || 'setting missing or invalid',
+  )
+  providerCache = { value: fallback, expiresAt: Date.now() + 10_000 }
+  return fallback
 }
 
 /**
@@ -38,10 +73,16 @@ export async function resolveAiProvider(supabase: any): Promise<AiProvider> {
  */
 export async function callRoutedChat(args: RoutedAiArgs): Promise<RoutedAiResult> {
   const preferred = args.preferredProvider ?? await resolveAiProvider(args.supabase)
-  const order: AiProvider[] = preferred === 'nvidia' ? ['nvidia', 'openrouter'] : ['openrouter']
   const errors: string[] = []
+  const attempts: AiProvider[] = preferred === 'nvidia'
+    ? [
+        ...Array.from({ length: Math.max(1, Math.min(2, args.nvidiaAttempts ?? 2)) }, () => 'nvidia' as const),
+        'openrouter' as const,
+      ]
+    : ['openrouter']
 
-  for (const provider of order) {
+  for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex++) {
+    const provider = attempts[attemptIndex]
     const key = provider === 'nvidia'
       ? Deno.env.get('NVIDIA_API_KEY')
       : Deno.env.get('OPENROUTER_API_KEY')
@@ -61,7 +102,13 @@ export async function callRoutedChat(args: RoutedAiArgs): Promise<RoutedAiResult
     } catch (error) {
       const message = (error as Error).message
       errors.push(`${provider}/${model}: ${message}`)
-      console.warn(`AI provider attempt failed (${provider}/${model}); ${provider === 'nvidia' ? 'trying fallback' : 'no further provider'}: ${message}`)
+      const nextProvider = attempts[attemptIndex + 1]
+      console.warn(
+        `AI provider attempt failed (${provider}/${model}); ${nextProvider ? `trying ${nextProvider}` : 'no further provider'}: ${message}`,
+      )
+      if (provider === 'nvidia' && nextProvider === 'nvidia') {
+        await new Promise((resolve) => setTimeout(resolve, 750))
+      }
     }
   }
 
@@ -86,9 +133,17 @@ function hasJsonObject(data: any): boolean {
 async function claimNvidiaSlot(supabase: any): Promise<void> {
   // The database claim is shared by every Edge Function and every runtime
   // instance. An in-memory counter would allow each instance to send 40 rpm.
-  for (let attempt = 0; attempt < 3; attempt++) {
+  let lastError = ''
+  for (let attempt = 0; attempt < 4; attempt++) {
     const { data, error } = await supabase.rpc('claim_nvidia_api_slot', { p_limit: 40 })
-    if (error) throw new Error(`NVIDIA limiter unavailable: ${error.message}`)
+    if (error) {
+      lastError = error.message
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)))
+        continue
+      }
+      throw new Error(`NVIDIA limiter unavailable after retry: ${lastError}`)
+    }
     const waitMs = Math.max(0, Number(data ?? 0))
     if (waitMs === 0) return
     await new Promise((resolve) => setTimeout(resolve, Math.min(waitMs + 75, 61_000)))
@@ -115,10 +170,21 @@ async function request(
       delete requestBody.response_format
       if (model.startsWith('deepseek-ai/')) requestBody.reasoning_effort = 'none'
       if (model.startsWith('qwen/')) requestBody.chat_template_kwargs = { enable_thinking: false }
-      // Kimi's instant mode avoids spending the short audit request budget on
-      // reasoning traces. It still accepts image_url content for screenshot
-      // based website audits.
-      if (model.startsWith('moonshotai/kimi-')) requestBody.chat_template_kwargs = { thinking: false }
+      // Keep current NVIDIA-hosted multimodal models on the parameter values
+      // advertised by their live endpoints. Unsupported sampling or template
+      // flags otherwise become a 4xx and trigger an unnecessary paid fallback.
+      if (model === 'moonshotai/kimi-k2.6') {
+        requestBody.temperature = 1
+        requestBody.top_p = 1
+        requestBody.seed = 0
+        delete requestBody.chat_template_kwargs
+      }
+      if (model === 'minimaxai/minimax-m3') {
+        requestBody.temperature = 1
+        requestBody.top_p = .95
+        delete requestBody.seed
+        delete requestBody.chat_template_kwargs
+      }
     }
     const response = await fetch(provider === 'nvidia' ? NVIDIA_URL : OPENROUTER_URL, {
       method: 'POST',
