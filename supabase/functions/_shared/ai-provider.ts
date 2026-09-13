@@ -17,8 +17,15 @@ type RoutedAiArgs = {
   timeoutMs?: number
   title?: string
   requireJsonObject?: boolean
-  /** Number of capacity-reserved NVIDIA attempts before the one OpenRouter fallback. */
+  /** Number of capacity-reserved NVIDIA attempts before any optional OpenRouter fallback. */
   nvidiaAttempts?: number
+  /**
+   * Keep paid failover only where there is no safe deterministic result.
+   * Template selection and page-copy generation can safely fall back to local
+   * rules/content, so they must not turn a temporary NVIDIA delay into an
+   * OpenRouter charge. Audits retain this as a continuity fallback.
+   */
+  allowOpenRouterFallback?: boolean
   /** Used by deterministic callers/tests that must bypass the dashboard choice. */
   preferredProvider?: AiProvider
 }
@@ -67,17 +74,17 @@ export async function resolveAiProvider(supabase: any): Promise<AiProvider> {
 }
 
 /**
- * Calls the dashboard-selected provider. NVIDIA is allowed to fail safely:
- * missing credentials, timeouts, 429s and provider errors fall back to the
- * existing OpenRouter model. OpenRouter mode deliberately stays OpenRouter-only.
+ * Calls the dashboard-selected provider. NVIDIA remains the normal route.
+ * A caller must opt into paid failover when it has no safe local fallback;
+ * OpenRouter mode deliberately stays OpenRouter-only.
  */
 export async function callRoutedChat(args: RoutedAiArgs): Promise<RoutedAiResult> {
   const preferred = args.preferredProvider ?? await resolveAiProvider(args.supabase)
   const errors: string[] = []
   const attempts: AiProvider[] = preferred === 'nvidia'
     ? [
-        ...Array.from({ length: Math.max(1, Math.min(2, args.nvidiaAttempts ?? 2)) }, () => 'nvidia' as const),
-        'openrouter' as const,
+        ...Array.from({ length: Math.max(1, Math.min(2, args.nvidiaAttempts ?? 1)) }, () => 'nvidia' as const),
+        ...(args.allowOpenRouterFallback === false ? [] : ['openrouter' as const]),
       ]
     : ['openrouter']
 
