@@ -319,7 +319,10 @@ async function scoreAudit(
     title: options.secondOpinion ? 'Botlio Audit Second Opinion Fallback' : 'Botlio Site Audit Fallback',
     timeoutMs: 60_000,
     requireJsonObject: true,
-    nvidiaAttempts: 2,
+    // One current NVIDIA attempt per judgment is enough. A borderline audit
+    // already gets an independent second model, so a duplicate retry only
+    // wastes one of the shared 40 requests/minute slots.
+    nvidiaAttempts: 1,
     body: {
       temperature: 0,
       top_p: 1,
