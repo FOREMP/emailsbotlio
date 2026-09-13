@@ -850,7 +850,10 @@ async function chooseTemplateFamilyForLead(supabase: ReturnType<typeof createCli
       nvidiaModel: TEMPLATE_PICKER_NVIDIA_MODEL,
       openrouterModel: TEMPLATE_PICKER_OPENROUTER_FALLBACK,
       preferredProvider: 'nvidia',
-      nvidiaAttempts: 2,
+      nvidiaAttempts: 1,
+      // Rule-based family selection is deliberately the safe fallback. Do
+      // not spend a paid model call merely because the NVIDIA picker is busy.
+      allowOpenRouterFallback: false,
       title: 'Botlio Template Picker Fallback',
       timeoutMs: 20_000,
       requireJsonObject: true,
