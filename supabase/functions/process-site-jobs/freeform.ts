@@ -459,7 +459,9 @@ Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","he
     sourceFor(ctx, page).slice(0, 2200) || '[Tunt underlag. Använd säker branschcopy utan påhittade fakta.]',
   ].filter(Boolean).join('\n')
   try {
-    const got = await callBuildModelCascade(ctx, `freeform-v7-content:${page.slug}`, system, user, 3000)
+    // 2,400 tokens comfortably covers this one-page JSON schema while keeping
+    // DeepSeek V4 Flash well below the long-output timeout seen at 3,000.
+    const got = await callBuildModelCascade(ctx, `freeform-v7-content:${page.slug}`, system, user, 2400)
     const raw = got.text
     const parsed = parseJson(raw)
     const c = repairContent(ctx, cleanContent(parsed, ctx, page))
@@ -1701,7 +1703,11 @@ async function callBuildModelCascade(ctx: FreeformCtx, label: string, system: st
     title: 'Botlio Site Content Fallback',
     timeoutMs: 45_000,
     requireJsonObject: true,
-    nvidiaAttempts: 2,
+    nvidiaAttempts: 1,
+    // Page generation has a safe, factual local-content fallback. Never turn
+    // one slow NVIDIA request into an expensive OpenRouter request; the next
+    // page/job still gets its own NVIDIA opportunity.
+    allowOpenRouterFallback: false,
     body: {
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
       temperature: .55,
