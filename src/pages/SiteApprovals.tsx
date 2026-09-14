@@ -24,7 +24,13 @@ type LeadRow = {
   status: string;
   audit_score: number | null;
   audit_reason: string | null;
-  audit_details: { weaknesses?: string[]; recommended_status?: "needs_site" | "site_good_enough" } | null;
+  audit_details: {
+    weaknesses?: string[];
+    recommended_status?: "needs_site" | "site_good_enough";
+    operator_decision?: "build" | "site_good_enough";
+    operator_decision_source?: "manual" | "automation";
+    operator_decided_at?: string;
+  } | null;
   demo_url: string | null;
   generated_site_id: string | null;
   feedback: string | null;
@@ -420,9 +426,19 @@ export default function SiteApprovals() {
 
   const notNeeded = async (row: LeadRow) => {
     setBusyId(row.id);
+    const decidedAt = new Date().toISOString();
     const { error } = await supabase
       .from("site_leads")
-      .update({ status: "site_good_enough", triaged_at: new Date().toISOString() })
+      .update({
+        status: "site_good_enough",
+        triaged_at: decidedAt,
+        audit_details: {
+          ...(row.audit_details ?? {}),
+          operator_decision: "site_good_enough",
+          operator_decision_source: "manual",
+          operator_decided_at: decidedAt,
+        },
+      })
       .eq("id", row.id);
     setBusyId(null);
     if (error) return toast({ title: "Fel", description: error.message, variant: "destructive" });
@@ -442,12 +458,19 @@ export default function SiteApprovals() {
     }
     setBusyId(row.id);
     try {
+      const decidedAt = new Date().toISOString();
       const { data: updated, error: updateError } = await supabase
         .from("site_leads")
         .update({
           status: "needs_site",
           auto_send: autoSend,
-          triaged_at: new Date().toISOString(),
+          triaged_at: decidedAt,
+          audit_details: {
+            ...(row.audit_details ?? {}),
+            operator_decision: "build",
+            operator_decision_source: "manual",
+            operator_decided_at: decidedAt,
+          },
         })
         .eq("id", row.id)
         .eq("status", "awaiting_audit_approval")

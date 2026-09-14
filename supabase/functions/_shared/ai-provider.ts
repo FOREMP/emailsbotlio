@@ -176,7 +176,9 @@ async function request(
       // remove it instead of turning every NVIDIA call into a 422 + fallback.
       delete requestBody.response_format
       if (model.startsWith('deepseek-ai/')) requestBody.reasoning_effort = 'none'
-      if (model.startsWith('qwen/')) requestBody.chat_template_kwargs = { enable_thinking: false }
+      if (model.startsWith('qwen/') && model !== 'qwen/qwen3.5-397b-a17b') {
+        requestBody.chat_template_kwargs = { enable_thinking: false }
+      }
       // Keep current NVIDIA-hosted multimodal models on the parameter values
       // advertised by their live endpoints. Unsupported sampling or template
       // flags otherwise become a 4xx and trigger an unnecessary paid fallback.

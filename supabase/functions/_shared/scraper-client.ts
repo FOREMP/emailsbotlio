@@ -22,6 +22,16 @@ export type ScraperPayload = {
     [key: string]: unknown
   } | null
   screenshot?: string | null
+  screenshot_quality?: {
+    reliable?: boolean
+    visible_text_characters?: number
+    main_text_characters?: number
+    visible_elements?: number
+    visible_images?: number
+    loaded_images?: number
+    loading_screen?: boolean
+    consent_overlay?: boolean
+  } | null
   source_url_used?: string
   provider_used?: ScrapeProvider
   fallback_from?: ScrapeProvider

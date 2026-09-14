@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   guardedAuditScore,
+  isRenderContradiction,
   shouldRequestSecondOpinion,
 } from '../../supabase/functions/_shared/site-audit'
 
@@ -27,5 +28,25 @@ describe('audit score safety guards', () => {
 
   it('checks a low-confidence visual result even outside the borderline band', () => {
     expect(shouldRequestSecondOpinion(7, 'low', true)).toBe(true)
+  })
+
+  it('rejects a blank-screen verdict when the scrape contains real site content', () => {
+    expect(isRenderContradiction(
+      'Skärmbilden visar en helt tom sida med endast en logotyp.',
+      ['Helt tom sida utan innehåll'],
+      'Tjänster kontakt om oss '.repeat(45),
+      true,
+      6,
+    )).toBe(true)
+  })
+
+  it('allows a genuinely empty screenshot verdict when there is no contradictory evidence', () => {
+    expect(isRenderContradiction(
+      'The page is empty and does not load.',
+      ['No content is visible'],
+      'Website',
+      true,
+      0,
+    )).toBe(false)
   })
 })

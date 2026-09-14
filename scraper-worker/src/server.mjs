@@ -156,16 +156,127 @@ async function withBrowser(fn) {
   finally { activeBrowsers--; await browser?.close().catch(() => {}) }
 }
 
+async function dismissConsentBanner(page) {
+  const selectors = [
+    '#onetrust-accept-btn-handler',
+    '[data-testid="uc-accept-all-button"]',
+    '[data-cookiefirst-action="accept"]',
+    '.cmplz-accept',
+    '.cky-btn-accept',
+  ]
+  for (const selector of selectors) {
+    const target = page.locator(selector).first()
+    if (await target.isVisible().catch(() => false)) {
+      await target.click({ timeout: 1_000 }).catch(() => {})
+      await page.waitForTimeout(250)
+      return true
+    }
+  }
+
+  const consentText = /^(accept( all)?|allow all|agree|ok|got it|godkänn( alla)?|acceptera( alla)?|tillåt alla|jag förstår)$/i
+  const buttons = page.locator('button, [role="button"], input[type="button"], input[type="submit"]')
+  const count = Math.min(await buttons.count().catch(() => 0), 80)
+  for (let index = 0; index < count; index++) {
+    const button = buttons.nth(index)
+    if (!await button.isVisible().catch(() => false)) continue
+    const label = String(await button.innerText().catch(() => '') || await button.getAttribute('value').catch(() => '') || '').trim()
+    if (!consentText.test(label)) continue
+    await button.click({ timeout: 1_000 }).catch(() => {})
+    await page.waitForTimeout(250)
+    return true
+  }
+  return false
+}
+
+async function pageReadiness(page) {
+  return page.evaluate(() => {
+    const viewportWidth = Math.max(document.documentElement.clientWidth, window.innerWidth || 0)
+    const viewportHeight = Math.max(document.documentElement.clientHeight, window.innerHeight || 0)
+    const visible = (element) => {
+      const style = getComputedStyle(element)
+      const rect = element.getBoundingClientRect()
+      return style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && Number(style.opacity || 1) > 0.05
+        && rect.width > 8
+        && rect.height > 8
+        && rect.bottom > 0
+        && rect.top < viewportHeight
+    }
+    const elements = Array.from(document.querySelectorAll('body *')).filter(visible).slice(0, 600)
+    const text = String(document.body?.innerText || '').replace(/\s+/g, ' ').trim()
+    const main = document.querySelector('main, [role="main"], #main, .main') || document.body
+    const mainText = String(main?.innerText || '').replace(/\s+/g, ' ').trim()
+    const images = Array.from(document.images).filter(visible)
+    const loadedImages = images.filter((image) => image.complete && image.naturalWidth > 40 && image.naturalHeight > 40).length
+    const loadingText = /^(loading|please wait|laddar|vänta|just a moment)[.!…\s]*$/i.test(mainText)
+    const overlay = elements.find((element) => {
+      const style = getComputedStyle(element)
+      const rect = element.getBoundingClientRect()
+      const area = rect.width * rect.height
+      const label = `${element.id} ${element.className} ${element.getAttribute('aria-label') || ''} ${element.textContent || ''}`.toLowerCase()
+      return (style.position === 'fixed' || style.position === 'sticky')
+        && area > viewportWidth * viewportHeight * 0.35
+        && /(cookie|consent|privacy|integritet|kakor)/i.test(label)
+    })
+    return {
+      visible_text_characters: text.length,
+      main_text_characters: mainText.length,
+      visible_elements: elements.length,
+      visible_images: images.length,
+      loaded_images: loadedImages,
+      loading_screen: loadingText,
+      consent_overlay: Boolean(overlay),
+    }
+  })
+}
+
+function isReadyForScreenshot(metrics) {
+  if (!metrics || metrics.loading_screen || metrics.consent_overlay) return false
+  return metrics.main_text_characters >= 100
+    || metrics.visible_text_characters >= 180
+    || metrics.visible_elements >= 18
+    || metrics.loaded_images >= 2
+}
+
+async function settlePageForScreenshot(page) {
+  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {})
+  await page.evaluate(() => document.fonts?.ready).catch(() => {})
+  await page.waitForTimeout(900)
+  await dismissConsentBanner(page)
+  await page.evaluate(() => {
+    window.scrollTo(0, Math.min(document.body?.scrollHeight || 0, Math.round(window.innerHeight * 0.8)))
+  }).catch(() => {})
+  await page.waitForTimeout(500)
+  await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {})
+  await page.waitForTimeout(350)
+
+  let metrics = await pageReadiness(page)
+  if (!isReadyForScreenshot(metrics)) {
+    // Hydrated sites and intro animations frequently need more than the old
+    // fixed 900 ms delay. One bounded retry is cheaper than a false audit.
+    await page.waitForTimeout(3_500)
+    await dismissConsentBanner(page)
+    await page.waitForLoadState('networkidle', { timeout: 2_500 }).catch(() => {})
+    metrics = await pageReadiness(page)
+  }
+  return { ...metrics, reliable: isReadyForScreenshot(metrics) }
+}
+
 async function browserScrape(rawUrl, screenshot) {
   const safe = await assertSafeUrl(rawUrl)
   return withBrowser(async (browser) => {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, userAgent: 'BotlioAuditBot/1.0 (+https://foremp.se)' })
+    const page = await browser.newPage({
+      viewport: { width: 1440, height: 1000 },
+      locale: 'sv-SE',
+      userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
+    })
     await page.route('**/*', async (route) => {
       const requestUrl = route.request().url()
       try { await assertSafeUrl(requestUrl); await route.continue() } catch { await route.abort() }
     })
     await page.goto(safe.toString(), { waitUntil: 'domcontentloaded', timeout: 30_000 })
-    await page.waitForTimeout(900)
+    const screenshotQuality = await settlePageForScreenshot(page)
     const html = await page.content()
     const finalUrl = page.url()
     const renderedColours = await page.evaluate(() => {
@@ -187,10 +298,16 @@ async function browserScrape(rawUrl, screenshot) {
       if (!publicBaseUrl) throw new Error('PUBLIC_BASE_URL is required for screenshots')
       await mkdir(screenshotDir, { recursive: true })
       const id = randomUUID().replace(/-/g, '')
-      await page.screenshot({ path: join(screenshotDir, `${id}.png`), fullPage: false, type: 'png' })
+      await page.screenshot({ path: join(screenshotDir, `${id}.png`), fullPage: false, type: 'png', animations: 'disabled' })
       screenshotUrl = `${publicBaseUrl}/v1/screenshots/${id}.png`
     }
-    return { ...data, screenshot: screenshotUrl, rendered: true, source_url_used: finalUrl }
+    return {
+      ...data,
+      screenshot: screenshotUrl,
+      screenshot_quality: screenshotQuality,
+      rendered: true,
+      source_url_used: finalUrl,
+    }
   })
 }
 

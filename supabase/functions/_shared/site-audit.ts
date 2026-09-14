@@ -30,6 +30,9 @@ export interface AuditResult {
   title: string
   markdown: string
   screenshot: string | null
+  /** Whether the browser had enough rendered content to trust the screenshot. */
+  screenshotReliable: boolean
+  screenshotQuality: Record<string, unknown> | null
   /** Confidence after the optional second opinion has been reconciled. */
   confidence: 'high' | 'medium' | 'low'
   /** The second vision model is used only for uncertain/borderline results. */
@@ -58,6 +61,8 @@ export interface ScrapeResult {
   title: string
   description: string
   screenshot: string | null
+  screenshotReliable: boolean
+  screenshotQuality: Record<string, unknown> | null
   blocked: boolean
   providerUsed: string
   fallbackFrom: string | null
@@ -93,19 +98,28 @@ export function normaliseUrl(raw: string): string {
 /** Scrape once through the configured provider boundary, requesting a screenshot. */
 export async function scrapeForAudit(url: string, provider: ScrapeProvider): Promise<ScrapeResult> {
   const empty: ScrapeResult = {
-    markdown: '', title: '', description: '', screenshot: null, blocked: true,
+    markdown: '', title: '', description: '', screenshot: null, screenshotReliable: false,
+    screenshotQuality: null, blocked: true,
     providerUsed: provider, fallbackFrom: null,
     cachePayload: null,
   }
   if (!url) return empty
   const payload: ScraperPayload = await scrapeUrl(provider, url, { screenshot: true })
+  const screenshot = typeof payload.screenshot === 'string' && payload.screenshot.trim()
+    ? payload.screenshot
+    : null
+  const screenshotQuality = payload.screenshot_quality && typeof payload.screenshot_quality === 'object'
+    ? payload.screenshot_quality as Record<string, unknown>
+    : null
+  const screenshotReliable = Boolean(screenshot)
+    && (screenshotQuality?.reliable !== false)
   return {
     markdown: String(payload.markdown ?? ''),
     title: String(payload.metadata?.title ?? ''),
     description: String(payload.metadata?.description ?? ''),
-    screenshot: typeof payload.screenshot === 'string' && payload.screenshot.trim()
-      ? payload.screenshot
-      : null,
+    screenshot,
+    screenshotReliable,
+    screenshotQuality,
     blocked: false,
     providerUsed: payload.provider_used ?? provider,
     fallbackFrom: payload.fallback_from ?? null,
@@ -113,6 +127,7 @@ export async function scrapeForAudit(url: string, provider: ScrapeProvider): Pro
       markdown: String(payload.markdown ?? '').slice(0, 12_000),
       summary: String(payload.summary ?? '').slice(0, 2_000),
       screenshot: typeof payload.screenshot === 'string' ? payload.screenshot.slice(0, 2_000) : null,
+      screenshot_quality: screenshotQuality,
       metadata: {
         title: String(payload.metadata?.title ?? '').slice(0, 500),
         description: String(payload.metadata?.description ?? '').slice(0, 1_000),
@@ -175,6 +190,10 @@ const SYSTEM_PROMPT = [
   '- Om skärmbilden saknas: du kan inte bedöma modernitet säkert. Döm försiktigt runt 5 och markera bara verifierade textproblem.',
   '- Om textutdraget är tunt men skärmbilden ser komplett och modern ut: lita på skärmbilden för designen och sänk inte automatiskt.',
   '- Om skärmbilden ser gammal eller trasig ut men texten är rik: den visuella bristen är fortfarande verklig.',
+  '- En cookie-banner är INTE en strukturell webbplatsbrist. Bedöm sidan bakom bannern när den syns.',
+  '- Saknad prislista är normalt INTE ett fel för tjänsteföretag och får aldrig ensam sänka poängen.',
+  '- Dra inga slutsatser om mobilanpassning från en skärmbild i desktopstorlek. Markera bara mobilproblem som faktiskt är verifierade.',
+  '- Om skärmbilden ser tom, blockerad eller fast i laddning men textutdraget innehåller ett riktigt företags tjänster, navigation eller kontaktuppgifter: behandla skärmbilden som en osäker rendering. Sätt INTE 1-3 och påstå INTE att webbplatsen är trasig.',
   '- Sätt bara 1-2 om du faktiskt SER att sidan är trasig, tom eller bara en tredjepartsprofil.',
   '- Bedöm ENDAST det du faktiskt ser eller läser. Spekulera inte.',
   '',
@@ -266,6 +285,111 @@ function parseJudgment(data: unknown, provider: string, model: string, hasScreen
   }
 }
 
+const RENDER_FAILURE_PATTERN = /\b(blank|empty|loading|loader|only (?:the )?(?:header|logo|menu)|no content (?:is )?visible|content (?:did not|does not) load|tom(?:t|ma)?|laddar|laddningsskärm|endast (?:en )?(?:header|logotyp|meny)|inget innehåll syns|innehållet (?:laddas|visas) inte)\b/i
+const COSMETIC_PATTERN = /\b(cookie|cookies|kakor|consent|cta|call[- ]to[- ]action|generisk|generic|mallkänsla|template feel|typografi|typography|visuell hierarki|visual hierarchy|saknar priser|saknar prisinformation|missing prices?|steril|tunn copy|thin copy)\b/i
+const UNVERIFIED_PATTERN = /\b(ej verifierat|inte verifierat|sannolikt|troligen|probably|likely|not verified|cannot verify)\b/i
+
+function uniqueIssues(items: string[]): string[] {
+  const seen = new Set<string>()
+  return items.filter((item) => {
+    const key = item.trim().toLocaleLowerCase()
+    if (!key || seen.has(key)) return false
+    seen.add(key)
+    return true
+  }).slice(0, 5)
+}
+
+function hasRichTextEvidence(markdown: string, linkCount: number): boolean {
+  const textLength = markdown.replace(/\s+/g, ' ').trim().length
+  return textLength >= 700 || (textLength >= 350 && linkCount >= 3)
+}
+
+export function isRenderContradiction(
+  reason: string,
+  structural: string[],
+  markdown: string,
+  screenshotReliable: boolean,
+  linkCount = 0,
+): boolean {
+  if (!hasRichTextEvidence(markdown, linkCount) && screenshotReliable) return false
+  return RENDER_FAILURE_PATTERN.test(`${reason} ${structural.join(' ')}`)
+}
+
+function hasRenderContradiction(judgment: AuditJudgment, scraped: ScrapeResult): boolean {
+  const linkCount = Array.isArray(scraped.cachePayload?.links) ? scraped.cachePayload.links.length : 0
+  return isRenderContradiction(
+    judgment.reason,
+    judgment.structural,
+    scraped.markdown,
+    scraped.screenshotReliable,
+    linkCount,
+  )
+}
+
+function normaliseJudgmentEvidence(
+  judgment: AuditJudgment,
+  scraped: ScrapeResult,
+  language: 'sv' | 'en',
+): AuditJudgment {
+  const renderContradiction = hasRenderContradiction(judgment, scraped)
+  const cosmetic = [...judgment.cosmetic]
+  const structural = judgment.structural.filter((issue) => {
+    if (renderContradiction && RENDER_FAILURE_PATTERN.test(issue)) return false
+    if (COSMETIC_PATTERN.test(issue) || UNVERIFIED_PATTERN.test(issue)) {
+      cosmetic.push(issue)
+      return false
+    }
+    return true
+  })
+  let score = guardedAuditScore(judgment.score, {
+    hasScreenshot: scraped.screenshotReliable,
+    hasStructuralIssues: structural.length > 0,
+  })
+  if (renderContradiction) score = Math.max(5, score)
+  if (!scraped.screenshotReliable) score = Math.max(4, Math.min(6, score))
+
+  return {
+    ...judgment,
+    score,
+    confidence: renderContradiction || !scraped.screenshotReliable ? 'low' : judgment.confidence,
+    websitePresence: renderContradiction && judgment.websitePresence === 'no_functional_website'
+      ? 'uncertain'
+      : judgment.websitePresence,
+    reason: renderContradiction
+      ? language === 'en'
+        ? 'The screenshot appears incompletely rendered while the scrape contains real site content; manual visual review is required.'
+        : 'Skärmbilden verkar ofullständigt renderad samtidigt som skrapningen innehåller riktigt sajtinnehåll; manuell kontroll krävs.'
+      : judgment.reason,
+    structural: uniqueIssues(structural),
+    cosmetic: uniqueIssues(cosmetic),
+  }
+}
+
+function reconcileJudgments(first: AuditJudgment, second: AuditJudgment): AuditJudgment {
+  const disagreement = Math.abs(first.score - second.score)
+  if (disagreement === 0) {
+    return {
+      ...second,
+      structural: uniqueIssues([...first.structural, ...second.structural]),
+      cosmetic: uniqueIssues([...first.cosmetic, ...second.cosmetic]),
+    }
+  }
+
+  // Never auto-park or auto-condemn a site when the two judges sit on
+  // opposite sides of the 7/10 boundary. Keep it in the human-review band.
+  const crossesParkingBoundary = (first.score >= 7) !== (second.score >= 7)
+  let score = crossesParkingBoundary ? 6 : Math.round((first.score + second.score) / 2)
+  if (disagreement >= 2) score = Math.max(4, Math.min(6, score))
+  const base = Math.abs(first.score - score) <= Math.abs(second.score - score) ? first : second
+  return {
+    ...base,
+    score,
+    confidence: disagreement >= 2 || crossesParkingBoundary ? 'low' : base.confidence,
+    structural: uniqueIssues([...first.structural, ...second.structural]),
+    cosmetic: uniqueIssues([...first.cosmetic, ...second.cosmetic]),
+  }
+}
+
 function auditUserContent(
   url: string,
   companyName: string,
@@ -279,7 +403,9 @@ function auditUserContent(
       `Titel: ${scraped.title}`,
       `Metabeskrivning: ${scraped.description}`,
       scraped.screenshot
-        ? 'Skärmbild av startsidan bifogas — den är ditt viktigaste underlag.'
+        ? scraped.screenshotReliable
+          ? 'Skärmbild av startsidan bifogas — den är ditt viktigaste underlag.'
+          : 'Skärmbilden bifogas men renderingskontrollen är osäker. Använd den inte som bevis för att sajten är tom eller trasig.'
         : 'Ingen skärmbild tillgänglig — modernitet kan inte bedömas säkert.',
       '',
       'Textinnehåll (utdrag):',
@@ -306,23 +432,21 @@ async function scoreAudit(
     : ''
   const routed = await callRoutedChat({
     supabase,
-    // The previous Qwen and Kimi K2.5 routes were retired by NVIDIA.
-    // Kimi K2.6 is an active NVIDIA-hosted multimodal model, so it can still
-    // judge the homepage screenshot as well as the scraped text.
-    // Use a genuinely independent NVIDIA vision model for the borderline
-    // second opinion. OpenRouter remains only the final provider fallback.
+    // Both audit models are NVIDIA-hosted multimodal endpoints. Force the
+    // audit path to NVIDIA even if another dashboard feature is temporarily
+    // set to OpenRouter; paid OpenRouter models remain continuity fallbacks.
     nvidiaModel: options.secondOpinion
-      ? 'minimaxai/minimax-m3'
+      ? 'qwen/qwen3.5-397b-a17b'
       : 'moonshotai/kimi-k2.6',
     openrouterModel: options.secondOpinion ? 'openai/gpt-4.1-mini' : 'google/gemini-2.5-flash',
-    preferredProvider: options.secondOpinion ? 'nvidia' : undefined,
+    preferredProvider: 'nvidia',
     title: options.secondOpinion ? 'Botlio Audit Second Opinion Fallback' : 'Botlio Site Audit Fallback',
     timeoutMs: 60_000,
     requireJsonObject: true,
-    // One current NVIDIA attempt per judgment is enough. A borderline audit
-    // already gets an independent second model, so a duplicate retry only
-    // wastes one of the shared 40 requests/minute slots.
-    nvidiaAttempts: 1,
+    // Retry NVIDIA once on transient endpoint/capacity errors before paying
+    // for OpenRouter. Every attempt still passes through the shared 40 rpm
+    // reservation function.
+    nvidiaAttempts: 2,
     body: {
       temperature: 0,
       top_p: 1,
@@ -375,6 +499,8 @@ export async function auditWebsite(
       title: '',
       markdown: '',
       screenshot: null,
+      screenshotReliable: false,
+      screenshotQuality: scraped.screenshotQuality,
       confidence: 'low',
       secondOpinionUsed: false,
       firstScore: scraped.blocked ? 5 : 1,
@@ -390,11 +516,12 @@ export async function auditWebsite(
   }
 
   const userContent = auditUserContent(url, companyName, scraped)
-  const first = await scoreAudit(supabase, userContent, language)
+  const rawFirst = await scoreAudit(supabase, userContent, language)
+  const first = normaliseJudgmentEvidence(rawFirst, scraped, language)
 
   // A second model sees the same visual evidence only when the first verdict
   // is genuinely uncertain. Clear extremes stay one-call audits.
-  const needsSecondOpinion = shouldRequestSecondOpinion(
+  const needsSecondOpinion = hasRenderContradiction(rawFirst, scraped) || shouldRequestSecondOpinion(
     first.score,
     first.confidence,
     Boolean(scraped.screenshot),
@@ -403,7 +530,8 @@ export async function auditWebsite(
   let secondOpinionError: string | null = null
   if (needsSecondOpinion) {
     try {
-      second = await scoreAudit(supabase, userContent, language, { secondOpinion: true })
+      const rawSecond = await scoreAudit(supabase, userContent, language, { secondOpinion: true })
+      second = normaliseJudgmentEvidence(rawSecond, scraped, language)
     } catch (error) {
       // The first visual verdict is still useful. A second-opinion outage must
       // not stall the entire audit queue; mark the result low-confidence so it
@@ -414,13 +542,12 @@ export async function auditWebsite(
   }
   const disagreement = second ? Math.abs(first.score - second.score) : null
 
-  // The independent NVIDIA vision judge is the tie-breaker in the
-  // manual-review band. We still retain both scores so later calibration can
-  // measure it; OpenRouter is used only if both NVIDIA attempts fail.
-  const chosen = second ?? first
-  const confidence: AuditResult['confidence'] = !scraped.screenshot
+  // Reconcile rather than blindly replacing the first verdict. Material
+  // disagreement stays in the manual-review band and is marked low confidence.
+  const chosen = second ? reconcileJudgments(first, second) : first
+  const confidence: AuditResult['confidence'] = !scraped.screenshotReliable
     ? 'low'
-    : Boolean(secondOpinionError) || (disagreement != null && disagreement >= 2)
+    : chosen.confidence === 'low' || Boolean(secondOpinionError) || (disagreement != null && disagreement >= 2)
       ? 'low'
       : second
         ? (first.confidence === 'high' && second.confidence === 'high' ? 'high' : 'medium')
@@ -434,11 +561,13 @@ export async function auditWebsite(
     structural: chosen.structural,
     cosmetic: chosen.cosmetic,
     unreadable: false,
-    uncertain: !scraped.screenshot || confidence === 'low',
+    uncertain: !scraped.screenshotReliable || confidence === 'low',
     url,
     title: scraped.title,
     markdown: scraped.markdown,
     screenshot: scraped.screenshot,
+    screenshotReliable: scraped.screenshotReliable,
+    screenshotQuality: scraped.screenshotQuality,
     confidence,
     secondOpinionUsed: Boolean(second),
     firstScore: first.score,

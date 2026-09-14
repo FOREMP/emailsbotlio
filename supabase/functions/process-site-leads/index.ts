@@ -685,6 +685,7 @@ async function auditOne(
       : recommendedStatus === 'site_good_enough'
       ? 'site_good_enough'
       : 'awaiting_audit_approval'
+    const auditedAt = new Date().toISOString()
     // Do not persist large inline screenshot data. Provider-hosted screenshot
     // URLs are useful evidence; base64 payloads would create avoidable DB I/O.
     const screenshotEvidence = result.screenshot?.startsWith('http')
@@ -696,6 +697,8 @@ async function auditOne(
       audit_score: result.score,
       audit_reason: result.reason,
       audit_details: {
+        audited_at: auditedAt,
+        rubric_version: 'screenshot_consensus_v4',
         weaknesses: result.weaknesses,
         structural: result.structural,
         cosmetic: result.cosmetic,
@@ -704,9 +707,18 @@ async function auditOne(
         auto_qualified_for_build: automaticallyNeedsSite,
         uncertain: result.uncertain,
         confidence: result.confidence,
+        ...(nextStatus === 'awaiting_audit_approval'
+          ? {}
+          : {
+              operator_decision: automaticallyNeedsSite ? 'build' : 'site_good_enough',
+              operator_decision_source: 'automation',
+              operator_decided_at: auditedAt,
+            }),
         evidence: {
-          rubric_version: 'screenshot_consensus_v3',
+          rubric_version: 'screenshot_consensus_v4',
           screenshot_used: Boolean(result.screenshot),
+          screenshot_reliable: result.screenshotReliable,
+          screenshot_quality: result.screenshotQuality,
           screenshot: screenshotEvidence,
           scraped_text_characters: result.markdown.length,
           scrape_provider: result.providerUsed,
@@ -721,11 +733,11 @@ async function auditOne(
         },
       },
       ...(recommendedStatus === 'site_good_enough' && !automaticallyNeedsSite
-        ? { triaged_at: new Date().toISOString() }
+        ? { triaged_at: auditedAt }
         : automaticallyNeedsSite
           ? {
               auto_send: Boolean(row.email),
-              triaged_at: new Date().toISOString(),
+              triaged_at: auditedAt,
             }
         : {}),
     }).eq('id', row.id)

@@ -115,6 +115,8 @@ Deno.serve(async (req) => {
       reason: result.reason,
       confidence: result.confidence,
       uncertain: result.uncertain,
+      screenshot_reliable: result.screenshotReliable,
+      screenshot_quality: result.screenshotQuality,
       second_opinion_used: result.secondOpinionUsed,
       first_score: result.firstScore,
       second_score: result.secondScore,
