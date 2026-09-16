@@ -1,56 +1,79 @@
-# Cut running cost: NVIDIA models + own scraper server
+# Fix queue filtering and make stop/unsubscribe actually stick
 
-Three phases, in this order. Each one works on its own, so you can stop after any of them.
+Two separate problems, confirmed in the code:
 
-## Phase 1 — Swap OpenRouter for NVIDIA (no server needed, do this first)
+## 1. The status filter only looks at a small slice of the queue
 
-NVIDIA's developer endpoint is OpenAI-compatible, so it is a drop-in swap: same request shape, different address, key and model names.
+The Demo Outreach page loads the 200 most recently updated companies and nothing
+more. The search box does query the whole sequence, but the status dropdown
+("Stoppade / avregistrerade", "Aktiva", etc.) only filters those 200 rows in the
+browser. So when you pick "Stoppade / avregistrerade" you see a handful, even
+though many more exist — exactly what you noticed.
 
-- Add a shared AI client used by every function instead of each file calling OpenRouter directly. It reads a provider setting (`nvidia` or `openrouter`) so you can flip back instantly if a model disappoints, without another code change.
-- Model mapping (all free on the NVIDIA dev tier):
-  - Website content writing: DeepSeek V3.1 (the same model quality you already fall back to today)
-  - Language polish: a strong instruct model (Qwen3 or Llama 3.3 70B), chosen after a side-by-side test on real Swedish copy
-  - Audit scoring: same tier, needs image input for the screenshot rubric — verified during the test before switching
-  - Template picker and review picker: smallest fast model
-- The 40 requests/minute limit is handled properly, not hoped for: calls go through one small queue that spaces them out, and a 429 waits and retries instead of failing the site build. At your volume (about 10 calls per site, 1 per audit) you use well under half the limit.
-- Anything the free tier cannot do well stays on the current model. Site quality is the deciding test, not price.
+**Fix:** when a status is selected, ask the database for companies with that
+status across the whole sequence instead of filtering what happens to be loaded.
 
-Before this counts as done: build two Swedish and one English test site, and re-score ten already-audited leads, then compare against current output for wording, industry fit and score agreement.
+- Selecting a status runs its own query (status match, newest first, up to 500
+  rows), so the list is complete, not a leftover slice.
+- Show the real total next to the filter ("visar 37 av 37") so it's obvious
+  nothing is hidden.
+- Search + status combine: searching narrows within the chosen status.
+- Add the missing statuses to the dropdown so nothing is invisible: failed and
+  deferred/paused rows currently belong to no filter option.
 
-## Phase 2 — Own scraper on a Lightsail box (replaces most Firecrawl usage)
+## 2. Unsubscribing does not remove a company from the queue
 
-One Ubuntu box (2 GB, about $12/month), running two Docker containers behind Caddy for automatic HTTPS on a subdomain such as `scrape.foremp.eu`:
+When someone unsubscribes, the handler only cancels enrollments whose status is
+exactly `active`. Companies sitting in `waiting_capacity` (the normal state
+while waiting for daily sending capacity) or deferred keep sitting in the queue
+looking like they'll be mailed. The send loop does catch them later and stops
+the email, but until then the queue is wrong and you go in and stop them by
+hand.
 
-1. **Scraper service** — a small HTTP service with headless Chromium. One endpoint: give it a website address, it returns the same shape the system already expects (page text, links, images, discovered "om oss"/"tjänster" pages, basic colours and fonts). Protected by a secret token so only your system can call it.
-2. **Caddy** — HTTPS and the token check.
+**Fix in the unsubscribe handler:**
+- Cancel every still-open enrollment for that address (`active`,
+  `waiting_capacity`, `deferred`, anything not already completed/stopped), not
+  just `active`.
+- Match the address case-insensitively everywhere, so `Info@Firma.se` and
+  `info@firma.se` are the same person.
+- Also record a do-not-contact entry when the address exists as a contact but
+  has never been emailed yet, so a never-contacted unsubscriber can't be
+  enrolled later.
+- Mark the matching lead so it isn't rebuilt/re-approved for outreach.
 
-In the app:
-- A single scraper client replaces the direct Firecrawl calls in the lead scraping and audit steps.
-- Screenshots stay on Firecrawl, as you said. That is one small call per lead instead of the whole crawl, which drops you back into a much cheaper Firecrawl tier.
-- If your box is down or a site blocks it, the code falls back to Firecrawl for that lead so the pipeline never stalls. Failures are recorded in the existing pipeline-health system.
+**Same fix in the bounce/complaint handler** (`handle-email-suppression`), which
+has the same narrow status handling — a spam complaint should empty the queue
+row immediately too.
 
-## Phase 3 — Google Maps lead scraping on the same box
+## 3. Manual "stop" behaves like an unsubscribe
 
-Use `gosom/google-maps-scraper` (Go, has a built-in web/API mode and Docker image) as a third container on the same Lightsail box, on an internal port, reachable only through the same token-protected entry.
+Today the stop button only flips the queue row to stopped. If you stop someone
+because they asked you to, they can still be picked up by a future import or
+another sequence. Add the address to the do-not-contact list when you stop it
+manually, so it's permanent.
 
-- **Manual:** a "Hämta leads" panel in the app where you enter search terms, city and language, press start, and watch progress. Results land straight in `site_leads` through the existing import path, with the same duplicate protection.
-- **Automatic:** a nightly job that checks lead stock per language and niche and runs saved searches when stock falls under a threshold, so the pipeline never runs dry.
-- Scraping is queued job-by-job on the server, so a big Maps run never blocks a website scrape.
+## Verification
 
-## What this costs when finished
-
-| Item | Now | After |
-| --- | --- | --- |
-| AI (OpenRouter) | Your current monthly spend | 0 while on the NVIDIA free tier |
-| Firecrawl | $80 plan, ~20% used | Lowest paid tier, screenshots only |
-| Server | — | ~$12/month Lightsail |
-| Google Maps scraping | Manual, on your laptop | Runs on the server, manual + nightly |
+- Load the page, pick "Stoppade / avregistrerade", confirm the count matches the
+  "Stoppade" stat card at the top of the page.
+- Run one real unsubscribe against a test row and confirm the company disappears
+  from the active queue immediately, with no manual stop needed.
+- Confirm a company that is waiting for capacity also disappears when it
+  unsubscribes.
 
 ## Technical notes
 
-- New `supabase/functions/_shared/llm.ts`: provider-aware chat client (`https://integrate.api.nvidia.com/v1/chat/completions`, `NVIDIA_API_KEY`), model alias table, rate-limit spacing, 429/5xx backoff. Call sites to migrate: `process-site-jobs/freeform.ts` (`BUILD_MODEL`, `LANG_MODEL`, `callModel`, `callBuildModelCascade`), `process-site-jobs/index.ts`, `_shared/site-audit.ts`, `process-site-leads/index.ts`, `import-site-leads/index.ts`. `generate-email` keeps its current OpenAI path.
-- New `supabase/functions/_shared/scraper.ts`: client for the self-hosted scraper returning the existing `scraped_content` shape, with Firecrawl fallback. `scrape-lead-data` and `_shared/site-audit.ts` switch to it; Firecrawl keeps only the screenshot call.
-- Secrets to add: `NVIDIA_API_KEY`, `SCRAPER_BASE_URL`, `SCRAPER_TOKEN`.
-- Server: Lightsail Ubuntu 2 GB, Docker Compose with Caddy + scraper service (+ `gosom/google-maps-scraper` in phase 3), a DNS record for the subdomain, and firewall limited to 80/443.
-- Phase 3 adds an edge function that starts and polls a Maps job, a UI panel, and a scheduled top-up job; leads are inserted through the existing `insert_site_leads_batch` path.
-- No database schema change is needed for phases 1 and 2; phase 3 adds a small table for saved searches and job runs.
+- `src/pages/SiteOutreach.tsx`: replace the client-side `filteredEnrollments`
+  memo with a status-scoped Supabase query (`.eq("sequence_id")` +
+  `.in("status", [...])`, `count: "exact"`), keyed on `queueStatus`, merged with
+  the existing search path; keep the 20/page client pagination over the fetched
+  set.
+- `supabase/functions/handle-email-unsubscribe/index.ts`: change the enrollments
+  update from `.eq('status','active')` to
+  `.in('status', ['active','waiting_capacity','deferred','paused'])`; derive
+  affected users from `contacts` as well as `sent_emails`; update
+  `site_leads.status`/`auto_send` for the matching email.
+- `supabase/functions/handle-email-suppression/index.ts`: apply the same
+  enrollment status set.
+- Manual stop in `SiteOutreach.tsx` additionally upserts `do_not_contact`.
+- No schema changes.
