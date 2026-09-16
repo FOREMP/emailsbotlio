@@ -78,6 +78,16 @@ const STOCKHOLM_TZ = "Europe/Stockholm";
 const QUEUE_PAGE_SIZE = 20;
 const COUNTED_SEND_STATUSES = new Set(["queued", "sent", "bounced", "complained", "unsubscribed"]);
 
+// What each choice in the status dropdown actually matches in the database.
+const QUEUE_STATUS_GROUPS: Record<string, string[]> = {
+  active: ["active"],
+  waiting_capacity: ["waiting_capacity"],
+  deferred: ["deferred", "paused"],
+  completed: ["completed"],
+  stopped: ["stopped", "unsubscribed"],
+  failed: ["failed"],
+};
+
 const stockholmDateKey = (value: string | Date): string | null => {
   const date = typeof value === "string" ? new Date(value) : value;
   if (Number.isNaN(date.getTime())) return null;
