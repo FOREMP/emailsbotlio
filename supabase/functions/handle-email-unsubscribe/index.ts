@@ -118,7 +118,7 @@ async function syncDoNotContactAndEnrollments(
       .from('contacts')
       .select('id')
       .eq('user_id', uid)
-      .ilike('email', email)
+      .ilike('email', normalizedEmail)
 
     if (contactsError) {
       throw contactsError
@@ -132,11 +132,22 @@ async function syncDoNotContactAndEnrollments(
         .update({ status: 'unsubscribed' })
         .eq('user_id', uid)
         .in('contact_id', contactIds)
-        .eq('status', 'active')
+        .in('status', OPEN_ENROLLMENT_STATUSES)
 
       if (enrollmentsError) {
         throw enrollmentsError
       }
+    }
+
+    // Stop the lead itself so it isn't rebuilt or re-approved for outreach.
+    const { error: leadError } = await supabase
+      .from('site_leads')
+      .update({ status: 'unsubscribed', auto_send: false })
+      .eq('user_id', uid)
+      .ilike('email', normalizedEmail)
+
+    if (leadError) {
+      console.error('Failed to stop site lead after unsubscribe', { error: leadError })
     }
   }
 
