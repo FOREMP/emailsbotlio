@@ -110,6 +110,14 @@ export default function SiteOutreach() {
     try { return localStorage.getItem("outreach-queue-open") === "1"; } catch { return false; }
   });
   const [queuePage, setQueuePage] = useState(1);
+  // Search + status filter for the queue. The table only holds the latest 200
+  // rows, so a search term is also sent to the database to find companies
+  // further down the queue.
+  const [queueSearchInput, setQueueSearchInput] = useState("");
+  const [queueSearch, setQueueSearch] = useState("");
+  const [queueStatus, setQueueStatus] = useState<string>("all");
+  const [searchRows, setSearchRows] = useState<EnrollRow[] | null>(null);
+  const [searching, setSearching] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -178,7 +186,7 @@ export default function SiteOutreach() {
       const chunk = visibleEnrollmentIds.slice(i, i + 200);
       const { data, error } = await supabase
         .from("sent_emails")
-        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject, body, open_count, contact_id, tracking_enabled, tracking_route, tracking_url")
+        .select("id, recipient_email, status, sent_at, opened_at, replied_at, sender_id, enrollment_id, subject, open_count, contact_id, tracking_enabled, tracking_route, tracking_url")
         .in("enrollment_id", chunk)
         .order("sent_at", { ascending: false });
       if (error) {
@@ -355,7 +363,7 @@ export default function SiteOutreach() {
               .map((value: string) => value.trim().toLowerCase())
               .filter(Boolean)),
         );
-        const fallbackDomains = language === "en" ? ["foremp.eu", "foremp.one"] : ["foremp.email"];
+        const fallbackDomains = language === "en" ? ["foremp.eu"] : ["foremp.email", "foremp.one"];
         fallbackDomains.forEach((domain) => allowedDomains.add(domain));
 
         const { data: forempSenders } = await supabase
@@ -495,7 +503,7 @@ export default function SiteOutreach() {
           </Button>
         </div>
         <p className="text-sm text-muted-foreground">
-          {language === "en" ? "4-mail English sequence from @foremp.eu" : "4-mails svensk sekvens från @foremp.email"} — <strong>skickas endast måndag–fredag 09:00 Stockholm-tid</strong>.
+          {language === "en" ? "4-mail English sequence from @foremp.eu" : "4-mails svensk sekvens från @foremp.email och @foremp.one"} — <strong>skickas endast måndag–fredag 09:00 Stockholm-tid</strong>.
           Fylls på automatiskt när du godkänner demos i Approvals (kontakt, hemsidelänk och audit-info följer med).
         </p>
       </div>
@@ -506,8 +514,8 @@ export default function SiteOutreach() {
           <p className="text-xs text-muted-foreground">
             Räknar endast <strong>nya första mail</strong> per dag. Follow-ups skickas alltid ovanpå detta.
             {language === "en"
-              ? " Totalen delas mellan aktiva @foremp.eu/@foremp.one-senders."
-              : " Totalen delas jämnt mellan aktiva @foremp.email-senders."}
+              ? " Totalen delas mellan aktiva @foremp.eu-senders."
+              : " Totalen delas mellan aktiva @foremp.email/@foremp.one-senders."}
           </p>
         </div>
         <div className="flex items-end gap-2">
@@ -544,7 +552,7 @@ export default function SiteOutreach() {
           <div>
             <h2 className="text-lg font-semibold flex items-center gap-2"><BarChart3 className="h-4 w-4" /> Statistik (senaste 30 dagar)</h2>
             <p className="text-xs text-muted-foreground">Skickade, öppnade och besvarade mail per dag för Site Demo Outreach.</p>
-            <p className="text-xs text-muted-foreground">Visar nu: {language === "en" ? "English / foremp.eu" : "Svenska / foremp.email"}.</p>
+            <p className="text-xs text-muted-foreground">Visar nu: {language === "en" ? "English / foremp.eu" : "Svenska / foremp.email + foremp.one"}.</p>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
             <Select value={stepFilter} onValueChange={(value) => setStepFilter(value as StepFilter)}>
