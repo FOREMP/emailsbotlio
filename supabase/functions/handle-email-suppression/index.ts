@@ -122,6 +122,22 @@ Deno.serve(async (req) => {
       if (!existing) {
         await supabase.from('do_not_contact').insert({ user_id: uid, email: normalizedEmail, reason: payload.reason })
       }
+
+      // Empty the queue right away instead of waiting for the next send loop.
+      const { data: contactRows } = await supabase
+        .from('contacts')
+        .select('id')
+        .eq('user_id', uid)
+        .ilike('email', normalizedEmail)
+      const contactIds = (contactRows ?? []).map((c: any) => c.id)
+      if (contactIds.length > 0) {
+        await supabase
+          .from('enrollments')
+          .update({ status: 'unsubscribed' })
+          .eq('user_id', uid)
+          .in('contact_id', contactIds)
+          .in('status', OPEN_ENROLLMENT_STATUSES)
+      }
     }
   }
 

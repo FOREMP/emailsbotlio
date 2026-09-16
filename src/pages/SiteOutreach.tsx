@@ -78,6 +78,16 @@ const STOCKHOLM_TZ = "Europe/Stockholm";
 const QUEUE_PAGE_SIZE = 20;
 const COUNTED_SEND_STATUSES = new Set(["queued", "sent", "bounced", "complained", "unsubscribed"]);
 
+// What each choice in the status dropdown actually matches in the database.
+const QUEUE_STATUS_GROUPS: Record<string, string[]> = {
+  active: ["active"],
+  waiting_capacity: ["waiting_capacity"],
+  deferred: ["deferred", "paused"],
+  completed: ["completed"],
+  stopped: ["stopped", "unsubscribed"],
+  failed: ["failed"],
+};
+
 const stockholmDateKey = (value: string | Date): string | null => {
   const date = typeof value === "string" ? new Date(value) : value;
   if (Number.isNaN(date.getTime())) return null;
@@ -118,6 +128,11 @@ export default function SiteOutreach() {
   const [queueStatus, setQueueStatus] = useState<string>("all");
   const [searchRows, setSearchRows] = useState<EnrollRow[] | null>(null);
   const [searching, setSearching] = useState(false);
+  // Rows for the selected status, fetched from the database so the filter
+  // covers the whole sequence and not just the rows already on screen.
+  const [statusRows, setStatusRows] = useState<EnrollRow[] | null>(null);
+  const [statusTotal, setStatusTotal] = useState<number | null>(null);
+  const [statusLoading, setStatusLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -276,12 +291,51 @@ export default function SiteOutreach() {
     return () => { cancelled = true; };
   }, [queueSearch, seq]);
 
+  // Pick a status → ask the database for every company with that status in the
+  // whole sequence, not just the newest rows already loaded.
+  useEffect(() => {
+    if (!seq || queueStatus === "all") {
+      setStatusRows(null); setStatusTotal(null); setStatusLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setStatusLoading(true);
+    (async () => {
+      const wanted = QUEUE_STATUS_GROUPS[queueStatus] ?? [queueStatus];
+      const { data: enrs, count } = await supabase
+        .from("enrollments")
+        .select("id, status, current_step, current_node_id, next_send_at, last_sent_at, created_at, contact_id", { count: "exact" })
+        .eq("sequence_id", seq.id)
+        .in("status", wanted)
+        .order("updated_at", { ascending: false })
+        .limit(500);
+      const rows = (enrs ?? []) as any[];
+      const contactIds = Array.from(new Set(rows.map((e) => e.contact_id).filter(Boolean)));
+      const contactMap = new Map<string, any>();
+      for (let i = 0; i < contactIds.length; i += 200) {
+        const { data } = await supabase
+          .from("contacts")
+          .select("id, email, first_name, custom_fields")
+          .in("id", contactIds.slice(i, i + 200));
+        for (const c of data ?? []) contactMap.set(c.id as string, c);
+      }
+      if (cancelled) return;
+      setStatusRows(rows.map((e) => ({ ...e, contact: contactMap.get(e.contact_id) ?? null })) as EnrollRow[]);
+      setStatusTotal(count ?? rows.length);
+      setStatusLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [queueStatus, seq, lastUpdated]);
+
   const filteredEnrollments = useMemo(() => {
-    const base = searchRows ?? enrollments;
-    if (queueStatus === "all") return base;
-    if (queueStatus === "stopped") return base.filter((e) => e.status === "stopped" || e.status === "unsubscribed");
-    return base.filter((e) => e.status === queueStatus);
-  }, [searchRows, enrollments, queueStatus]);
+    const wanted = queueStatus === "all" ? null : (QUEUE_STATUS_GROUPS[queueStatus] ?? [queueStatus]);
+    // A search term always wins: we then narrow its hits by the chosen status.
+    if (searchRows) {
+      return wanted ? searchRows.filter((e) => wanted.includes(e.status)) : searchRows;
+    }
+    if (wanted) return statusRows ?? [];
+    return enrollments;
+  }, [searchRows, statusRows, enrollments, queueStatus]);
 
   const queuePageCount = Math.max(1, Math.ceil(filteredEnrollments.length / QUEUE_PAGE_SIZE));
   const pagedEnrollments = useMemo(
@@ -361,12 +415,26 @@ export default function SiteOutreach() {
 
   const stopEnrollment = async (id: string, reason: string) => {
     if (!confirm(`Stoppa denna kontakt från fler mail? (${reason})`)) return;
-    const { error } = await supabase.from("enrollments").update({
+    const { data: stopped, error } = await supabase.from("enrollments").update({
       status: "stopped",
       last_error: `manually stopped: ${reason}`,
       error_at: new Date().toISOString(),
-    }).eq("id", id);
+    }).eq("id", id).select("id, user_id, contact_id").maybeSingle();
     if (error) return toast({ title: "Fel", description: error.message, variant: "destructive" });
+
+    // A manual stop is permanent: put the address on the do-not-contact list so
+    // no future import or sequence can pick it up again.
+    if (stopped?.contact_id && stopped.user_id) {
+      const { data: contact } = await supabase
+        .from("contacts").select("email").eq("id", stopped.contact_id).maybeSingle();
+      const email = contact?.email?.trim().toLowerCase();
+      if (email) {
+        await supabase.from("do_not_contact").upsert(
+          { user_id: stopped.user_id, email, reason: `manually stopped: ${reason}` },
+          { onConflict: "user_id,email" },
+        );
+      }
+    }
     toast({ title: "Stoppad" });
     load();
   };
@@ -685,8 +753,10 @@ export default function SiteOutreach() {
               <SelectItem value="all">Alla statusar</SelectItem>
               <SelectItem value="active">Aktiva</SelectItem>
               <SelectItem value="waiting_capacity">Väntar på kapacitet</SelectItem>
+              <SelectItem value="deferred">Pausade / uppskjutna</SelectItem>
               <SelectItem value="completed">Klara</SelectItem>
               <SelectItem value="stopped">Stoppade / avregistrerade</SelectItem>
+              <SelectItem value="failed">Misslyckade</SelectItem>
             </SelectContent>
           </Select>
           {(queueSearchInput || queueStatus !== "all") && (
@@ -694,9 +764,14 @@ export default function SiteOutreach() {
               Rensa
             </Button>
           )}
-          {searching && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+          {(searching || statusLoading) && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
           {searchRows !== null && !searching && (
             <span className="text-xs text-muted-foreground">Sökning i hela sekvensen</span>
+          )}
+          {searchRows === null && queueStatus !== "all" && !statusLoading && (
+            <span className="text-xs text-muted-foreground">
+              Visar {filteredEnrollments.length} av {statusTotal ?? filteredEnrollments.length} i hela sekvensen
+            </span>
           )}
         </div>
         {filteredEnrollments.length === 0 ? (
