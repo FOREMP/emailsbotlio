@@ -36,6 +36,9 @@ type LeadRow = {
   feedback: string | null;
   auto_send: boolean;
   updated_at: string;
+  template_family?: string | null;
+  template_variant?: string | null;
+  template_stage?: string | null;
 };
 
 const STATUS_BADGE: Record<string, string> = {
@@ -70,7 +73,6 @@ export default function SiteApprovals() {
   const [loading, setLoading] = useState(false);
   const [regen, setRegen] = useState<LeadRow | null>(null);
   const [feedback, setFeedback] = useState("");
-  const [regenMode, setRegenMode] = useState<"keep" | "template" | "freeform">("keep");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [ticking, setTicking] = useState(false);
   const [filter, setFilter] = useState<string>("awaiting_audit_approval");
@@ -158,7 +160,19 @@ export default function SiteApprovals() {
         true,
       );
       if (error) throw error;
-      reconcileRows((data ?? []) as LeadRow[], preserveOrder);
+      const incoming = (data ?? []) as LeadRow[];
+      const siteIds = incoming.map((row) => row.generated_site_id).filter((id): id is string => Boolean(id));
+      if (siteIds.length) {
+        const { data: sites } = await supabase.from("generated_sites").select("id, template, gen_progress").in("id", siteIds);
+        const byId = new Map((sites ?? []).map((site: any) => [site.id, site]));
+        for (const row of incoming) {
+          const site: any = row.generated_site_id ? byId.get(row.generated_site_id) : null;
+          row.template_family = site?.gen_progress?.plan?.templateFamily ?? site?.template ?? null;
+          row.template_variant = site?.gen_progress?.plan?.variant ?? null;
+          row.template_stage = site?.gen_progress?.stage ?? null;
+        }
+      }
+      reconcileRows(incoming, preserveOrder);
       setTotalCount(count ?? 0);
       await loadCounts();
       setLastUpdated(new Date());
@@ -527,68 +541,14 @@ export default function SiteApprovals() {
         .update({ feedback: feedbackText, updated_at: new Date().toISOString() })
         .eq("id", regen.id);
 
-      // 2. Mirror feedback into the linked ghost contact so process-site-jobs
-      //    picks it up in the next generation pass.
-      if (regen.generated_site_id) {
-        const { data: gs } = await supabase
-          .from("generated_sites")
-          .select("id, contact_id")
-          .eq("id", regen.generated_site_id)
-          .maybeSingle();
-        if (gs?.contact_id) {
-          const { data: contact } = await supabase
-            .from("contacts")
-            .select("custom_fields")
-            .eq("id", gs.contact_id)
-            .single();
-          const cf = (contact?.custom_fields ?? {}) as Record<string, unknown>;
-          await supabase
-            .from("contacts")
-            .update({ custom_fields: { ...cf, regen_feedback: feedbackText } })
-            .eq("id", gs.contact_id);
-        }
-
-        if (gs?.id) {
-          // 3a. Re-queue the existing site so the worker picks it up immediately.
-          const modeFields =
-            regenMode === "keep"
-              ? {}
-              : regenMode === "freeform"
-                ? { generation_mode: "freeform", gen_progress: null, generated_files: null }
-                : { generation_mode: "template" };
-          await supabase
-            .from("generated_sites")
-            .update({
-              status: "queued",
-              queued_at: new Date().toISOString(),
-              error_message: null,
-              attempts: 0,
-              ...modeFields,
-            })
-            .eq("id", gs.id);
-
-          await supabase
-            .from("site_leads")
-            .update({
-              status: "generating",
-              generated_site_id: gs.id,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", regen.id);
-
-          await supabase.functions.invoke("process-site-jobs", { body: { generated_site_id: gs.id } });
-          reusedExistingJob = true;
-        }
+      const { data: regenerateResult, error } = await supabase.functions.invoke("process-site-leads", {
+        body: { force: true, regenerate_existing: true, lead_ids: [regen.id] },
+      });
+      if (error) throw error;
+      if (Array.isArray(regenerateResult?.errors) && regenerateResult.errors.length) {
+        throw new Error(String(regenerateResult.errors[0]));
       }
-
-      // 3b. If there is no usable generated-site row anymore, force the lead
-      // through the safe backend creation path so a fresh job is created.
-      if (!reusedExistingJob) {
-        const { error } = await supabase.functions.invoke("process-site-leads", {
-          body: { force: true, lead_ids: [regen.id] },
-        });
-        if (error) throw error;
-      }
+      reusedExistingJob = Boolean(regen.generated_site_id);
 
       toast({
         title: reusedExistingJob ? "Regenererar" : "Ny ombyggnad startad",
@@ -598,7 +558,6 @@ export default function SiteApprovals() {
       });
       setRegen(null);
       setFeedback("");
-      setRegenMode("keep");
       await runLoad();
     } catch (e) {
       toast({ title: "Fel", description: (e as Error).message, variant: "destructive" });
@@ -712,6 +671,7 @@ export default function SiteApprovals() {
                     <Badge variant="outline" className="ml-1 text-[10px]">manuell granskning vald</Badge>
                   )}
                   <Badge variant="outline">{(row.language ?? "sv").toUpperCase()}</Badge>
+                  {row.template_family && <Badge variant="outline" title="Vald modern mallfamilj">{row.template_family}{row.template_variant ? ` · ${row.template_variant}` : ""}</Badge>}
                   {row.audit_score != null && (
                     <>
                       <Badge className="bg-slate-700">Säljpotential {auditScoreLabel(row.audit_score)}</Badge>
@@ -826,20 +786,7 @@ export default function SiteApprovals() {
             </DialogDescription>
           </DialogHeader>
           <Textarea rows={6} value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="Feedback till AI:n…" />
-          <div className="space-y-2">
-            <div className="text-sm font-medium">Byggmotor för denna regenerering</div>
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant={regenMode === "keep" ? "default" : "outline"} onClick={() => setRegenMode("keep")}>
-                Samma som förut
-              </Button>
-              <Button size="sm" variant={regenMode === "template" ? "default" : "outline"} onClick={() => setRegenMode("template")}>
-                Mall
-              </Button>
-              <Button size="sm" variant={regenMode === "freeform" ? "default" : "outline"} onClick={() => setRegenMode("freeform")}>
-                AI bygger fritt (DeepSeek V4)
-              </Button>
-            </div>
-          </div>
+          <p className="text-sm text-muted-foreground">Systemet väljer om den bäst passande moderna mallfamiljen från leadens kategori och bygger sedan om sidan från grunden. Befintlig scrape återanvänds.</p>
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setRegen(null)} disabled={busyId === regen?.id}>Avbryt</Button>

@@ -127,7 +127,7 @@ function extractColours(value) {
   return unique([...String(value || '').matchAll(/#[0-9a-fA-F]{3,8}\b|rgba?\([^)]{3,80}\)/g)].map((m) => m[0].toLowerCase()), 32)
 }
 
-function analyseHtml(html, baseUrl, status = 200, renderedColours = []) {
+function analyseHtml(html, baseUrl, status = 200, renderedBranding = null) {
   const title = decode(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '')
   const description = decode(attribute(html, 'description') || attribute(html, 'og:description'))
   const main = html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/i)?.[1] || html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1] || html
@@ -142,10 +142,13 @@ function analyseHtml(html, baseUrl, status = 200, renderedColours = []) {
   }
   // Include short hex/RGB values and, when a browser was used, computed visible
   // colours. External stylesheets otherwise never appear in page.content().
-  const colors = unique([...extractColours(html), ...renderedColours.map((c) => String(c).toLowerCase())], 32)
-  const fonts = unique([...html.matchAll(/font-family\s*:\s*([^;}]+)/gi)].map((m) => stripHtml(m[1]).replace(/["']/g, '').split(',')[0].trim()), 8)
+  const renderedColours = Array.isArray(renderedBranding?.colors) ? renderedBranding.colors : []
+  const colors = unique([...renderedColours, ...extractColours(html)], 32)
+  const validFont = (value) => typeof value === 'string' && value.length >= 2 && value.length <= 60 && !/^(inherit|initial|unset|var\(|serif$|sans-serif$|system-ui$)/i.test(value) && !/[<>{};]/.test(value)
+  const renderedFonts = Array.isArray(renderedBranding?.fonts) ? renderedBranding.fonts : []
+  const fonts = unique([...renderedFonts, ...[...html.matchAll(/font-family\s*:\s*([^;}]+)/gi)].map((m) => stripHtml(m[1]).replace(/["']/g, '').split(',')[0].trim())].filter(validFont), 8)
   const markdown = `# ${title || 'Website'}\n\n${description ? `${description}\n\n` : ''}${text}`.trim()
-  return { metadata: { title, description, statusCode: status }, markdown, links: unique(links), summary: text.slice(0, 500), branding: { colors, fonts, images: unique(images, 20) } }
+  return { metadata: { title, description, statusCode: status }, markdown, links: unique(links), summary: text.slice(0, 500), branding: { colors, fonts, images: unique(images, 20), palette: renderedBranding?.palette ?? null, colorEvidence: renderedBranding?.colorEvidence ?? [], fontEvidence: renderedBranding?.fontEvidence ?? [], imageEvidence: renderedBranding?.imageEvidence ?? [] } }
 }
 
 async function withBrowser(fn) {
@@ -279,20 +282,27 @@ async function browserScrape(rawUrl, screenshot) {
     const screenshotQuality = await settlePageForScreenshot(page)
     const html = await page.content()
     const finalUrl = page.url()
-    const renderedColours = await page.evaluate(() => {
-      const values = []
-      const add = (value) => { if (typeof value === 'string' && value && value !== 'transparent' && value !== 'rgba(0, 0, 0, 0)') values.push(value) }
-      const root = getComputedStyle(document.documentElement)
-      for (const name of Array.from(document.documentElement.style)) {
-        if (name.startsWith('--') && /(color|primary|secondary|accent|brand|background|surface|text|link|button)/i.test(name)) add(root.getPropertyValue(name).trim())
+    const renderedBranding = await page.evaluate(() => {
+      const ignored = (element) => Boolean(element.closest('[id*="cookie" i],[class*="cookie" i],[id*="consent" i],[class*="consent" i],[class*="chat" i],[id*="chat" i]'))
+      const visible = (element) => { const s = getComputedStyle(element); const r = element.getBoundingClientRect(); return !ignored(element) && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > .05 && r.width > 8 && r.height > 8 }
+      const evidence = new Map()
+      const add = (value, role, element) => {
+        if (typeof value !== 'string' || !value || value === 'transparent' || value === 'rgba(0, 0, 0, 0)') return
+        const rect = element?.getBoundingClientRect?.() || { width: 0, height: 0 }
+        const key = `${value}|${role}`; const old = evidence.get(key) || { value, role, count: 0, area: 0 }
+        old.count++; old.area += Math.min(rect.width * rect.height, innerWidth * innerHeight); evidence.set(key, old)
       }
-      for (const element of Array.from(document.querySelectorAll('body, header, main, footer, a, button, [class*="btn" i], [class*="hero" i]')).slice(0, 160)) {
-        const style = getComputedStyle(element)
-        add(style.color); add(style.backgroundColor); add(style.borderTopColor)
-      }
-      return [...new Set(values)].slice(0, 80)
+      const body = document.body; const header = document.querySelector('header'); const cta = document.querySelector('button,[class*="btn" i],a[class*="button" i]'); const link = document.querySelector('main a')
+      for (const [element, role] of [[body, 'background'], [body, 'text'], [header, 'header'], [cta, 'primary'], [link, 'accent']]) if (element && visible(element)) { const s = getComputedStyle(element); add(role === 'text' ? s.color : s.backgroundColor, role, element); if (role === 'primary' || role === 'accent') add(s.color, `${role}Text`, element) }
+      for (const element of Array.from(document.querySelectorAll('main section, main article, footer, h1, h2, button, [class*="hero" i]')).filter(visible).slice(0, 120)) { const s = getComputedStyle(element); add(s.color, 'text', element); add(s.backgroundColor, 'surface', element) }
+      const ranked = [...evidence.values()].sort((a, b) => (b.count * 1000 + b.area) - (a.count * 1000 + a.area))
+      const role = (name) => ranked.find((item) => item.role === name)?.value || null
+      const fontMap = new Map()
+      for (const element of Array.from(document.querySelectorAll('body,h1,h2,h3,p,a,button')).filter(visible).slice(0, 160)) { const family = getComputedStyle(element).fontFamily.split(',')[0].replace(/["']/g, '').trim(); if (family && !/^(inherit|initial|unset|serif|sans-serif|system-ui)$/i.test(family)) fontMap.set(family, (fontMap.get(family) || 0) + 1) }
+      const imageEvidence = Array.from(document.images).filter((img) => visible(img) && img.naturalWidth >= 240 && img.naturalHeight >= 160 && !/(logo|icon|avatar|pixel|tracking|facebook|instagram)/i.test(`${img.src} ${img.alt} ${img.className}`)).map((img) => ({ url: img.currentSrc || img.src, alt: img.alt || '', width: img.naturalWidth, height: img.naturalHeight, role: img.closest('[class*="hero" i]') ? 'hero' : img.closest('main') ? 'content' : 'other', score: Math.round(Math.min(img.naturalWidth * img.naturalHeight / 10000, 100)) })).sort((a, b) => b.score - a.score).slice(0, 20)
+      return { colors: [...new Set(ranked.map((item) => item.value))].slice(0, 32), colorEvidence: ranked.slice(0, 40), palette: { primary: role('primary'), accent: role('accent'), background: role('background'), surface: role('surface'), text: role('text'), confidence: ranked.length >= 4 ? .86 : .55 }, fonts: [...fontMap.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name).slice(0, 6), fontEvidence: [...fontMap.entries()].map(([family, count]) => ({ family, count })).sort((a, b) => b.count - a.count), imageEvidence }
     })
-    const data = analyseHtml(html, finalUrl, 200, renderedColours)
+    const data = analyseHtml(html, finalUrl, 200, renderedBranding)
     let screenshotUrl = null
     if (screenshot) {
       if (!publicBaseUrl) throw new Error('PUBLIC_BASE_URL is required for screenshots')

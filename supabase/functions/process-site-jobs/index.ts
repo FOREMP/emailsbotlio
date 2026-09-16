@@ -913,7 +913,8 @@ Deno.serve(async (req) => {
     const googleMapsUrl: string | null = typeof cf.google_maps_url === 'string' ? cf.google_maps_url : null
 
     // Real images from the lead's own site (their domain)
-    const scrapedImages: string[] = Array.isArray(scraped.images) ? scraped.images.slice(0, 8) : []
+    const evidenceImages: string[] = Object.values(scraped.pages ?? {}).flatMap((page: any) => Array.isArray(page?.image_evidence) ? page.image_evidence.map((item: any) => item?.url).filter(Boolean) : [])
+    const scrapedImages: string[] = Array.from(new Set([...(Array.isArray(scraped.images) ? scraped.images : []), ...evidenceImages])).slice(0, 12)
 
     // Case-insensitive lookup across all custom_fields keys
     const cfLookup = (patterns: RegExp[]): string | null => {
@@ -1964,8 +1965,12 @@ function deriveBrandColors(
 ): Record<string, string> {
   const bc = (!Array.isArray(branding?.colors) && branding?.colors ? branding.colors : {}) as Record<string, string>
   const comp = (branding?.components ?? {}) as Record<string, any>
+  const semantic = (branding?.palette && typeof branding.palette === 'object' ? branding.palette : {}) as Record<string, any>
+  const semanticConfidence = Number(semantic.confidence ?? 0)
 
   const raw = [
+    semanticConfidence >= 0.65 ? semantic.primary : null,
+    semanticConfidence >= 0.65 ? semantic.accent : null,
     comp?.buttonPrimary?.background,
     bc.primary,
     bc.accent,
@@ -2007,7 +2012,7 @@ function deriveBrandColors(
   const accent = brandish[2] ?? brandish[1] ?? hslToHex(ph.h - 18, Math.max(0.3, ph.s * 0.9), Math.min(0.7, ph.l + 0.2))
 
   // Theme mode: follow the source site, defaulting to the niche default's mode.
-  const scrapedBg = toHex(bc.background || '')
+  const scrapedBg = toHex((semanticConfidence >= 0.65 ? semantic.background : null) || bc.background || '')
   const defaultsLight = isLightColor(defaults.background)
   const dark = branding?.colorScheme === 'dark'
     ? true
@@ -2015,8 +2020,9 @@ function deriveBrandColors(
       ? !isLightColor(scrapedBg)
       : !defaultsLight
 
-  const background = dark ? hslToHex(ph.h, 0.20, 0.07) : hslToHex(ph.h, Math.min(0.32, ph.s * 0.5 + 0.06), 0.968)
-  const surface = dark ? hslToHex(ph.h, 0.18, 0.12) : hslToHex(ph.h, Math.min(0.22, ph.s * 0.35 + 0.03), 0.995)
+  const semanticSurface = semanticConfidence >= 0.65 ? toHex(semantic.surface || '') : null
+  const background = scrapedBg ?? (dark ? hslToHex(ph.h, 0.20, 0.07) : hslToHex(ph.h, Math.min(0.32, ph.s * 0.5 + 0.06), 0.968))
+  const surface = semanticSurface ?? (dark ? hslToHex(ph.h, 0.18, 0.12) : hslToHex(ph.h, Math.min(0.22, ph.s * 0.35 + 0.03), 0.995))
   const textPrimary = dark ? hslToHex(ph.h, 0.10, 0.96) : hslToHex(ph.h, 0.14, 0.14)
   const textSecondary = dark ? hslToHex(ph.h, 0.10, 0.76) : hslToHex(ph.h, 0.09, 0.42)
 

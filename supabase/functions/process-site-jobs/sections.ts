@@ -21,6 +21,12 @@ export type SectionKind =
   | 'faq'
   | 'contact'
   | 'cta'
+  | 'restaurant_menu'
+  | 'restaurant_story'
+  | 'restaurant_gallery'
+  | 'restaurant_visit'
+  | 'restaurant_faq'
+  | 'restaurant_reserve'
   | 'skip'
 
 export const SECTION_KIND: Record<string, SectionKind> = {
@@ -68,12 +74,12 @@ export const SECTION_KIND: Record<string, SectionKind> = {
 
   // restaurant
   hero_restaurant_atmospheric: 'hero',
-  menu_highlight_cards: 'services',
-  restaurant_story: 'intro',
-  gallery_food_mosaic: 'gallery',
-  visit_info_panel: 'contact',
-  faq_visit_details: 'faq',
-  reserve_panel: 'cta',
+  menu_highlight_cards: 'restaurant_menu',
+  restaurant_story: 'restaurant_story',
+  gallery_food_mosaic: 'restaurant_gallery',
+  visit_info_panel: 'restaurant_visit',
+  faq_visit_details: 'restaurant_faq',
+  reserve_panel: 'restaurant_reserve',
 
   // construction / architectural
   hero_construction_architectural: 'hero',
@@ -120,6 +126,7 @@ export interface FamilyVariant {
   pageHeroLayout: HeroLayout
   serviceStyle: ServiceStyle
   galleryStyle: GalleryStyle
+  sectionOrder?: SectionKind[]
 }
 
 const V = (
@@ -128,7 +135,8 @@ const V = (
   pageHeroLayout: HeroLayout,
   serviceStyle: ServiceStyle,
   galleryStyle: GalleryStyle,
-): FamilyVariant => ({ id, heroLayout, pageHeroLayout, serviceStyle, galleryStyle })
+  sectionOrder?: SectionKind[],
+): FamilyVariant => ({ id, heroLayout, pageHeroLayout, serviceStyle, galleryStyle, sectionOrder })
 
 export const FAMILY_VARIANTS: Record<BlockTemplateFamilyKey, FamilyVariant[]> = {
   salon_editorial_luxury: [
@@ -149,8 +157,9 @@ export const FAMILY_VARIANTS: Record<BlockTemplateFamilyKey, FamilyVariant[]> = 
     V('b', 'typographic', 'calm_panel', 'rows', 'strip'),
   ],
   bistro_atmospheric_landing: [
-    V('a', 'overlay', 'overlay', 'cards', 'mosaic'),
-    V('b', 'editorial_split', 'overlay', 'rows', 'mosaic'),
+    V('a', 'overlay', 'overlay', 'cards', 'mosaic', ['hero', 'restaurant_menu', 'restaurant_story', 'restaurant_gallery', 'restaurant_visit', 'restaurant_faq', 'restaurant_reserve']),
+    V('b', 'editorial_split', 'calm_panel', 'rows', 'strip', ['hero', 'restaurant_story', 'restaurant_menu', 'restaurant_visit', 'restaurant_gallery', 'restaurant_faq', 'restaurant_reserve']),
+    V('c', 'typographic', 'calm_panel', 'rows', 'mosaic', ['hero', 'restaurant_gallery', 'restaurant_story', 'restaurant_menu', 'restaurant_faq', 'restaurant_visit', 'restaurant_reserve']),
   ],
   service_company_modern: [
     V('a', 'overlay', 'overlay', 'cards', 'strip'),
@@ -198,4 +207,10 @@ export function kindsForSections(sections: string[] | undefined): SectionKind[] 
   }
   if (!out.includes('hero')) out.unshift('hero')
   return out
+}
+
+export function orderKindsForVariant(kinds: SectionKind[], variant: FamilyVariant): SectionKind[] {
+  if (!variant.sectionOrder?.length) return kinds
+  const ordered = variant.sectionOrder.filter((kind) => kinds.includes(kind))
+  return [...ordered, ...kinds.filter((kind) => !ordered.includes(kind))]
 }

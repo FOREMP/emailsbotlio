@@ -8,6 +8,7 @@ import {
 } from '../_shared/block-templates.ts'
 import {
   kindsForSections,
+  orderKindsForVariant,
   pickVariant,
   variantById,
   type FamilyVariant,
@@ -23,7 +24,7 @@ export const BUILD_MODEL = 'deepseek/deepseek-v4-flash-0731'
 export const BUILD_FALLBACK_MODEL = 'deepseek/deepseek-chat-v3.1'
 export const NVIDIA_BUILD_MODEL = 'deepseek-ai/deepseek-v4-flash-0731'
 export const LANG_MODEL = 'openai/gpt-4o-mini'
-const VERSION = 12
+const VERSION = 13
 const MAX_PAGES = 6
 
 type Stage = 'plan' | 'theme' | 'content' | 'polish_content' | 'render' | 'quality_check' | 'done'
@@ -97,6 +98,7 @@ export interface FreeformPageContent {
 }
 export interface FreeformProgress {
   version?: number
+  designFingerprint?: string
   stage: Stage | 'design' | 'pages' | 'polish'
   plan?: FreeformPlan
   profile?: BusinessProfile
@@ -121,14 +123,16 @@ export interface FreeformStepResult {
 }
 
 export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<string, string>): Promise<FreeformStepResult> {
+  const fingerprint = designFingerprint(ctx)
   const savedFamily = ctx.progress?.plan?.templateFamily ?? null
   const familyMatches = !ctx.selectedTemplateFamily || savedFamily === ctx.selectedTemplateFamily
   // A persisted decision from process-site-leads is authoritative. Never
   // resume content/files created for another family after a rule fix or a
   // template-changing regeneration.
-  const keep = ctx.progress?.version === VERSION && familyMatches
+  const keep = ctx.progress?.version === VERSION && familyMatches && ctx.progress?.designFingerprint === fingerprint
   const files = keep ? { ...(existingFiles ?? {}) } : {}
   const progress = normalizeProgress(keep ? ctx.progress : null, files, ctx)
+  progress.designFingerprint = fingerprint
   console.log(`[freeform-v${VERSION}] site=${ctx.siteId} stage=${progress.stage} category=${ctx.category || 'missing'} family=${ctx.selectedTemplateFamily || 'auto'} resumed=${keep}`)
   if (progress.stage === 'plan' || !progress.plan) {
     const plan = buildPlan(ctx)
@@ -196,6 +200,20 @@ function meta(p: FreeformProgress): FreeformProgress {
 
 function isEnglish(ctx: FreeformCtx): boolean {
   return ctx.language === 'en'
+}
+
+function designFingerprint(ctx: FreeformCtx): string {
+  const stable = JSON.stringify({
+    renderer: VERSION,
+    family: ctx.selectedTemplateFamily || 'auto',
+    category: String(ctx.category || '').trim().toLowerCase(),
+    palette: Object.keys(ctx.brandPalette || {}).sort().map((key) => [key, ctx.brandPalette[key]]),
+    fonts: (ctx.brandFonts || []).slice(0, 4),
+    feedback: String(ctx.regenFeedback || '').trim(),
+  })
+  let hash = 2166136261
+  for (let i = 0; i < stable.length; i++) { hash ^= stable.charCodeAt(i); hash = Math.imul(hash, 16777619) }
+  return `v${VERSION}-${(hash >>> 0).toString(36)}`
 }
 
 function buildPlan(ctx: FreeformCtx): FreeformPlan {
@@ -796,12 +814,24 @@ function familyBody(
         return flags.showContact ? contact(ctx, c) : ''
       case 'cta':
         return flags.contactPage ? '' : cta(c, ctx)
+      case 'restaurant_menu':
+        return flags.showServices ? restaurantMenu(c, ctx, variant.serviceStyle) : ''
+      case 'restaurant_story':
+        return flags.showIntro ? restaurantStory(c, imgs[1], ctx) : ''
+      case 'restaurant_gallery':
+        return flags.showGallery ? restaurantGallery(ctx, imgs, variant.galleryStyle) : ''
+      case 'restaurant_visit':
+        return flags.showContact ? restaurantVisit(ctx) : ''
+      case 'restaurant_faq':
+        return restaurantFaq(c, ctx)
+      case 'restaurant_reserve':
+        return flags.contactPage ? '' : restaurantReserve(c, ctx)
       default:
         return ''
     }
   }
 
-  const kinds = kindsForSections(page.sections)
+  const kinds = orderKindsForVariant(kindsForSections(page.sections), variant)
   const rendered = kinds.map(renderKind).filter(Boolean)
   // A page whose section list produced nothing but a hero falls back to the
   // known-good ordering so no lead ever ends up with an empty page.
@@ -912,6 +942,27 @@ function services(c: FreeformPageContent, ctx: FreeformCtx, style: ServiceStyle 
   }
   return `<section class='section section-alt'><div class='wrap'>${head}<div class='grid'>${list.map((s) => `<article class='card'><h3>${esc(s.title)}</h3><p>${esc(s.text)}</p>${s.detail ? `<p>${esc(s.detail)}</p>` : ''}</article>`).join('')}</div></div></section>`
 }
+function restaurantMenu(c: FreeformPageContent, ctx: FreeformCtx, style: ServiceStyle): string {
+  const list = (c.services?.length ? c.services : fallbackContent(ctx, { slug: 'index', title: 'Start', purpose: '', sections: [] }).services || []).slice(0, 6)
+  const en = isEnglish(ctx)
+  return `<section class='section restaurant-menu'><div class='wrap'><div class='restaurant-heading'><p class='eyebrow'>${en ? 'Menu & offering' : 'Meny & utbud'}</p><h2>${esc(c.introTitle || (en ? 'Made for the occasion' : 'Smaker för stunden'))}</h2><p class='lead'>${esc(c.introText || (en ? 'Discover a selection from the current offering.' : 'Upptäck ett urval ur det aktuella utbudet.'))}</p></div><div class='${style === 'rows' ? 'menu-ledger' : 'menu-grid'}'>${list.map((item, index) => `<article><span>${String(index + 1).padStart(2, '0')}</span><div><h3>${esc(item.title)}</h3><p>${esc(item.text)}</p></div>${item.detail ? `<strong>${esc(item.detail)}</strong>` : ''}</article>`).join('')}</div></div></section>`
+}
+function restaurantStory(c: FreeformPageContent, img: string, ctx: FreeformCtx): string {
+  const en = isEnglish(ctx)
+  return `<section class='section restaurant-story'><div class='wrap restaurant-story-grid'>${img ? `<figure><img src='${attr(img)}' alt=''></figure>` : ''}<div><p class='eyebrow'>${en ? 'Our place' : 'Vår plats'}</p><h2>${esc(c.introTitle || (en ? 'Food, people and atmosphere' : 'Mat, människor och stämning'))}</h2><p class='lead'>${esc(c.introText || '')}</p>${(c.sections || []).slice(0, 2).map((s) => `<div class='story-note'><h3>${esc(s.title)}</h3><p>${esc(s.text)}</p></div>`).join('')}</div></div></section>`
+}
+function restaurantGallery(ctx: FreeformCtx, imgs: string[], style: GalleryStyle): string {
+  const en = isEnglish(ctx); const chosen = imgs.slice(0, style === 'mosaic' ? 5 : 4)
+  if (!chosen.length) return ''
+  return `<section class='section section-alt restaurant-gallery'><div class='wrap'><p class='eyebrow'>${en ? 'A taste of the experience' : 'En glimt av upplevelsen'}</p><h2>${en ? 'See the food and the room' : 'Se maten och miljön'}</h2><div class='restaurant-photo-${style}'>${chosen.map((img, i) => `<figure class='photo-${i + 1}'><img src='${attr(img)}' alt=''></figure>`).join('')}</div></div></section>`
+}
+function restaurantVisit(ctx: FreeformCtx): string {
+  const en = isEnglish(ctx)
+  const rows = [ctx.facts.address || ctx.facts.city ? `<div><span>${en ? 'Find us' : 'Hitta hit'}</span><strong>${esc(decodeText([ctx.facts.address, ctx.facts.city].filter(Boolean).join(', ')))}</strong></div>` : '', ctx.facts.phone ? `<div><span>${en ? 'Reservations' : 'Bokning'}</span><a href='tel:${attr(ctx.facts.phone.replace(/\s+/g, ''))}'>${esc(ctx.facts.phone)}</a></div>` : '', ctx.facts.email ? `<div><span>${en ? 'Questions' : 'Frågor'}</span><a href='mailto:${attr(ctx.facts.email)}'>${esc(ctx.facts.email)}</a></div>` : ''].filter(Boolean).join('')
+  return rows ? `<section class='section restaurant-visit'><div class='wrap'><p class='eyebrow'>${en ? 'Plan your visit' : 'Planera ditt besök'}</p><h2>${en ? 'Everything you need before you arrive' : 'Allt du behöver inför besöket'}</h2><div class='visit-grid'>${rows}</div></div></section>` : ''
+}
+function restaurantFaq(c: FreeformPageContent, ctx: FreeformCtx): string { return `<div class='restaurant-faq'>${faq(c, true, ctx)}</div>` }
+function restaurantReserve(c: FreeformPageContent, ctx: FreeformCtx): string { return `<div class='restaurant-reserve'>${cta(c, ctx)}</div>` }
 function trustBand(ctx: FreeformCtx, c: FreeformPageContent): string {
   const en = isEnglish(ctx)
   const profile = buildProfile(ctx)
@@ -1096,18 +1147,30 @@ function variantCss(v: FamilyVariant): string {
 
 function templateCss(template: BlockTemplateFamilyKey): string {
   if (template === 'bistro_atmospheric_landing') return `
-body.template-bistro_atmospheric_landing{--radius:26px;background:#090806;color:#fff7ed}
-.template-bistro_atmospheric_landing .site-header{background:rgba(9,8,6,.72);border-bottom-color:rgba(255,255,255,.13)}
+body.template-bistro_atmospheric_landing{--radius:26px;background:var(--background);color:var(--text-primary)}
+.template-bistro_atmospheric_landing .site-header{background:color-mix(in srgb,var(--background) 84%,transparent);border-bottom-color:var(--border)}
 .template-bistro_atmospheric_landing .brand{font-family:Georgia,Times New Roman,serif;letter-spacing:-.055em}
 .template-bistro_atmospheric_landing .hero{min-height:96svh;align-items:end;padding-top:130px}
-.template-bistro_atmospheric_landing .hero:before{background:linear-gradient(90deg,rgba(8,7,5,.9),rgba(8,7,5,.35) 58%,rgba(8,7,5,.72)),radial-gradient(circle at 78% 20%,rgba(245,158,11,.24),transparent 30rem)}
-.template-bistro_atmospheric_landing .hero-card{max-width:860px;background:rgba(9,8,6,.54);border-color:rgba(255,255,255,.18);box-shadow:0 38px 120px rgba(0,0,0,.52)}
+.template-bistro_atmospheric_landing .hero:before{background:linear-gradient(90deg,color-mix(in srgb,var(--background) 92%,transparent),color-mix(in srgb,var(--background) 28%,transparent) 58%,color-mix(in srgb,var(--background) 68%,transparent)),radial-gradient(circle at 78% 20%,color-mix(in srgb,var(--accent) 30%,transparent),transparent 30rem)}
+.template-bistro_atmospheric_landing .hero-card{max-width:860px;background:color-mix(in srgb,var(--surface) 72%,transparent);border-color:var(--border);box-shadow:0 38px 120px var(--shadow)}
 .template-bistro_atmospheric_landing h1{max-width:10.5ch;font-size:clamp(48px,8.4vw,112px)}
 .template-bistro_atmospheric_landing h2{font-family:Georgia,Times New Roman,serif}
-.template-bistro_atmospheric_landing .section-alt{background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.015))}
-.template-bistro_atmospheric_landing .card,.template-bistro_atmospheric_landing .media-card,.template-bistro_atmospheric_landing .faq-list details{background:rgba(255,255,255,.055);border-color:rgba(255,255,255,.14)}
+.template-bistro_atmospheric_landing .section-alt{background:linear-gradient(180deg,color-mix(in srgb,var(--surface) 76%,var(--background)),var(--background))}
+.template-bistro_atmospheric_landing .card,.template-bistro_atmospheric_landing .media-card,.template-bistro_atmospheric_landing .faq-list details{background:var(--surface);border-color:var(--border)}
 .template-bistro_atmospheric_landing .gallery-grid img{filter:saturate(.9) contrast(1.05);border-radius:34px}
-.template-bistro_atmospheric_landing .contact-list a,.template-bistro_atmospheric_landing .contact-list span{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.14)}
+.template-bistro_atmospheric_landing .contact-list a,.template-bistro_atmospheric_landing .contact-list span{background:var(--surface);border-color:var(--border)}
+.template-bistro_atmospheric_landing .restaurant-heading{max-width:760px;margin-bottom:42px}
+.template-bistro_atmospheric_landing .menu-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--border);border:1px solid var(--border)}
+.template-bistro_atmospheric_landing .menu-grid article,.template-bistro_atmospheric_landing .menu-ledger article{display:grid;grid-template-columns:42px 1fr auto;gap:18px;padding:28px;background:var(--surface);align-items:start}
+.template-bistro_atmospheric_landing .menu-ledger article{border-bottom:1px solid var(--border);background:transparent}
+.template-bistro_atmospheric_landing .menu-grid article>span,.template-bistro_atmospheric_landing .menu-ledger article>span{color:var(--accent);font-size:12px;letter-spacing:.12em}
+.template-bistro_atmospheric_landing .restaurant-story-grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(300px,.9fr);gap:clamp(36px,7vw,100px);align-items:center}
+.template-bistro_atmospheric_landing .restaurant-story figure{margin:0}.template-bistro_atmospheric_landing .restaurant-story img{width:100%;height:clamp(420px,56vw,720px);object-fit:cover;border-radius:var(--radius)}
+.template-bistro_atmospheric_landing .story-note{padding-top:22px;margin-top:22px;border-top:1px solid var(--border)}
+.template-bistro_atmospheric_landing .restaurant-photo-mosaic{display:grid;grid-template-columns:1.3fr .7fr .9fr;grid-template-rows:260px 230px;gap:14px}.template-bistro_atmospheric_landing .restaurant-photo-mosaic figure{margin:0}.template-bistro_atmospheric_landing .restaurant-photo-mosaic figure:first-child{grid-row:span 2}.template-bistro_atmospheric_landing .restaurant-photo-mosaic img,.template-bistro_atmospheric_landing .restaurant-photo-strip img{width:100%;height:100%;object-fit:cover;border-radius:calc(var(--radius) * .7)}
+.template-bistro_atmospheric_landing .restaurant-photo-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.template-bistro_atmospheric_landing .restaurant-photo-strip figure{height:360px;margin:0}.template-bistro_atmospheric_landing .restaurant-photo-strip figure:nth-child(even){transform:translateY(28px)}
+.template-bistro_atmospheric_landing .visit-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.template-bistro_atmospheric_landing .visit-grid>div{padding:28px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)}.template-bistro_atmospheric_landing .visit-grid span{display:block;color:var(--text-secondary);margin-bottom:10px}
+@media(max-width:760px){.template-bistro_atmospheric_landing .menu-grid,.template-bistro_atmospheric_landing .restaurant-story-grid,.template-bistro_atmospheric_landing .visit-grid{grid-template-columns:1fr}.template-bistro_atmospheric_landing .restaurant-photo-mosaic,.template-bistro_atmospheric_landing .restaurant-photo-strip{grid-template-columns:1fr 1fr;grid-template-rows:auto}.template-bistro_atmospheric_landing .restaurant-photo-mosaic figure:first-child{grid-row:auto}.template-bistro_atmospheric_landing .restaurant-photo-mosaic figure,.template-bistro_atmospheric_landing .restaurant-photo-strip figure{height:240px;transform:none}}
 `.trim()
 
   if (template === 'byggform_architectural_trust') return `
@@ -1584,7 +1647,7 @@ function normalizeProgress(raw: FreeformProgress | null | undefined, files: Reco
     else if (plan.pages.some((p) => !files[fileNameFor(p.slug)])) stage = 'render'
     else stage = 'quality_check'
   }
-  return meta({ version: VERSION, stage, plan, profile: raw?.profile ?? buildProfile(ctx), factPack: raw?.factPack ?? buildFactPack(ctx), theme: raw?.theme, design: raw?.design, content, rendered: raw?.rendered || raw?.built || [], built: raw?.built || [], polished: raw?.polished || [], fallbacksUsed: raw?.fallbacksUsed || [], lastError: raw?.lastError, lastStage: raw?.lastStage })
+  return meta({ version: VERSION, designFingerprint: designFingerprint(ctx), stage, plan, profile: raw?.profile ?? buildProfile(ctx), factPack: raw?.factPack ?? buildFactPack(ctx), theme: raw?.theme, design: raw?.design, content, rendered: raw?.rendered || raw?.built || [], built: raw?.built || [], polished: raw?.polished || [], fallbacksUsed: raw?.fallbacksUsed || [], lastError: raw?.lastError, lastStage: raw?.lastStage })
 }
 function addFallback(p: FreeformProgress, label: string): string[] { return Array.from(new Set([...(p.fallbacksUsed || []), label])).slice(0, 20) }
 export function fileNameFor(s: string): string { return slug(s) === 'index' ? 'index.html' : `${slug(s)}.html` }
@@ -1653,17 +1716,18 @@ function qualityFixFiles(files: Record<string, string>, ctx: FreeformCtx): Recor
 function font(f: string | undefined, fallback: string): string { const x = String(f || '').replace(/[^a-zA-Z0-9 åäöÅÄÖ_-]/g, '').trim().slice(0, 60); return x ? `'${x}',${fallback}` : fallback }
 function palette(ctx: FreeformCtx) {
   const salon = isSalon(ctx)
+  const restaurant = buildProfile(ctx).kind === 'restaurant' || ctx.selectedTemplateFamily === 'bistro_atmospheric_landing'
   const input = ctx.brandPalette || {}
-  const bg = color(input.background, salon ? '#f8f1eb' : '#0a0e1a')
-  const primary = color(input.primary, salon ? '#8f5563' : '#f97316')
-  const accent = color(input.accent, salon ? '#d7b98d' : '#f59e0b')
+  const bg = color(input.background, salon ? '#f8f1eb' : restaurant ? '#f8f3ea' : '#0a0e1a')
+  const primary = color(input.primary, salon ? '#8f5563' : restaurant ? '#8a4934' : '#f97316')
+  const accent = color(input.accent, salon ? '#d7b98d' : restaurant ? '#c89a58' : '#f59e0b')
   const light = lum(bg) > .56
   return {
     primary,
-    secondary: color(input.secondary, salon ? '#bd9075' : '#0ea5e9'),
+    secondary: color(input.secondary, salon ? '#bd9075' : restaurant ? '#5f6b4a' : '#0ea5e9'),
     accent,
     background: bg,
-    surface: color(input.surface, salon ? '#fffaf6' : '#131a2b'),
+    surface: color(input.surface, salon ? '#fffaf6' : restaurant ? '#fffdf8' : '#131a2b'),
     text: readable(bg, color(input.textPrimary, light ? '#291f20' : '#f1f5f9'), light ? '#241b1d' : '#ffffff'),
     muted: readable(bg, color(input.textSecondary, light ? '#665756' : '#cbd5e1'), light ? '#5f5150' : '#d8d0ca'),
     // The main CTA may be a primary→accent gradient. Select one label colour

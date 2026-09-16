@@ -5,7 +5,7 @@ import {
   pagesForTemplate,
   type BlockTemplateFamilyKey,
 } from '../../supabase/functions/_shared/block-templates'
-import { kindsForSections } from '../../supabase/functions/process-site-jobs/sections'
+import { FAMILY_VARIANTS, kindsForSections, orderKindsForVariant } from '../../supabase/functions/process-site-jobs/sections'
 
 const landingFor = (key: BlockTemplateFamilyKey) => {
   const pages = pagesForTemplate(BLOCK_TEMPLATE_FAMILIES[key], {
@@ -43,5 +43,23 @@ describe('premium template landing pages', () => {
 
     expect(kinds).toContain('gallery')
     expect(kinds.length).toBeGreaterThanOrEqual(7)
+  })
+
+  it('keeps restaurant blocks specialized instead of collapsing them to generic service blocks', () => {
+    const kinds = kindsForSections(landingFor('bistro_atmospheric_landing').sections)
+    expect(kinds).toEqual(expect.arrayContaining([
+      'restaurant_menu',
+      'restaurant_story',
+      'restaurant_gallery',
+      'restaurant_visit',
+      'restaurant_reserve',
+    ]))
+    expect(kinds).not.toContain('services')
+  })
+
+  it('has three genuinely different restaurant compositions', () => {
+    const kinds = kindsForSections(landingFor('bistro_atmospheric_landing').sections)
+    const orders = FAMILY_VARIANTS.bistro_atmospheric_landing.map((variant) => orderKindsForVariant(kinds, variant).join('|'))
+    expect(new Set(orders).size).toBe(3)
   })
 })

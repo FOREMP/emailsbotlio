@@ -35,6 +35,8 @@ const SERVICES_SLUGS = [
   'erbjudanden', 'sortiment', 'produkter',
   'vad-vi-gor', 'what-we-do', 'offerings', 'solutions',
 ]
+const MENU_SLUGS = ['meny', 'menu', 'mat', 'dryck', 'food', 'drinks', 'lunch', 'middag', 'dinner', 'brunch', 'boka-bord', 'book-a-table']
+const CONTACT_SLUGS = ['kontakt', 'contact', 'hitta-hit', 'find-us', 'besok', 'visit', 'oppettider', 'opening-hours']
 
 interface ScrapeRequest { generated_site_id: string }
 
@@ -142,6 +144,8 @@ Deno.serve(async (req) => {
     // ---- 3. Pick best about + services via ordered slug lists ----
     const aboutUrl = pickBySlugList(allLinks, usedUrl, ABOUT_SLUGS)
     const servicesUrl = pickBySlugList(allLinks, usedUrl, SERVICES_SLUGS)
+    const menuUrl = pickBySlugList(allLinks, usedUrl, MENU_SLUGS)
+    const contactUrl = pickBySlugList(allLinks, usedUrl, CONTACT_SLUGS)
 
     // ---- 4. Scrape about + services individually ----
     const pages: Record<string, any> = {
@@ -154,6 +158,14 @@ Deno.serve(async (req) => {
     if (servicesUrl && servicesUrl !== usedUrl && servicesUrl !== aboutUrl) {
       const r = await scrapeOne(provider, servicesUrl, false)
       if (r.data && (r.data.markdown || '').trim().length > 150) pages.services = normalizePage(r.data, servicesUrl)
+    }
+    if (menuUrl && ![usedUrl, aboutUrl, servicesUrl].includes(menuUrl)) {
+      const r = await scrapeOne(provider, menuUrl, false)
+      if (r.data && (r.data.markdown || '').trim().length > 150) pages.menu = normalizePage(r.data, menuUrl)
+    }
+    if (contactUrl && ![usedUrl, aboutUrl, servicesUrl, menuUrl].includes(contactUrl)) {
+      const r = await scrapeOne(provider, contactUrl, false)
+      if (r.data && (r.data.markdown || '').trim().length > 100) pages.contact = normalizePage(r.data, contactUrl)
     }
 
     // Aggregate images across all scraped pages
@@ -176,6 +188,8 @@ Deno.serve(async (req) => {
       source_url_used: usedUrl,
       discovered_about_url: aboutUrl,
       discovered_services_url: servicesUrl,
+      discovered_menu_url: menuUrl,
+      discovered_contact_url: contactUrl,
       pages,
       images: Array.from(allImages).slice(0, 20),
       scraped_at: new Date().toISOString(),
@@ -200,6 +214,8 @@ Deno.serve(async (req) => {
       pages_scraped: Object.keys(pages),
       about_url: aboutUrl,
       services_url: servicesUrl,
+      menu_url: menuUrl,
+      contact_url: contactUrl,
       screenshot: !!screenshotUrl,
       branding_colors: !!(rootScrape.branding?.colors),
       total_chars: Object.values(pages).reduce((sum: number, p: any) => sum + (p.markdown?.length || 0), 0),
@@ -231,8 +247,10 @@ function normalizePage(payload: any, url: string) {
     if (m[1] && /^https?:\/\//.test(m[1])) imgs.add(m[1])
   }
   if (payload.branding?.images) {
-    Object.values(payload.branding.images).forEach((v) => typeof v === 'string' && imgs.add(v))
+    const values = Array.isArray(payload.branding.images) ? payload.branding.images : Object.values(payload.branding.images)
+    values.forEach((v) => typeof v === 'string' && imgs.add(v))
   }
+  if (Array.isArray(payload.branding?.imageEvidence)) payload.branding.imageEvidence.forEach((item: any) => typeof item?.url === 'string' && imgs.add(item.url))
   return {
     url,
     title: payload.metadata?.title ?? '',
@@ -240,6 +258,7 @@ function normalizePage(payload: any, url: string) {
     summary: payload.summary ?? '',
     markdown: md,
     images: Array.from(imgs).slice(0, 12),
+    image_evidence: Array.isArray(payload.branding?.imageEvidence) ? payload.branding.imageEvidence.slice(0, 20) : [],
   }
 }
 

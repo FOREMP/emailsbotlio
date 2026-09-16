@@ -78,11 +78,13 @@ Deno.serve(async (req) => {
   // Manual override from the Site Leads UI: build these leads right now,
   // ignoring the automation switch and the daily cap.
   let overrideIds: string[] = []
+  let regenerateExisting = false
   if (req.method === 'POST') {
     try {
       const body = await req.json()
       if (body?.force && Array.isArray(body?.lead_ids)) {
         overrideIds = body.lead_ids.filter((v: unknown) => typeof v === 'string').slice(0, 20)
+        regenerateExisting = body?.regenerate_existing === true
       }
     } catch { /* no body — normal cron tick */ }
   }
@@ -91,11 +93,12 @@ Deno.serve(async (req) => {
     if (overrideIds.length > 0) {
       const { data: forced } = await supabase
         .from('site_leads')
-        .select('id, user_id, company_name, website, email, phone, address, category, niche, rating, review_snippets, audit_reason, audit_details, feedback, language')
+        .select('id, user_id, company_name, website, email, phone, address, category, niche, rating, review_snippets, audit_reason, audit_details, feedback, language, generated_site_id')
         .in('id', overrideIds)
       for (const lead of forced ?? []) {
         try {
-          await startGeneration(supabase, supabaseUrl, serviceKey, lead as any)
+          if (regenerateExisting && lead.generated_site_id) await reselectAndRegenerate(supabase, supabaseUrl, serviceKey, lead as any)
+          else await startGeneration(supabase, supabaseUrl, serviceKey, lead as any)
           report.generated++
         } catch (e) {
           report.errors.push(`force ${lead.id}: ${(e as Error).message}`)
@@ -395,6 +398,22 @@ async function recoverStuckGenerations(
   }
 
   return recovered
+}
+
+async function reselectAndRegenerate(
+  supabase: ReturnType<typeof createClient>, supabaseUrl: string, serviceKey: string, lead: any,
+) {
+  const niche = inferLeadNiche(lead)
+  const chosen = await chooseTemplateFamilyForLead(supabase, { ...lead, niche: lead?.niche ?? niche ?? null })
+  const { data: site, error } = await supabase.from('generated_sites').select('id, contact_id').eq('id', lead.generated_site_id).maybeSingle()
+  if (error || !site) return startGeneration(supabase, supabaseUrl, serviceKey, lead)
+  if (site.contact_id) {
+    const { data: contact } = await supabase.from('contacts').select('custom_fields').eq('id', site.contact_id).maybeSingle()
+    await supabase.from('contacts').update({ custom_fields: { ...(contact?.custom_fields ?? {}), regen_feedback: lead.feedback ?? null, category: lead.category ?? null, niche, template_family: chosen.family.key, template_family_source: chosen.source, template_family_reason: chosen.reason ?? null, template_family_confidence: chosen.confidence, template_family_matched_by: chosen.matchedBy, template_classifier_version: chosen.classifierVersion } }).eq('id', site.contact_id)
+  }
+  await supabase.from('generated_sites').update({ status: 'queued', queued_at: new Date().toISOString(), error_message: null, attempts: 0, generation_mode: 'freeform', template: chosen.family.key, gen_progress: null, generated_files: null }).eq('id', site.id)
+  await supabase.from('site_leads').update({ status: 'generating', generated_site_id: site.id }).eq('id', lead.id)
+  await invokeFn(supabaseUrl, serviceKey, 'process-site-jobs', { generated_site_id: site.id, force: true })
 }
 
 // ---------------------------------------------------------------------------
