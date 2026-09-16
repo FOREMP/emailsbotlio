@@ -6,6 +6,9 @@ const corsHeaders = {
     'authorization, x-client-info, apikey, content-type',
 }
 
+// Every enrollment state that can still lead to another email being sent.
+const OPEN_ENROLLMENT_STATUSES = ['active', 'waiting_capacity', 'deferred', 'paused']
+
 function jsonResponse(data: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
