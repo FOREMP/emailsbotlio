@@ -172,6 +172,74 @@ export type Database = {
         }
         Relationships: []
       }
+      email_send_reservations: {
+        Row: {
+          consumed_at: string | null
+          contact_id: string | null
+          enrollment_id: string
+          expires_at: string
+          id: string
+          is_followup: boolean
+          reserved_at: string
+          sender_id: string
+          sequence_id: string
+          user_id: string
+        }
+        Insert: {
+          consumed_at?: string | null
+          contact_id?: string | null
+          enrollment_id: string
+          expires_at?: string
+          id?: string
+          is_followup: boolean
+          reserved_at?: string
+          sender_id: string
+          sequence_id: string
+          user_id: string
+        }
+        Update: {
+          consumed_at?: string | null
+          contact_id?: string | null
+          enrollment_id?: string
+          expires_at?: string
+          id?: string
+          is_followup?: boolean
+          reserved_at?: string
+          sender_id?: string
+          sequence_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "email_send_reservations_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "email_send_reservations_enrollment_id_fkey"
+            columns: ["enrollment_id"]
+            isOneToOne: false
+            referencedRelation: "enrollments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "email_send_reservations_sender_id_fkey"
+            columns: ["sender_id"]
+            isOneToOne: false
+            referencedRelation: "senders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "email_send_reservations_sequence_id_fkey"
+            columns: ["sequence_id"]
+            isOneToOne: false
+            referencedRelation: "sequences"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       email_unsubscribe_tokens: {
         Row: {
           created_at: string
@@ -467,6 +535,244 @@ export type Database = {
             columns: ["list_id"]
             isOneToOne: false
             referencedRelation: "contact_lists"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      lead_markets: {
+        Row: {
+          category: string
+          city: string
+          cooldown_days: number
+          country_code: string
+          created_at: string
+          id: string
+          is_enabled: boolean
+          language: string
+          last_scraped_at: string | null
+          max_results: number
+          niche_key: string | null
+          priority: number
+          search_key: string
+          search_query: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          category: string
+          city: string
+          cooldown_days?: number
+          country_code: string
+          created_at?: string
+          id?: string
+          is_enabled?: boolean
+          language: string
+          last_scraped_at?: string | null
+          max_results?: number
+          niche_key?: string | null
+          priority?: number
+          search_key?: string
+          search_query: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          category?: string
+          city?: string
+          cooldown_days?: number
+          country_code?: string
+          created_at?: string
+          id?: string
+          is_enabled?: boolean
+          language?: string
+          last_scraped_at?: string | null
+          max_results?: number
+          niche_key?: string | null
+          priority?: number
+          search_key?: string
+          search_query?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      lead_scrape_history: {
+        Row: {
+          city: string
+          city_key: string
+          completed_at: string
+          created_at: string
+          id: string
+          language: string
+          market_id: string | null
+          niche_key: string
+          search_key: string
+          search_query: string | null
+          source: string
+          source_note: string | null
+          user_id: string
+        }
+        Insert: {
+          city: string
+          city_key: string
+          completed_at?: string
+          created_at?: string
+          id?: string
+          language: string
+          market_id?: string | null
+          niche_key: string
+          search_key?: string
+          search_query?: string | null
+          source: string
+          source_note?: string | null
+          user_id: string
+        }
+        Update: {
+          city?: string
+          city_key?: string
+          completed_at?: string
+          created_at?: string
+          id?: string
+          language?: string
+          market_id?: string | null
+          niche_key?: string
+          search_key?: string
+          search_query?: string | null
+          source?: string
+          source_note?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_scrape_history_market_id_fkey"
+            columns: ["market_id"]
+            isOneToOne: false
+            referencedRelation: "lead_markets"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      lead_scrape_jobs: {
+        Row: {
+          completed_at: string | null
+          created_at: string
+          discovered_count: number
+          duplicate_count: number
+          error_message: string | null
+          id: string
+          imported_count: number
+          language: string
+          market_id: string
+          max_results: number
+          rejected_count: number
+          search_query: string
+          started_at: string | null
+          state: string
+          updated_at: string
+          user_id: string
+          worker_job_id: string | null
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string
+          discovered_count?: number
+          duplicate_count?: number
+          error_message?: string | null
+          id?: string
+          imported_count?: number
+          language: string
+          market_id: string
+          max_results: number
+          rejected_count?: number
+          search_query: string
+          started_at?: string | null
+          state?: string
+          updated_at?: string
+          user_id: string
+          worker_job_id?: string | null
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string
+          discovered_count?: number
+          duplicate_count?: number
+          error_message?: string | null
+          id?: string
+          imported_count?: number
+          language?: string
+          market_id?: string
+          max_results?: number
+          rejected_count?: number
+          search_query?: string
+          started_at?: string | null
+          state?: string
+          updated_at?: string
+          user_id?: string
+          worker_job_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_scrape_jobs_market_id_fkey"
+            columns: ["market_id"]
+            isOneToOne: false
+            referencedRelation: "lead_markets"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      lead_scrape_results: {
+        Row: {
+          company_name: string | null
+          created_at: string
+          email: string | null
+          id: string
+          job_id: string
+          outcome: string
+          place_id: string | null
+          rejection_reason: string | null
+          site_lead_id: string | null
+          source_snapshot: Json
+          website: string | null
+        }
+        Insert: {
+          company_name?: string | null
+          created_at?: string
+          email?: string | null
+          id?: string
+          job_id: string
+          outcome: string
+          place_id?: string | null
+          rejection_reason?: string | null
+          site_lead_id?: string | null
+          source_snapshot?: Json
+          website?: string | null
+        }
+        Update: {
+          company_name?: string | null
+          created_at?: string
+          email?: string | null
+          id?: string
+          job_id?: string
+          outcome?: string
+          place_id?: string | null
+          rejection_reason?: string | null
+          site_lead_id?: string | null
+          source_snapshot?: Json
+          website?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_scrape_results_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: false
+            referencedRelation: "lead_scrape_jobs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_scrape_results_site_lead_id_fkey"
+            columns: ["site_lead_id"]
+            isOneToOne: false
+            referencedRelation: "site_leads"
             referencedColumns: ["id"]
           },
         ]
@@ -788,6 +1094,7 @@ export type Database = {
           enrollment_id: string | null
           error_message: string | null
           id: string
+          is_followup: boolean
           last_opened_at: string | null
           message_id: string | null
           open_count: number
@@ -813,6 +1120,7 @@ export type Database = {
           enrollment_id?: string | null
           error_message?: string | null
           id?: string
+          is_followup?: boolean
           last_opened_at?: string | null
           message_id?: string | null
           open_count?: number
@@ -838,6 +1146,7 @@ export type Database = {
           enrollment_id?: string | null
           error_message?: string | null
           id?: string
+          is_followup?: boolean
           last_opened_at?: string | null
           message_id?: string | null
           open_count?: number
@@ -1061,6 +1370,10 @@ export type Database = {
           review_snippets: Json | null
           reviews_count: number | null
           source_file_id: string | null
+          source_job_id: string | null
+          source_market_id: string | null
+          source_place_id: string | null
+          source_provider: string | null
           status: string
           triaged_at: string | null
           updated_at: string
@@ -1094,6 +1407,10 @@ export type Database = {
           review_snippets?: Json | null
           reviews_count?: number | null
           source_file_id?: string | null
+          source_job_id?: string | null
+          source_market_id?: string | null
+          source_place_id?: string | null
+          source_provider?: string | null
           status?: string
           triaged_at?: string | null
           updated_at?: string
@@ -1127,6 +1444,10 @@ export type Database = {
           review_snippets?: Json | null
           reviews_count?: number | null
           source_file_id?: string | null
+          source_job_id?: string | null
+          source_market_id?: string | null
+          source_place_id?: string | null
+          source_provider?: string | null
           status?: string
           triaged_at?: string | null
           updated_at?: string
@@ -1139,6 +1460,20 @@ export type Database = {
             columns: ["generated_site_id"]
             isOneToOne: false
             referencedRelation: "generated_sites"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "site_leads_source_job_id_fkey"
+            columns: ["source_job_id"]
+            isOneToOne: false
+            referencedRelation: "lead_scrape_jobs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "site_leads_source_market_id_fkey"
+            columns: ["source_market_id"]
+            isOneToOne: false
+            referencedRelation: "lead_markets"
             referencedColumns: ["id"]
           },
         ]
@@ -1236,6 +1571,38 @@ export type Database = {
           },
         ]
       }
+      site_scrape_cache: {
+        Row: {
+          created_at: string
+          expires_at: string
+          payload: Json
+          site_lead_id: string
+          url: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at?: string
+          payload: Json
+          site_lead_id: string
+          url: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          payload?: Json
+          site_lead_id?: string
+          url?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "site_scrape_cache_site_lead_id_fkey"
+            columns: ["site_lead_id"]
+            isOneToOne: true
+            referencedRelation: "site_leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       suppressed_emails: {
         Row: {
           created_at: string
@@ -1263,6 +1630,7 @@ export type Database = {
     }
     Functions: {
       _json_string_escape: { Args: { value: string }; Returns: string }
+      claim_nvidia_api_slot: { Args: { p_limit?: number }; Returns: number }
       claim_site_leads_for_audit: {
         Args: { p_language: string; p_limit?: number }
         Returns: {
@@ -1292,6 +1660,10 @@ export type Database = {
           review_snippets: Json | null
           reviews_count: number | null
           source_file_id: string | null
+          source_job_id: string | null
+          source_market_id: string | null
+          source_place_id: string | null
+          source_provider: string | null
           status: string
           triaged_at: string | null
           updated_at: string
@@ -1334,6 +1706,10 @@ export type Database = {
           review_snippets: Json | null
           reviews_count: number | null
           source_file_id: string | null
+          source_job_id: string | null
+          source_market_id: string | null
+          source_place_id: string | null
+          source_provider: string | null
           status: string
           triaged_at: string | null
           updated_at: string
@@ -1346,6 +1722,40 @@ export type Database = {
           isOneToOne: false
           isSetofReturn: true
         }
+      }
+      get_lead_stock_counts: {
+        Args: { _language: string; _user_id: string }
+        Returns: {
+          audit_backlog: number
+          build_backlog: number
+          pipeline_count: number
+          review_backlog: number
+          unsent_approved_count: number
+        }[]
+      }
+      get_sender_capacity_snapshot: {
+        Args: { _sender_ids: string[] }
+        Returns: {
+          domain_remaining: number
+          first_last_sent_at: string
+          first_remaining: number
+          followup_last_sent_at: string
+          followup_remaining: number
+          sender_domain: string
+          sender_id: string
+        }[]
+      }
+      get_sequence_first_touch_count: {
+        Args: { _sequence_id: string }
+        Returns: number
+      }
+      get_site_lead_counts: {
+        Args: { p_language?: string }
+        Returns: {
+          count: number
+          language: string
+          status: string
+        }[]
       }
       get_site_outreach_queue_counts: {
         Args: { p_sequence_id: string }
@@ -1391,6 +1801,20 @@ export type Database = {
           trackable: number
         }[]
       }
+      ingest_sourced_leads_batch: {
+        Args: {
+          _job_id: string
+          _language: string
+          _rows: Json
+          _user_id: string
+        }
+        Returns: {
+          duplicates: number
+          failed: number
+          imported: number
+          rejected: number
+        }[]
+      }
       insert_site_leads_batch: { Args: { p_rows: Json }; Returns: number }
       next_sequence_schedule_slot: {
         Args: { base_at?: string; config: Json }
@@ -1419,6 +1843,21 @@ export type Database = {
         Returns: {
           error_count: number
           is_paused: boolean
+        }[]
+      }
+      reserve_email_send: {
+        Args: {
+          _contact_id: string
+          _enrollment_id: string
+          _is_followup: boolean
+          _sender_id: string
+          _sequence_daily_cap?: number
+          _sequence_id: string
+          _user_id: string
+        }
+        Returns: {
+          reason: string
+          reservation_id: string
         }[]
       }
       seed_default_senders: { Args: never; Returns: number }
