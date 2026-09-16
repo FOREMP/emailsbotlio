@@ -110,6 +110,14 @@ export default function SiteOutreach() {
     try { return localStorage.getItem("outreach-queue-open") === "1"; } catch { return false; }
   });
   const [queuePage, setQueuePage] = useState(1);
+  // Search + status filter for the queue. The table only holds the latest 200
+  // rows, so a search term is also sent to the database to find companies
+  // further down the queue.
+  const [queueSearchInput, setQueueSearchInput] = useState("");
+  const [queueSearch, setQueueSearch] = useState("");
+  const [queueStatus, setQueueStatus] = useState<string>("all");
+  const [searchRows, setSearchRows] = useState<EnrollRow[] | null>(null);
+  const [searching, setSearching] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -226,12 +234,59 @@ export default function SiteOutreach() {
     try { localStorage.setItem("outreach-queue-open", queueOpen ? "1" : "0"); } catch { /* ignore */ }
   }, [queueOpen]);
 
-  useEffect(() => { setQueuePage(1); }, [language, enrollments.length]);
+  useEffect(() => { setQueuePage(1); }, [language, enrollments.length, queueSearch, queueStatus]);
 
-  const queuePageCount = Math.max(1, Math.ceil(enrollments.length / QUEUE_PAGE_SIZE));
+  // Debounce what you type so we don't hit the database on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setQueueSearch(queueSearchInput.trim()), 300);
+    return () => clearTimeout(t);
+  }, [queueSearchInput]);
+
+  // Search the whole sequence, not just the 200 rows already on screen.
+  useEffect(() => {
+    const term = queueSearch;
+    if (!seq || term.length < 2) { setSearchRows(null); setSearching(false); return; }
+    let cancelled = false;
+    setSearching(true);
+    (async () => {
+      const like = `%${term.replace(/[%_]/g, "")}%`;
+      const { data: contactRows } = await supabase
+        .from("contacts")
+        .select("id, email, first_name, custom_fields")
+        .or(`email.ilike.${like},first_name.ilike.${like},custom_fields->>company_name.ilike.${like}`)
+        .limit(200);
+      const contacts = contactRows ?? [];
+      if (contacts.length === 0) {
+        if (!cancelled) { setSearchRows([]); setSearching(false); }
+        return;
+      }
+      const { data: enrs } = await supabase
+        .from("enrollments")
+        .select("id, status, current_step, current_node_id, next_send_at, last_sent_at, created_at, contact_id")
+        .eq("sequence_id", seq.id)
+        .in("contact_id", contacts.map((c: any) => c.id))
+        .order("updated_at", { ascending: false })
+        .limit(200);
+      const map = new Map(contacts.map((c: any) => [c.id, c]));
+      if (!cancelled) {
+        setSearchRows(((enrs ?? []) as any[]).map((e) => ({ ...e, contact: map.get(e.contact_id) ?? null })) as EnrollRow[]);
+        setSearching(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [queueSearch, seq]);
+
+  const filteredEnrollments = useMemo(() => {
+    const base = searchRows ?? enrollments;
+    if (queueStatus === "all") return base;
+    if (queueStatus === "stopped") return base.filter((e) => e.status === "stopped" || e.status === "unsubscribed");
+    return base.filter((e) => e.status === queueStatus);
+  }, [searchRows, enrollments, queueStatus]);
+
+  const queuePageCount = Math.max(1, Math.ceil(filteredEnrollments.length / QUEUE_PAGE_SIZE));
   const pagedEnrollments = useMemo(
-    () => enrollments.slice((queuePage - 1) * QUEUE_PAGE_SIZE, queuePage * QUEUE_PAGE_SIZE),
-    [enrollments, queuePage],
+    () => filteredEnrollments.slice((queuePage - 1) * QUEUE_PAGE_SIZE, queuePage * QUEUE_PAGE_SIZE),
+    [filteredEnrollments, queuePage],
   );
 
   const refreshAll = async () => {
@@ -617,8 +672,39 @@ export default function SiteOutreach() {
             {!queueOpen && <span className="text-xs text-muted-foreground">Klicka för att visa kön</span>}
           </div>
           <CollapsibleContent>
-        {enrollments.length === 0 ? (
-          <div className="text-sm text-muted-foreground py-6 text-center">Ingen har enrollats än — godkänn en demo i Approvals.</div>
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <Input
+            value={queueSearchInput}
+            onChange={(e) => setQueueSearchInput(e.target.value)}
+            placeholder="Sök företag eller mailadress…"
+            className="h-9 w-full sm:w-72"
+          />
+          <Select value={queueStatus} onValueChange={setQueueStatus}>
+            <SelectTrigger className="h-9 w-[190px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Alla statusar</SelectItem>
+              <SelectItem value="active">Aktiva</SelectItem>
+              <SelectItem value="waiting_capacity">Väntar på kapacitet</SelectItem>
+              <SelectItem value="completed">Klara</SelectItem>
+              <SelectItem value="stopped">Stoppade / avregistrerade</SelectItem>
+            </SelectContent>
+          </Select>
+          {(queueSearchInput || queueStatus !== "all") && (
+            <Button size="sm" variant="ghost" onClick={() => { setQueueSearchInput(""); setQueueStatus("all"); }}>
+              Rensa
+            </Button>
+          )}
+          {searching && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+          {searchRows !== null && !searching && (
+            <span className="text-xs text-muted-foreground">Sökning i hela sekvensen</span>
+          )}
+        </div>
+        {filteredEnrollments.length === 0 ? (
+          <div className="text-sm text-muted-foreground py-6 text-center">
+            {queueSearch || queueStatus !== "all"
+              ? "Inga träffar — prova ett annat sökord eller status."
+              : "Ingen har enrollats än — godkänn en demo i Approvals."}
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -667,8 +753,10 @@ export default function SiteOutreach() {
             </table>
             <div className="flex items-center justify-between gap-3 pt-3 mt-2 border-t">
               <div className="text-xs text-muted-foreground">
-                Sida {queuePage} av {queuePageCount} · Visar {pagedEnrollments.length} av {queueCounts?.total ?? enrollments.length}
-                {(queueCounts?.total ?? 0) > enrollments.length ? " (senaste 200 i kön)" : ""}
+                Sida {queuePage} av {queuePageCount} · Visar {pagedEnrollments.length} av {filteredEnrollments.length}
+                {searchRows === null && queueStatus === "all" && (queueCounts?.total ?? 0) > enrollments.length
+                  ? ` (senaste 200 av ${queueCounts?.total} i kön — sök för att hitta övriga)`
+                  : ""}
               </div>
               <div className="flex gap-2">
                 <Button size="sm" variant="outline" disabled={queuePage <= 1}
