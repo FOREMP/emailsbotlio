@@ -118,6 +118,11 @@ export default function SiteOutreach() {
   const [queueStatus, setQueueStatus] = useState<string>("all");
   const [searchRows, setSearchRows] = useState<EnrollRow[] | null>(null);
   const [searching, setSearching] = useState(false);
+  // Rows for the selected status, fetched from the database so the filter
+  // covers the whole sequence and not just the rows already on screen.
+  const [statusRows, setStatusRows] = useState<EnrollRow[] | null>(null);
+  const [statusTotal, setStatusTotal] = useState<number | null>(null);
+  const [statusLoading, setStatusLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
