@@ -281,12 +281,51 @@ export default function SiteOutreach() {
     return () => { cancelled = true; };
   }, [queueSearch, seq]);
 
+  // Pick a status → ask the database for every company with that status in the
+  // whole sequence, not just the newest rows already loaded.
+  useEffect(() => {
+    if (!seq || queueStatus === "all") {
+      setStatusRows(null); setStatusTotal(null); setStatusLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setStatusLoading(true);
+    (async () => {
+      const wanted = QUEUE_STATUS_GROUPS[queueStatus] ?? [queueStatus];
+      const { data: enrs, count } = await supabase
+        .from("enrollments")
+        .select("id, status, current_step, current_node_id, next_send_at, last_sent_at, created_at, contact_id", { count: "exact" })
+        .eq("sequence_id", seq.id)
+        .in("status", wanted)
+        .order("updated_at", { ascending: false })
+        .limit(500);
+      const rows = (enrs ?? []) as any[];
+      const contactIds = Array.from(new Set(rows.map((e) => e.contact_id).filter(Boolean)));
+      const contactMap = new Map<string, any>();
+      for (let i = 0; i < contactIds.length; i += 200) {
+        const { data } = await supabase
+          .from("contacts")
+          .select("id, email, first_name, custom_fields")
+          .in("id", contactIds.slice(i, i + 200));
+        for (const c of data ?? []) contactMap.set(c.id as string, c);
+      }
+      if (cancelled) return;
+      setStatusRows(rows.map((e) => ({ ...e, contact: contactMap.get(e.contact_id) ?? null })) as EnrollRow[]);
+      setStatusTotal(count ?? rows.length);
+      setStatusLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [queueStatus, seq, lastUpdated]);
+
   const filteredEnrollments = useMemo(() => {
-    const base = searchRows ?? enrollments;
-    if (queueStatus === "all") return base;
-    if (queueStatus === "stopped") return base.filter((e) => e.status === "stopped" || e.status === "unsubscribed");
-    return base.filter((e) => e.status === queueStatus);
-  }, [searchRows, enrollments, queueStatus]);
+    const wanted = queueStatus === "all" ? null : (QUEUE_STATUS_GROUPS[queueStatus] ?? [queueStatus]);
+    // A search term always wins: we then narrow its hits by the chosen status.
+    if (searchRows) {
+      return wanted ? searchRows.filter((e) => wanted.includes(e.status)) : searchRows;
+    }
+    if (wanted) return statusRows ?? [];
+    return enrollments;
+  }, [searchRows, statusRows, enrollments, queueStatus]);
 
   const queuePageCount = Math.max(1, Math.ceil(filteredEnrollments.length / QUEUE_PAGE_SIZE));
   const pagedEnrollments = useMemo(
