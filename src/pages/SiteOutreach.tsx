@@ -415,12 +415,26 @@ export default function SiteOutreach() {
 
   const stopEnrollment = async (id: string, reason: string) => {
     if (!confirm(`Stoppa denna kontakt från fler mail? (${reason})`)) return;
-    const { error } = await supabase.from("enrollments").update({
+    const { data: stopped, error } = await supabase.from("enrollments").update({
       status: "stopped",
       last_error: `manually stopped: ${reason}`,
       error_at: new Date().toISOString(),
-    }).eq("id", id);
+    }).eq("id", id).select("id, user_id, contact_id").maybeSingle();
     if (error) return toast({ title: "Fel", description: error.message, variant: "destructive" });
+
+    // A manual stop is permanent: put the address on the do-not-contact list so
+    // no future import or sequence can pick it up again.
+    if (stopped?.contact_id && stopped.user_id) {
+      const { data: contact } = await supabase
+        .from("contacts").select("email").eq("id", stopped.contact_id).maybeSingle();
+      const email = contact?.email?.trim().toLowerCase();
+      if (email) {
+        await supabase.from("do_not_contact").upsert(
+          { user_id: stopped.user_id, email, reason: `manually stopped: ${reason}` },
+          { onConflict: "user_id,email" },
+        );
+      }
+    }
     toast({ title: "Stoppad" });
     load();
   };
