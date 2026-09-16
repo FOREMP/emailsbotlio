@@ -672,8 +672,39 @@ export default function SiteOutreach() {
             {!queueOpen && <span className="text-xs text-muted-foreground">Klicka för att visa kön</span>}
           </div>
           <CollapsibleContent>
-        {enrollments.length === 0 ? (
-          <div className="text-sm text-muted-foreground py-6 text-center">Ingen har enrollats än — godkänn en demo i Approvals.</div>
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <Input
+            value={queueSearchInput}
+            onChange={(e) => setQueueSearchInput(e.target.value)}
+            placeholder="Sök företag eller mailadress…"
+            className="h-9 w-full sm:w-72"
+          />
+          <Select value={queueStatus} onValueChange={setQueueStatus}>
+            <SelectTrigger className="h-9 w-[190px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Alla statusar</SelectItem>
+              <SelectItem value="active">Aktiva</SelectItem>
+              <SelectItem value="waiting_capacity">Väntar på kapacitet</SelectItem>
+              <SelectItem value="completed">Klara</SelectItem>
+              <SelectItem value="stopped">Stoppade / avregistrerade</SelectItem>
+            </SelectContent>
+          </Select>
+          {(queueSearchInput || queueStatus !== "all") && (
+            <Button size="sm" variant="ghost" onClick={() => { setQueueSearchInput(""); setQueueStatus("all"); }}>
+              Rensa
+            </Button>
+          )}
+          {searching && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+          {searchRows !== null && !searching && (
+            <span className="text-xs text-muted-foreground">Sökning i hela sekvensen</span>
+          )}
+        </div>
+        {filteredEnrollments.length === 0 ? (
+          <div className="text-sm text-muted-foreground py-6 text-center">
+            {queueSearch || queueStatus !== "all"
+              ? "Inga träffar — prova ett annat sökord eller status."
+              : "Ingen har enrollats än — godkänn en demo i Approvals."}
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
