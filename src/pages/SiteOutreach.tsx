@@ -739,8 +739,10 @@ export default function SiteOutreach() {
               <SelectItem value="all">Alla statusar</SelectItem>
               <SelectItem value="active">Aktiva</SelectItem>
               <SelectItem value="waiting_capacity">Väntar på kapacitet</SelectItem>
+              <SelectItem value="deferred">Pausade / uppskjutna</SelectItem>
               <SelectItem value="completed">Klara</SelectItem>
               <SelectItem value="stopped">Stoppade / avregistrerade</SelectItem>
+              <SelectItem value="failed">Misslyckade</SelectItem>
             </SelectContent>
           </Select>
           {(queueSearchInput || queueStatus !== "all") && (
@@ -748,9 +750,14 @@ export default function SiteOutreach() {
               Rensa
             </Button>
           )}
-          {searching && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+          {(searching || statusLoading) && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
           {searchRows !== null && !searching && (
             <span className="text-xs text-muted-foreground">Sökning i hela sekvensen</span>
+          )}
+          {searchRows === null && queueStatus !== "all" && !statusLoading && (
+            <span className="text-xs text-muted-foreground">
+              Visar {filteredEnrollments.length} av {statusTotal ?? filteredEnrollments.length} i hela sekvensen
+            </span>
           )}
         </div>
         {filteredEnrollments.length === 0 ? (
