@@ -234,12 +234,59 @@ export default function SiteOutreach() {
     try { localStorage.setItem("outreach-queue-open", queueOpen ? "1" : "0"); } catch { /* ignore */ }
   }, [queueOpen]);
 
-  useEffect(() => { setQueuePage(1); }, [language, enrollments.length]);
+  useEffect(() => { setQueuePage(1); }, [language, enrollments.length, queueSearch, queueStatus]);
 
-  const queuePageCount = Math.max(1, Math.ceil(enrollments.length / QUEUE_PAGE_SIZE));
+  // Debounce what you type so we don't hit the database on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setQueueSearch(queueSearchInput.trim()), 300);
+    return () => clearTimeout(t);
+  }, [queueSearchInput]);
+
+  // Search the whole sequence, not just the 200 rows already on screen.
+  useEffect(() => {
+    const term = queueSearch;
+    if (!seq || term.length < 2) { setSearchRows(null); setSearching(false); return; }
+    let cancelled = false;
+    setSearching(true);
+    (async () => {
+      const like = `%${term.replace(/[%_]/g, "")}%`;
+      const { data: contactRows } = await supabase
+        .from("contacts")
+        .select("id, email, first_name, custom_fields")
+        .or(`email.ilike.${like},first_name.ilike.${like},custom_fields->>company_name.ilike.${like}`)
+        .limit(200);
+      const contacts = contactRows ?? [];
+      if (contacts.length === 0) {
+        if (!cancelled) { setSearchRows([]); setSearching(false); }
+        return;
+      }
+      const { data: enrs } = await supabase
+        .from("enrollments")
+        .select("id, status, current_step, current_node_id, next_send_at, last_sent_at, created_at, contact_id")
+        .eq("sequence_id", seq.id)
+        .in("contact_id", contacts.map((c: any) => c.id))
+        .order("updated_at", { ascending: false })
+        .limit(200);
+      const map = new Map(contacts.map((c: any) => [c.id, c]));
+      if (!cancelled) {
+        setSearchRows(((enrs ?? []) as any[]).map((e) => ({ ...e, contact: map.get(e.contact_id) ?? null })) as EnrollRow[]);
+        setSearching(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [queueSearch, seq]);
+
+  const filteredEnrollments = useMemo(() => {
+    const base = searchRows ?? enrollments;
+    if (queueStatus === "all") return base;
+    if (queueStatus === "stopped") return base.filter((e) => e.status === "stopped" || e.status === "unsubscribed");
+    return base.filter((e) => e.status === queueStatus);
+  }, [searchRows, enrollments, queueStatus]);
+
+  const queuePageCount = Math.max(1, Math.ceil(filteredEnrollments.length / QUEUE_PAGE_SIZE));
   const pagedEnrollments = useMemo(
-    () => enrollments.slice((queuePage - 1) * QUEUE_PAGE_SIZE, queuePage * QUEUE_PAGE_SIZE),
-    [enrollments, queuePage],
+    () => filteredEnrollments.slice((queuePage - 1) * QUEUE_PAGE_SIZE, queuePage * QUEUE_PAGE_SIZE),
+    [filteredEnrollments, queuePage],
   );
 
   const refreshAll = async () => {
