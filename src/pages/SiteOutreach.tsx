@@ -753,8 +753,10 @@ export default function SiteOutreach() {
             </table>
             <div className="flex items-center justify-between gap-3 pt-3 mt-2 border-t">
               <div className="text-xs text-muted-foreground">
-                Sida {queuePage} av {queuePageCount} · Visar {pagedEnrollments.length} av {queueCounts?.total ?? enrollments.length}
-                {(queueCounts?.total ?? 0) > enrollments.length ? " (senaste 200 i kön)" : ""}
+                Sida {queuePage} av {queuePageCount} · Visar {pagedEnrollments.length} av {filteredEnrollments.length}
+                {searchRows === null && queueStatus === "all" && (queueCounts?.total ?? 0) > enrollments.length
+                  ? ` (senaste 200 av ${queueCounts?.total} i kön — sök för att hitta övriga)`
+                  : ""}
               </div>
               <div className="flex gap-2">
                 <Button size="sm" variant="outline" disabled={queuePage <= 1}
