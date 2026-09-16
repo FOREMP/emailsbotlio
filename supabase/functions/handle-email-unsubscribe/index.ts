@@ -52,14 +52,29 @@ async function syncDoNotContactAndEnrollments(
   const { data: senders, error: sendersError } = await supabase
     .from('sent_emails')
     .select('user_id')
-    .ilike('recipient_email', email)
+    .ilike('recipient_email', normalizedEmail)
 
   if (sendersError) {
     throw sendersError
   }
 
+  // Also cover addresses that exist as a contact but have never been emailed
+  // yet, so a never-contacted unsubscriber can't be enrolled later.
+  const { data: contactOwners, error: contactOwnersError } = await supabase
+    .from('contacts')
+    .select('user_id')
+    .ilike('email', normalizedEmail)
+
+  if (contactOwnersError) {
+    throw contactOwnersError
+  }
+
   const userIds = Array.from(
-    new Set((senders ?? []).map((row: any) => row.user_id).filter(Boolean)),
+    new Set(
+      [...(senders ?? []), ...(contactOwners ?? [])]
+        .map((row: any) => row.user_id)
+        .filter(Boolean),
+    ),
   )
 
   for (const uid of userIds) {
