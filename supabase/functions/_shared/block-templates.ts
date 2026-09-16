@@ -317,13 +317,157 @@ export function blockTemplateFamilyCatalog(): Array<{
   }))
 }
 
-const RESTAURANT_RE = /(restaurang|restaurant|bistro|bar\b|pub\b|café|cafe|pizzeria|bageri|catering|mat|lunch|krog|diner|brasserie|trattoria)/i
-const STRONG_BEAUTY_RE = /(frisör|frisor|hairdress|hair salon|hair studio|barber|salong|salon\b|nagel|nail|frans|lash|bryn|brow|makeup|smink|hudvård|skin care|skönhet|beauty|spa\b|stylist)/i
-const CLINIC_PRIVATE_RE = /(klinik|clinic|tandläkare|dentist|dental|terapi|therapy|psykolog|counselling|counseling|fysioterap|physio|naprapat|kiropraktor|hälsa|halsa|wellbeing|wellness clinic|medical|medicinsk|vård|vard|rehab|rehabilitering)/i
-const EDITORIAL_SERVICE_RE = /(frisör|frisor|hair|barber|salong|skönhet|beauty|nagel|nail|frans|bryn|lash|brow|spa\b|massage|klinik|clinic|hudvård|skin|wellness|terapi|terapeut|kosmetisk|makeup|stylist|studio)/i
-const AUTOMOTIVE_RE = /(bilverkstad|mekaniker|auto|däck|bilservice|bilrekond|billack|bilglas|car repair|auto shop|tyre|motorverkstad)/i
-const ARCHITECTURAL_TRUST_RE = /(bygg|renover|snick|tak|fasad|måleri|markarbete|anlägg|platt|kakel|badrum|golv|elektriker|elinstall|elfirma|vvs|rör|städ|lokalvård|flyttstäd|teknisk service|montage|installation|projekt|serviceföretag|entreprenad|underhåll|offert|förfrågan|planering|konsultation|företagstjänst|fastighet|lokal|hemservice)/i
-const SERVICE_COMPANY_RE = /(service|installation|reparation|underhåll|jour|fastighetsservice|trädgård|flytt|sanering|lås|ventilation|solskydd|glas|målning|transport|bemanning|verkstadstjänst|städ|lokalvård|el|vvs|rör|montage|teknik|företagstjänst|hemtjänst|konsultation)/i
+export const BLOCK_TEMPLATE_CLASSIFIER_VERSION = 2
+
+export interface BlockTemplateFamilyDecision {
+  family: BlockTemplateFamily
+  confidence: number
+  matchedBy: 'category' | 'niche' | 'business_name' | 'source' | 'default'
+  matchedTerm: string | null
+  classifierVersion: number
+}
+
+// Match complete words/phrases rather than substrings. The previous expressions
+// treated "Mattläggare" and "Byggnadsmaterial" as restaurants because both
+// contain "mat", and treated "Ögonbrynsbar" as a bar.
+const FAMILY_TERMS: Array<{ family: BlockTemplateFamilyKey; terms: string[] }> = [
+  {
+    family: 'salon_editorial_luxury',
+    terms: [
+      'frisör', 'frisor', 'frisörsalong', 'hairdresser', 'hair salon', 'hair studio',
+      'barber', 'barber shop', 'barbershop', 'salong', 'salon', 'skönhet', 'beauty',
+      'skönhetssalong', 'beauty salon', 'massage', 'massage therapist',
+      'massageterapeut', 'thai massage therapist', 'laser hair removal service',
+      'hair removal service',
+      'ögonbrynsbar', 'brow bar', 'nagelsalong', 'nail salon', 'fransstudio',
+      'lash studio', 'hudvård', 'skin care', 'makeup', 'smink', 'spa', 'stylist',
+    ],
+  },
+  {
+    family: 'bistro_atmospheric_landing',
+    terms: [
+      'restaurang', 'restaurant', 'lunchrestaurang', 'pizza restaurant',
+      'italian restaurant', 'french restaurant', 'scandinavian restaurant',
+      'modern british restaurant', 'bistro', 'bar', 'bar & grill', 'cocktail bar',
+      'pub', 'café', 'cafe', 'pizzeria', 'bageri', 'bakery', 'catering',
+      'snabbmat', 'fast food', 'lunch', 'krog', 'diner', 'brasserie', 'trattoria',
+      'kebab', 'sushi restaurant', 'thai restaurant',
+    ],
+  },
+  {
+    family: 'clinic_private_care',
+    terms: [
+      'klinik', 'clinic', 'tandläkare', 'dentist', 'dental clinic', 'terapi',
+      'therapy', 'psykolog', 'psychologist', 'counselling', 'counseling',
+      'fysioterapi', 'physiotherapy', 'naprapat', 'kiropraktor', 'chiropractor',
+      'hälsoklinik', 'wellness clinic', 'medical clinic', 'rehab', 'rehabilitering',
+    ],
+  },
+  {
+    family: 'mechanic_precision_workshop',
+    terms: [
+      'bilverkstad', 'mekaniker', 'mechanic', 'auto repair shop', 'auto shop',
+      'car repair', 'bilservice', 'bilrekond', 'car detailing service', 'däckverkstad',
+      'tire shop', 'tyre shop', 'billack', 'bilglas', 'motorverkstad',
+    ],
+  },
+  {
+    family: 'byggform_architectural_trust',
+    terms: [
+      'byggfirma', 'byggföretag', 'construction company', 'contractor',
+      'general contractor', 'home builder', 'roofing contractor', 'takläggare',
+      'snickare', 'carpenter', 'renovering', 'entreprenad', 'elektriker',
+      'electrician', 'vvs', 'rörmokare', 'plumber', 'målare', 'painter',
+      'markarbete', 'paving contractor', 'flooring contractor', 'mattläggare',
+      'byggnadsmaterial', 'building materials supplier', 'building materials store',
+    ],
+  },
+  {
+    family: 'service_company_modern',
+    terms: [
+      'service', 'installation', 'reparation', 'underhåll', 'fastighetsservice',
+      'trädgårdstjänster', 'landscaper', 'tree service', 'arborist service',
+      'flytt', 'sanering', 'lås', 'ventilation', 'solskydd', 'glas', 'transport',
+      'bemanning', 'städning', 'städtjänster', 'lokalvård', 'montage', 'hemtjänst',
+    ],
+  },
+]
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function matchedFamily(value: string): { family: BlockTemplateFamily; term: string } | null {
+  if (!value) return null
+  for (const group of FAMILY_TERMS) {
+    for (const term of group.terms) {
+      const pattern = new RegExp(`(^|[^a-z0-9åäö])${escapeRegex(term)}(?=$|[^a-z0-9åäö])`, 'i')
+      if (pattern.test(value)) return { family: BLOCK_TEMPLATE_FAMILIES[group.family], term }
+    }
+  }
+  return null
+}
+
+export function selectBlockTemplateFamilyDecision(input: {
+  category?: string | null
+  niche?: string | null
+  nicheLabel?: string | null
+  businessName?: string | null
+  source?: string | null
+}): BlockTemplateFamilyDecision {
+  const candidates: Array<{
+    value: string
+    matchedBy: BlockTemplateFamilyDecision['matchedBy']
+    confidence: number
+  }> = [
+    { value: normalize(input.category), matchedBy: 'category', confidence: .99 },
+    { value: normalize(input.niche), matchedBy: 'niche', confidence: .92 },
+    { value: normalize(input.nicheLabel), matchedBy: 'niche', confidence: .9 },
+    { value: normalize(input.businessName), matchedBy: 'business_name', confidence: .78 },
+  ]
+  for (const candidate of candidates) {
+    const match = matchedFamily(candidate.value)
+    if (match) {
+      return {
+        family: match.family,
+        confidence: candidate.confidence,
+        matchedBy: candidate.matchedBy,
+        matchedTerm: match.term,
+        classifierVersion: BLOCK_TEMPLATE_CLASSIFIER_VERSION,
+      }
+    }
+  }
+
+  const category = normalize(input.category)
+  if (category) {
+    return {
+      family: BLOCK_TEMPLATE_FAMILIES.service_company_modern,
+      confidence: .68,
+      matchedBy: 'default',
+      matchedTerm: null,
+      classifierVersion: BLOCK_TEMPLATE_CLASSIFIER_VERSION,
+    }
+  }
+
+  const sourceMatch = matchedFamily(normalize(input.source).slice(0, 1200))
+  if (sourceMatch) {
+    return {
+      family: sourceMatch.family,
+      confidence: .55,
+      matchedBy: 'source',
+      matchedTerm: sourceMatch.term,
+      classifierVersion: BLOCK_TEMPLATE_CLASSIFIER_VERSION,
+    }
+  }
+
+  return {
+    family: BLOCK_TEMPLATE_FAMILIES.service_company_modern,
+    confidence: .4,
+    matchedBy: 'default',
+    matchedTerm: null,
+    classifierVersion: BLOCK_TEMPLATE_CLASSIFIER_VERSION,
+  }
+}
 
 export function selectBlockTemplateFamily(input: {
   category?: string | null
@@ -332,37 +476,7 @@ export function selectBlockTemplateFamily(input: {
   businessName?: string | null
   source?: string | null
 }): BlockTemplateFamily {
-  const category = normalize(input.category)
-  const niche = normalize(input.niche)
-  const nicheLabel = normalize(input.nicheLabel)
-  const businessName = normalize(input.businessName)
-  const source = normalize(input.source).slice(0, 1200)
-
-  // The uploaded category is the strongest signal. It is what Eric maps from the scraper.
-  const primary = [category, niche, nicheLabel, businessName].filter(Boolean).join(' ')
-  if (RESTAURANT_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.bistro_atmospheric_landing
-  // Beauty wins over the clinic family: a salon that mentions "terapi" or "hälsa"
-  // must not end up on the medical layout.
-  if (STRONG_BEAUTY_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.salon_editorial_luxury
-  if (CLINIC_PRIVATE_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.clinic_private_care
-  if (EDITORIAL_SERVICE_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.salon_editorial_luxury
-  if (AUTOMOTIVE_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.mechanic_precision_workshop
-  if (ARCHITECTURAL_TRUST_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.byggform_architectural_trust
-  if (SERVICE_COMPANY_RE.test(primary)) return BLOCK_TEMPLATE_FAMILIES.service_company_modern
-
-  // If the lead already has a category and it is not a known restaurant/beauty/auto/build case,
-  // prefer the broad premium service-company family instead of the old generic fallback.
-  if (category) return BLOCK_TEMPLATE_FAMILIES.service_company_modern
-
-  // Source text is intentionally weaker so a random scraped word does not hijack the niche.
-  if (!category && RESTAURANT_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.bistro_atmospheric_landing
-  if (!category && CLINIC_PRIVATE_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.clinic_private_care
-  if (!category && EDITORIAL_SERVICE_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.salon_editorial_luxury
-  if (!category && AUTOMOTIVE_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.mechanic_precision_workshop
-  if (!category && ARCHITECTURAL_TRUST_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.byggform_architectural_trust
-  if (!category && SERVICE_COMPANY_RE.test(source)) return BLOCK_TEMPLATE_FAMILIES.service_company_modern
-
-  return BLOCK_TEMPLATE_FAMILIES.service_company_modern
+  return selectBlockTemplateFamilyDecision(input).family
 }
 
 export function pagesForTemplate(

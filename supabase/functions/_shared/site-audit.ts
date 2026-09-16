@@ -14,6 +14,8 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 export interface AuditResult {
   score: number
   reason: string
+  /** Confirmed shopping cart and checkout; e-commerce is outside Botlio's scope. */
+  isEcommerce: boolean
   /** Whether the lead has an owned website, not merely a booking/profile page. */
   websitePresence: WebsitePresence
   /** structural + cosmetic concatenated — kept for existing consumers. */
@@ -162,6 +164,11 @@ const SYSTEM_PROMPT = [
   '- "uncertain" = underlaget räcker inte för att avgöra. Gissa aldrig.',
   'En egen sajt med en bokningswidget är fortfarande "owned_site".',
   '',
+  'Klassificera också "is_ecommerce" strikt:',
+  '- true ENDAST när bevisen visar en riktig e-handelsresa: produkter säljs online med varukorg och kassa/betalning, eller tydliga "add to cart", checkout och ordersteg.',
+  '- false för bokningssystem, offertförfrågan, restaurangmeny, produktgalleri, prislista, kontaktformulär eller extern köplänk utan bevis på egen aktiv varukorg/kassa.',
+  '- Vid osäkerhet: false. Fältet används för att utesluta e-handel, som inte ingår i erbjudandet.',
+  '',
   'Webbplatskvalitet 1-10:',
   '  1    = ingen riktig sajt: parkerad domän, trasig sida eller bara tredjepartsprofil.',
   '  2-3  = mycket gammal eller vanskött: trasiga bilder/länkar, fel företagsnamn,',
@@ -198,7 +205,7 @@ const SYSTEM_PROMPT = [
   '- Bedöm ENDAST det du faktiskt ser eller läser. Spekulera inte.',
   '',
   'Svara ENDAST med strikt JSON:',
-  '{"score": <heltal 1-10>, "confidence": "high|medium|low", "website_presence": "owned_site|third_party_booking_or_profile|no_functional_website|uncertain", "reason": "<max 200 tecken, konkret evidens på svenska>", "structural": ["<riktig brist>"], "cosmetic": ["<putsdetalj>"]}',
+  '{"score": <heltal 1-10>, "confidence": "high|medium|low", "website_presence": "owned_site|third_party_booking_or_profile|no_functional_website|uncertain", "is_ecommerce": <true|false>, "reason": "<max 200 tecken, konkret evidens på svenska>", "structural": ["<riktig brist>"], "cosmetic": ["<putsdetalj>"]}',
   'Båda listorna får vara tomma. Punkterna ska vara på svenska, konkreta och användbara som argument i ett kallmail.',
 ].join('\n')
 
@@ -206,6 +213,7 @@ type AuditJudgment = {
   score: number
   confidence: 'high' | 'medium' | 'low'
   websitePresence: WebsitePresence
+  isEcommerce: boolean
   reason: string
   structural: string[]
   cosmetic: string[]
@@ -232,6 +240,7 @@ function parseJudgment(data: unknown, provider: string, model: string, hasScreen
     score?: unknown
     confidence?: unknown
     website_presence?: unknown
+    is_ecommerce?: unknown
     reason?: unknown
     weaknesses?: unknown
     structural?: unknown
@@ -272,11 +281,13 @@ function parseJudgment(data: unknown, provider: string, model: string, hasScreen
     || rawPresence === 'uncertain'
     ? rawPresence
     : 'uncertain'
+  const isEcommerce = parsed.is_ecommerce === true
 
   return {
     score,
     confidence,
     websitePresence,
+    isEcommerce,
     reason: String(parsed.reason ?? '').slice(0, 500),
     structural,
     cosmetic,
@@ -490,6 +501,7 @@ export async function auditWebsite(
         ? 'The site returned no reliable visual or text evidence and requires manual review.'
         : 'Sajten gav inget tillförlitligt visuellt eller textbaserat underlag och kräver manuell kontroll.',
       websitePresence: 'uncertain',
+      isEcommerce: false,
       weaknesses: noSiteIssues,
       structural: noSiteIssues,
       cosmetic: [],
@@ -557,6 +569,10 @@ export async function auditWebsite(
     score: chosen.score,
     reason: chosen.reason,
     websitePresence: chosen.websitePresence,
+    // One clearly evidenced checkout is enough to exclude it. This does not
+    // use generic shop/product wording, so service and booking sites remain
+    // eligible even if a second model is uncertain.
+    isEcommerce: Boolean(first.isEcommerce || second?.isEcommerce),
     weaknesses: [...chosen.structural, ...chosen.cosmetic].slice(0, 6),
     structural: chosen.structural,
     cosmetic: chosen.cosmetic,

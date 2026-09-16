@@ -26,10 +26,10 @@ import { classifyNiche, templateForNiche, type NicheKey } from '../_shared/niche
 import {
   blockTemplateFamilyCatalog,
   BLOCK_TEMPLATE_FAMILIES,
-  selectBlockTemplateFamily,
+  selectBlockTemplateFamilyDecision,
   type BlockTemplateFamily,
   type BlockTemplateFamilyKey,
-} from '../process-site-jobs/block-templates.ts'
+} from '../_shared/block-templates.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -670,6 +670,10 @@ async function auditOne(
       supabase,
       scrapeProvider,
     )
+    // E-commerce with a real cart and checkout is outside the product scope,
+    // so it is always parked. The audit model is explicitly told not to mark
+    // bookings, menus, catalogues or enquiry forms as e-commerce.
+    const automaticallyExcludedEcommerce = result.isEcommerce
     // A confirmed booking/profile-only presence is a stronger signal than
     // the score: it has no owned site to preserve, so it can go directly to
     // the normal build-and-send queue. "uncertain" never takes this route.
@@ -679,8 +683,12 @@ async function auditOne(
     // A 7 is already a good enough existing site. Only scores 1–6 should
     // consume an operator decision and possibly a generated demo, unless the
     // audit has confirmed there is no owned site at all.
-    const recommendedStatus = result.score >= AUDIT_AUTO_PARK_SCORE ? 'site_good_enough' : 'needs_site'
-    const nextStatus = automaticallyNeedsSite
+    const recommendedStatus = automaticallyExcludedEcommerce || result.score >= AUDIT_AUTO_PARK_SCORE
+      ? 'site_good_enough'
+      : 'needs_site'
+    const nextStatus = automaticallyExcludedEcommerce
+      ? 'site_good_enough'
+      : automaticallyNeedsSite
       ? 'needs_site'
       : recommendedStatus === 'site_good_enough'
       ? 'site_good_enough'
@@ -702,15 +710,18 @@ async function auditOne(
         weaknesses: result.weaknesses,
         structural: result.structural,
         cosmetic: result.cosmetic,
-        recommended_status: automaticallyNeedsSite ? 'needs_site' : recommendedStatus,
+        recommended_status: automaticallyExcludedEcommerce
+          ? 'site_good_enough'
+          : automaticallyNeedsSite ? 'needs_site' : recommendedStatus,
         website_presence: result.websitePresence,
+        excluded_ecommerce: automaticallyExcludedEcommerce,
         auto_qualified_for_build: automaticallyNeedsSite,
         uncertain: result.uncertain,
         confidence: result.confidence,
         ...(nextStatus === 'awaiting_audit_approval'
           ? {}
           : {
-              operator_decision: automaticallyNeedsSite ? 'build' : 'site_good_enough',
+              operator_decision: automaticallyNeedsSite && !automaticallyExcludedEcommerce ? 'build' : 'site_good_enough',
               operator_decision_source: 'automation',
               operator_decided_at: auditedAt,
             }),
@@ -849,12 +860,27 @@ async function chooseTemplateFamilyForLead(supabase: ReturnType<typeof createCli
   family: BlockTemplateFamily
   source: 'ai' | 'rules'
   reason?: string
+  confidence: number
+  matchedBy: string
+  classifierVersion: number
 }> {
-  const fallback = selectBlockTemplateFamily({
+  const fallback = selectBlockTemplateFamilyDecision({
     category: lead?.category ?? null,
     niche: lead?.niche ?? null,
     businessName: lead?.company_name ?? null,
   })
+  // Exact uploaded categories are safer and faster than an LLM. Only ask AI
+  // when the deterministic classifier is genuinely unsure.
+  if (fallback.confidence >= .9) {
+    return {
+      family: fallback.family,
+      source: 'rules',
+      reason: `High-confidence ${fallback.matchedBy} match${fallback.matchedTerm ? `: ${fallback.matchedTerm}` : ''}`,
+      confidence: fallback.confidence,
+      matchedBy: fallback.matchedBy,
+      classifierVersion: fallback.classifierVersion,
+    }
+  }
   const familyCatalog = blockTemplateFamilyCatalog()
   try {
     const routed = await callRoutedChat({
@@ -862,12 +888,12 @@ async function chooseTemplateFamilyForLead(supabase: ReturnType<typeof createCli
       nvidiaModel: TEMPLATE_PICKER_NVIDIA_MODEL,
       openrouterModel: TEMPLATE_PICKER_OPENROUTER_FALLBACK,
       preferredProvider: 'nvidia',
-      nvidiaAttempts: 1,
+      nvidiaAttempts: 2,
       // Rule-based family selection is deliberately the safe fallback. Do
       // not spend a paid model call merely because the NVIDIA picker is busy.
       allowOpenRouterFallback: false,
       title: 'Botlio Template Picker Fallback',
-      timeoutMs: 20_000,
+      timeoutMs: 25_000,
       requireJsonObject: true,
       body: {
         temperature: 0,
@@ -913,18 +939,32 @@ async function chooseTemplateFamilyForLead(supabase: ReturnType<typeof createCli
     const parsed = JSON.parse(cleaned) as { templateFamily?: string; reason?: string; confidence?: number }
     const key = parsed?.templateFamily
     if (!key || !(key in BLOCK_TEMPLATE_FAMILIES)) {
-      return { family: fallback, source: 'rules', reason: 'AI picker returned unknown family' }
+      return {
+        family: fallback.family,
+        source: 'rules',
+        reason: 'AI picker returned unknown family',
+        confidence: fallback.confidence,
+        matchedBy: fallback.matchedBy,
+        classifierVersion: fallback.classifierVersion,
+      }
     }
+    const aiConfidence = Math.max(0, Math.min(1, Number(parsed.confidence ?? .7)))
     return {
       family: BLOCK_TEMPLATE_FAMILIES[key as BlockTemplateFamilyKey],
       source: 'ai',
       reason: typeof parsed.reason === 'string' ? parsed.reason.slice(0, 240) : undefined,
+      confidence: Number.isFinite(aiConfidence) ? aiConfidence : .7,
+      matchedBy: 'ai',
+      classifierVersion: fallback.classifierVersion,
     }
   } catch (err) {
     return {
-      family: fallback,
+      family: fallback.family,
       source: 'rules',
       reason: `AI picker error: ${(err as Error).message}`,
+      confidence: fallback.confidence,
+      matchedBy: fallback.matchedBy,
+      classifierVersion: fallback.classifierVersion,
     }
   }
 }
@@ -1022,6 +1062,9 @@ async function startGeneration(
           template_family: blockFamily.key,
           template_family_source: chosenFamily.source,
           template_family_reason: chosenFamily.reason ?? null,
+          template_family_confidence: chosenFamily.confidence,
+          template_family_matched_by: chosenFamily.matchedBy,
+          template_classifier_version: chosenFamily.classifierVersion,
         },
       })
       .select('id')
@@ -1072,6 +1115,9 @@ async function startGeneration(
         template_family: blockFamily.key,
         template_family_source: chosenFamily.source,
         template_family_reason: chosenFamily.reason ?? null,
+        template_family_confidence: chosenFamily.confidence,
+        template_family_matched_by: chosenFamily.matchedBy,
+        template_classifier_version: chosenFamily.classifierVersion,
       },
     })
     .eq('id', contactId)

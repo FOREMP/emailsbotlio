@@ -14,6 +14,10 @@ import {
   recordPipelineFailure,
 } from '../_shared/site-pipeline-health.ts'
 import { callRoutedChat } from '../_shared/ai-provider.ts'
+import {
+  BLOCK_TEMPLATE_FAMILIES,
+  type BlockTemplateFamilyKey,
+} from '../_shared/block-templates.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -33,6 +37,12 @@ const MAX_ATTEMPTS = 3
 const STUCK_MINUTES = 20
 
 const CURRENT_YEAR = new Date().getFullYear()
+
+function asBlockTemplateFamily(value: unknown): BlockTemplateFamilyKey | null {
+  return typeof value === 'string' && value in BLOCK_TEMPLATE_FAMILIES
+    ? value as BlockTemplateFamilyKey
+    : null
+}
 
 interface ServiceItem { name: string; description: string; when?: string }
 interface ValueItem { title: string; text: string }
@@ -562,6 +572,15 @@ function nicheFromTemplate(template: string | null | undefined, hints: Array<unk
   return NICHE_CONFIG.auto_workshop
 }
 
+function isUsableBrandFont(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const font = value.trim()
+  if (!font || font.length > 60) return false
+  if (/^(inherit|initial|unset|normal|system-ui|sans-serif|serif|monospace)$/i.test(font)) return false
+  if (/var\s*\(|!important|[{}<>;=#]|\b(dropdown|menu|title|href|style)\b/i.test(font)) return false
+  return /^[a-z0-9 _'"-]+$/i.test(font)
+}
+
 const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s)
 
 /**
@@ -799,7 +818,20 @@ Deno.serve(async (req) => {
         .maybeSingle()
       : { data: null }
 
-    // Category (from the uploaded lead file) is the primary signal.
+    // The family chosen by process-site-leads is authoritative for the modern
+    // builder. `nicheFromTemplate` remains only as a legacy copy profile for
+    // the old template engine and must never reclassify the modern family.
+    const selectedTemplateFamily = asBlockTemplateFamily(site.template)
+      ?? asBlockTemplateFamily(cf.template_family)
+    if (selectedTemplateFamily && site.template !== selectedTemplateFamily) {
+      await supabase
+        .from('generated_sites')
+        .update({ template: selectedTemplateFamily })
+        .eq('id', generated_site_id)
+    }
+
+    // Category (from the uploaded lead file) is the primary signal for the
+    // legacy engine only.
     const nc = nicheFromTemplate(site.template, [
       siteLead?.category,
       cf.category,
@@ -822,7 +854,17 @@ Deno.serve(async (req) => {
     // Niche-specific visual defaults. Preserve scraped brand colors when present,
     // but never let a salon with incomplete branding inherit the auto-shop palette.
     const bc = (branding.colors && !Array.isArray(branding.colors)) ? branding.colors : {}
-    const paletteDefaults = nc.key === 'hair_salon'
+    const paletteDefaults = selectedTemplateFamily === 'bistro_atmospheric_landing'
+      ? {
+          primary: '#8a4934',
+          secondary: '#5f6b4a',
+          accent: '#c89a58',
+          background: '#f8f3ea',
+          surface: '#fffdf8',
+          textPrimary: '#29231f',
+          textSecondary: '#6f6259',
+        }
+      : selectedTemplateFamily === 'salon_editorial_luxury' || nc.key === 'hair_salon'
       ? {
           primary: '#9a5f6a',
           secondary: '#c7a78a',
@@ -856,7 +898,10 @@ Deno.serve(async (req) => {
     }, paletteDefaults)
 
     const brandFonts = Array.isArray(branding.fonts)
-      ? branding.fonts.map((f: any) => (typeof f === 'string' ? f : f?.family)).filter(Boolean).slice(0, 4)
+      ? branding.fonts
+        .map((f: any) => (typeof f === 'string' ? f : f?.family))
+        .filter((f: unknown): f is string => isUsableBrandFont(f))
+        .slice(0, 4)
       : []
     // Firecrawl may return semantic colour roles while the Botlio worker returns
     // a simple colour list. Treat both as real branding; otherwise a good brand
@@ -946,6 +991,7 @@ Deno.serve(async (req) => {
         language: siteLead?.language === 'en' ? 'en' : 'sv',
         nicheLabel: siteLead?.category ? '' : (siteLead?.niche && siteLead.niche !== 'other' ? nc.label : ''),
         category: siteLead?.category ?? (typeof cf.category === 'string' ? cf.category : null),
+        selectedTemplateFamily,
         // Only inherit colors when the lead site really had branding; otherwise
         // freeform picks a palette that fits the business type.
         brandPalette: hasRealBranding ? brandPalette : {},

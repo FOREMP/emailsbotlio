@@ -121,10 +121,15 @@ export interface FreeformStepResult {
 }
 
 export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<string, string>): Promise<FreeformStepResult> {
-  const keep = ctx.progress?.version === VERSION
+  const savedFamily = ctx.progress?.plan?.templateFamily ?? null
+  const familyMatches = !ctx.selectedTemplateFamily || savedFamily === ctx.selectedTemplateFamily
+  // A persisted decision from process-site-leads is authoritative. Never
+  // resume content/files created for another family after a rule fix or a
+  // template-changing regeneration.
+  const keep = ctx.progress?.version === VERSION && familyMatches
   const files = keep ? { ...(existingFiles ?? {}) } : {}
   const progress = normalizeProgress(keep ? ctx.progress : null, files, ctx)
-  console.log(`[freeform-v${VERSION}] site=${ctx.siteId} stage=${progress.stage} category=${ctx.category || 'missing'}`)
+  console.log(`[freeform-v${VERSION}] site=${ctx.siteId} stage=${progress.stage} category=${ctx.category || 'missing'} family=${ctx.selectedTemplateFamily || 'auto'} resumed=${keep}`)
   if (progress.stage === 'plan' || !progress.plan) {
     const plan = buildPlan(ctx)
     return step(false, files, meta({ ...progress, stage: 'theme', plan, profile: buildProfile(ctx), factPack: buildFactPack(ctx), content: {}, rendered: [], built: [], polished: [], lastStage: 'plan' }), `v${VERSION} plan ready: ${plan.pages.map((p) => p.slug).join(', ')}`)
