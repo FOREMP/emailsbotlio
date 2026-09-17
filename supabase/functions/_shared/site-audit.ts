@@ -90,6 +90,21 @@ export function shouldRequestSecondOpinion(
   return (score >= 4 && score <= 6) || confidence === 'low'
 }
 
+/**
+ * A clearly poor site may skip manual triage only when the visual audit really
+ * rendered. Scraper/provider failures throw before this point, empty responses
+ * are marked unreadable, and unreliable screenshots must always remain human
+ * review work even if a model happened to return a low score.
+ */
+export function shouldAutoBuildAudit(
+  result: Pick<AuditResult, 'score' | 'screenshotReliable' | 'unreadable' | 'isEcommerce'>,
+): boolean {
+  return result.score <= 4
+    && result.screenshotReliable
+    && !result.unreadable
+    && !result.isEcommerce
+}
+
 export function normaliseUrl(raw: string): string {
   const s = (raw ?? '').trim()
   if (!s) return ''

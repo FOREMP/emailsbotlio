@@ -5,9 +5,10 @@
 //      when live, failed when the site pipeline errored).
 //   2. AUDIT — for up to AUDIT_PER_TICK pending_audit leads: scrape with
 //      Firecrawl, score 1-10 with Gemini, extract 2-3 concrete weaknesses.
-//      Scores of 7 or more are automatically parked as site_good_enough; all
-//      other results wait for an operator audit decision. An audit must never
-//      start a website build by itself.
+//      Scores of 7 or more are automatically parked as site_good_enough.
+//      Reliable screenshot-backed scores of 1–4 automatically enter the
+//      build-and-send flow; scores 5–6 and unreliable evidence wait for an
+//      operator decision.
 //   3. GENERATE — enforce daily cap DAILY_GEN_CAP by counting leads that
 //      already moved into generating/awaiting_approval/approved today. If
 //      capacity is left, take exactly GEN_PER_TICK needs_site leads, create a
@@ -20,7 +21,7 @@ import {
   recordPipelineFailure,
 } from '../_shared/site-pipeline-health.ts'
 import { selectedScrapeProvider, ScraperError } from '../_shared/scraper-client.ts'
-import { auditWebsite } from '../_shared/site-audit.ts'
+import { auditWebsite, shouldAutoBuildAudit } from '../_shared/site-audit.ts'
 import { callRoutedChat } from '../_shared/ai-provider.ts'
 import { classifyNiche, templateForNiche, type NicheKey } from '../_shared/niche.ts'
 import {
@@ -73,7 +74,7 @@ Deno.serve(async (req) => {
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   const supabase = createClient(supabaseUrl, serviceKey)
 
-  const report = { reconciled: 0, auto_synced: 0, recovered: 0, audited: 0, auto_parked: 0, generated: 0, capacity: 0, errors: [] as string[] }
+  const report = { reconciled: 0, auto_synced: 0, recovered: 0, audited: 0, auto_parked: 0, auto_qualified: 0, generated: 0, capacity: 0, errors: [] as string[] }
 
   // Manual override from the Site Leads UI: build these leads right now,
   // ignoring the automation switch and the daily cap.
@@ -154,6 +155,7 @@ Deno.serve(async (req) => {
     // limited to leads still awaiting an audit decision; it never changes a
     // lead that an operator has already chosen to build, review, or send.
     report.auto_parked = await parkHighQualityAudits(supabase, report)
+    report.auto_qualified = await advanceReliableLowQualityAudits(supabase, report)
 
     // ---------------- 3. GENERATE -----------------
     // Keep independent Swedish and English build budgets. A busy Swedish day
@@ -665,8 +667,9 @@ async function syncAutoSendLead(
 
 // ---------------------------------------------------------------------------
 // AUDIT — one shared screenshot-first evaluator for every audit entry point.
-// Scores 7–10 are automatically parked as good enough. Scores 1–6 remain in
-// the operator review queue, so borderline sites are never auto-dismissed.
+// Scores 7–10 are automatically parked as good enough. Reliable scores 1–4
+// enter build + direct-send automatically. Scores 5–6, missing screenshots,
+// blank scrapes and rendering contradictions remain operator review work.
 // ---------------------------------------------------------------------------
 async function auditOne(
   supabase: ReturnType<typeof createClient>,
@@ -696,12 +699,16 @@ async function auditOne(
     // A confirmed booking/profile-only presence is a stronger signal than
     // the score: it has no owned site to preserve, so it can go directly to
     // the normal build-and-send queue. "uncertain" never takes this route.
-    const automaticallyNeedsSite = result.confidence !== 'low'
+    const autoQualifiedLowScore = shouldAutoBuildAudit(result)
+    const automaticBuildCandidate = autoQualifiedLowScore || (
+      result.confidence !== 'low'
       && (result.websitePresence === 'third_party_booking_or_profile'
         || result.websitePresence === 'no_functional_website')
-    // A 7 is already a good enough existing site. Only scores 1–6 should
-    // consume an operator decision and possibly a generated demo, unless the
-    // audit has confirmed there is no owned site at all.
+    )
+    // E-commerce is outside the offer even when its visual score is low.
+    const automaticallyNeedsSite = !automaticallyExcludedEcommerce && automaticBuildCandidate
+    // A 7 is already a good enough existing site. Scores 5–6 consume an
+    // operator decision; screenshot-backed scores 1–4 build automatically.
     const recommendedStatus = automaticallyExcludedEcommerce || result.score >= AUDIT_AUTO_PARK_SCORE
       ? 'site_good_enough'
       : 'needs_site'
@@ -735,6 +742,7 @@ async function auditOne(
         website_presence: result.websitePresence,
         excluded_ecommerce: automaticallyExcludedEcommerce,
         auto_qualified_for_build: automaticallyNeedsSite,
+        auto_qualified_low_score: autoQualifiedLowScore,
         uncertain: result.uncertain,
         confidence: result.confidence,
         ...(nextStatus === 'awaiting_audit_approval'
@@ -748,6 +756,7 @@ async function auditOne(
           rubric_version: 'screenshot_consensus_v4',
           screenshot_used: Boolean(result.screenshot),
           screenshot_reliable: result.screenshotReliable,
+          unreadable: result.unreadable,
           screenshot_quality: result.screenshotQuality,
           screenshot: screenshotEvidence,
           scraped_text_characters: result.markdown.length,
@@ -763,7 +772,7 @@ async function auditOne(
         },
       },
       ...(recommendedStatus === 'site_good_enough' && !automaticallyNeedsSite
-        ? { triaged_at: auditedAt }
+        ? { auto_send: false, triaged_at: auditedAt }
         : automaticallyNeedsSite
           ? {
               auto_send: Boolean(row.email),
@@ -827,6 +836,62 @@ async function auditOne(
     }).eq('id', row.id)
     return
   }
+}
+
+// Repair untouched low-score rows produced immediately before this policy was
+// deployed. Only rows with a recorded reliable screenshot qualify; old audits
+// with missing/failed visual evidence stay in the manual queue.
+async function advanceReliableLowQualityAudits(
+  supabase: ReturnType<typeof createClient>,
+  report: { errors: string[] },
+): Promise<number> {
+  const { data, error } = await supabase
+    .from('site_leads')
+    .select('id, email, audit_details')
+    .in('status', ['awaiting_audit_approval', 'needs_triage'])
+    .lte('audit_score', 4)
+    .limit(100)
+
+  if (error) {
+    report.errors.push(`auto-qualify low-score audits: ${error.message}`)
+    return 0
+  }
+
+  let advanced = 0
+  for (const row of data ?? []) {
+    const details = row.audit_details && typeof row.audit_details === 'object'
+      ? row.audit_details as Record<string, any>
+      : {}
+    const evidence = details.evidence && typeof details.evidence === 'object'
+      ? details.evidence as Record<string, any>
+      : {}
+    if (details.excluded_ecommerce === true
+      || evidence.screenshot_reliable !== true
+      || evidence.unreadable === true) continue
+
+    const decidedAt = new Date().toISOString()
+    const { data: updated, error: updateError } = await supabase.from('site_leads').update({
+      status: 'needs_site',
+      auto_send: Boolean(row.email),
+      triaged_at: decidedAt,
+      audit_details: {
+        ...details,
+        recommended_status: 'needs_site',
+        auto_qualified_for_build: true,
+        auto_qualified_low_score: true,
+        operator_decision: 'build',
+        operator_decision_source: 'automation',
+        operator_decided_at: decidedAt,
+      },
+    })
+      .eq('id', row.id)
+      .in('status', ['awaiting_audit_approval', 'needs_triage'])
+      .select('id')
+
+    if (updateError) report.errors.push(`auto-qualify audit ${row.id}: ${updateError.message}`)
+    else advanced += updated?.length ?? 0
+  }
+  return advanced
 }
 
 // The policy is score 7–10 = existing site is good enough. Older versions
