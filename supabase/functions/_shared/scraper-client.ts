@@ -47,6 +47,7 @@ export class ScraperError extends Error {
 }
 
 const FIRECRAWL_V2 = 'https://api.firecrawl.dev/v2'
+const BOTLIO_CAPACITY_RETRIES = 1
 
 export async function selectedScrapeProvider(supabase: any): Promise<ScrapeProvider> {
   const { data, error } = await supabase
@@ -93,7 +94,7 @@ export async function scrapeUrl(
   }
 
   try {
-    return markProvider(await scrapeWithBotlioWorker(url, options), 'botlio_scraper')
+    return markProvider(await scrapeWithBotlioCapacityRetry(url, options), 'botlio_scraper')
   } catch (primaryError) {
     const primary = asScraperError(primaryError, 'botlio_scraper')
     console.warn(`Botlio scraper failed (${primary.status}): ${primary.message}; trying Firecrawl fallback`)
@@ -108,7 +109,7 @@ export async function scrapeUrl(
 export async function mapUrl(provider: ScrapeProvider, url: string): Promise<string[]> {
   if (provider === 'botlio_scraper') {
     try {
-      const data = await scrapeWithBotlioWorker(url, { screenshot: false })
+      const data = await scrapeWithBotlioCapacityRetry(url, { screenshot: false })
       return cleanLinks(data.links)
     } catch (primaryError) {
       const primary = asScraperError(primaryError, 'botlio_scraper')
@@ -216,6 +217,32 @@ async function scrapeWithBotlioWorker(url: string, options: { screenshot?: boole
   const result = await safeJson(response)
   if (!response.ok || !result?.ok) throw providerError('botlio_scraper', response.status, result)
   return result.data ?? {}
+}
+
+async function scrapeWithBotlioCapacityRetry(
+  url: string,
+  options: { screenshot?: boolean },
+): Promise<ScraperPayload> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await scrapeWithBotlioWorker(url, options)
+    } catch (error) {
+      const typed = asScraperError(error, 'botlio_scraper')
+      if (attempt >= BOTLIO_CAPACITY_RETRIES || !isBrowserCapacityError(typed)) throw typed
+
+      // A short jitter prevents two overlapping Edge Function invocations from
+      // immediately colliding again. This wait is in-memory only and is used
+      // exclusively for the worker's explicit capacity response.
+      const delayMs = 1_250 + Math.floor(Math.random() * 1_250)
+      console.warn(`Botlio browser capacity busy; retrying primary in ${delayMs}ms`)
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
+    }
+  }
+}
+
+function isBrowserCapacityError(error: ScraperError): boolean {
+  return error.status === 429
+    && /browser (?:capacity|queue)|busy/i.test(error.message)
 }
 
 async function sign(value: string, secret: string): Promise<string> {

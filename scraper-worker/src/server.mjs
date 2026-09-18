@@ -12,7 +12,10 @@ const publicBaseUrl = String(process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '
 const screenshotDir = '/var/lib/botlio-scraper/screenshots'
 const maxHttpBytes = Number(process.env.MAX_HTTP_BYTES || 1_500_000)
 const maxBrowserConcurrency = Math.max(1, Number(process.env.MAX_BROWSER_CONCURRENCY || 1))
+const maxBrowserQueue = Math.max(1, Number(process.env.MAX_BROWSER_QUEUE || 12))
+const browserQueueTimeoutMs = Math.max(5_000, Number(process.env.BROWSER_QUEUE_TIMEOUT_MS || 30_000))
 let activeBrowsers = 0
+const browserWaiters = []
 
 if (!sharedSecret) throw new Error('SCRAPER_SHARED_SECRET is required')
 
@@ -151,12 +154,43 @@ function analyseHtml(html, baseUrl, status = 200, renderedBranding = null) {
   return { metadata: { title, description, statusCode: status }, markdown, links: unique(links), summary: text.slice(0, 500), branding: { colors, fonts, images: unique(images, 20), palette: renderedBranding?.palette ?? null, colorEvidence: renderedBranding?.colorEvidence ?? [], fontEvidence: renderedBranding?.fontEvidence ?? [], imageEvidence: renderedBranding?.imageEvidence ?? [] } }
 }
 
-async function withBrowser(fn) {
-  if (activeBrowsers >= maxBrowserConcurrency) throw new Error('browser capacity is busy; retry shortly')
+async function acquireBrowserSlot() {
+  if (activeBrowsers < maxBrowserConcurrency) {
+    activeBrowsers++
+    return
+  }
+  if (browserWaiters.length >= maxBrowserQueue) {
+    throw new Error('browser queue is full; retry shortly')
+  }
+
+  await new Promise((resolve, reject) => {
+    const waiter = { resolve, timer: null }
+    waiter.timer = setTimeout(() => {
+      const index = browserWaiters.indexOf(waiter)
+      if (index >= 0) browserWaiters.splice(index, 1)
+      reject(new Error('browser queue wait timed out; retry shortly'))
+    }, browserQueueTimeoutMs)
+    browserWaiters.push(waiter)
+  })
+}
+
+function releaseBrowserSlot() {
+  activeBrowsers = Math.max(0, activeBrowsers - 1)
+  const next = browserWaiters.shift()
+  if (!next) return
+  clearTimeout(next.timer)
   activeBrowsers++
+  next.resolve()
+}
+
+async function withBrowser(fn) {
+  await acquireBrowserSlot()
   let browser
   try { browser = await chromium.launch({ headless: true }); return await fn(browser) }
-  finally { activeBrowsers--; await browser?.close().catch(() => {}) }
+  finally {
+    await browser?.close().catch(() => {})
+    releaseBrowserSlot()
+  }
 }
 
 async function dismissConsentBanner(page) {
@@ -352,7 +386,15 @@ void cleanupOldScreenshots()
 createServer(async (req, res) => {
   try {
     const path = new URL(req.url || '/', 'http://localhost').pathname
-    if (req.method === 'GET' && path === '/health') return json(res, 200, { ok: true, service: 'botlio-scraper', browser_slots: maxBrowserConcurrency, browser_active: activeBrowsers })
+    if (req.method === 'GET' && path === '/health') return json(res, 200, {
+      ok: true,
+      service: 'botlio-scraper',
+      browser_slots: maxBrowserConcurrency,
+      browser_active: activeBrowsers,
+      browser_queue_depth: browserWaiters.length,
+      browser_queue_limit: maxBrowserQueue,
+      browser_queue_timeout_ms: browserQueueTimeoutMs,
+    })
     const shot = path.match(/^\/v1\/screenshots\/([a-f0-9]{32})\.png$/)
     if (req.method === 'GET' && shot) {
       const image = await readFile(join(screenshotDir, `${shot[1]}.png`))
@@ -366,7 +408,11 @@ createServer(async (req, res) => {
     return json(res, 200, { ok: true, data })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    const status = /unsafe|blocked|only http|standard web ports|too large/.test(message) ? 400 : /busy/.test(message) ? 429 : 502
+    const status = /unsafe|blocked|only http|standard web ports|too large/.test(message)
+      ? 400
+      : /browser (?:capacity|queue)|busy/i.test(message)
+        ? 429
+        : 502
     return json(res, status, { ok: false, error: message })
   }
 }).listen(port, '0.0.0.0', () => console.log(`Botlio scraper listening on ${port}`))
