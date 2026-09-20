@@ -26,6 +26,22 @@ type State = {
   backlog_multiplier?: number
 }
 
+type EnglishPipelineState = {
+  mode: 'audit_only' | 'demo_sites' | 'paused'
+  sourcing_enabled: boolean
+}
+
+async function englishPipelineState(supabase: any): Promise<EnglishPipelineState> {
+  const { data, error } = await supabase.from('app_settings')
+    .select('value').eq('key', 'english_outreach_pipeline').maybeSingle()
+  if (error) throw error
+  const raw = data?.value && typeof data.value === 'object' ? data.value as Record<string, unknown> : {}
+  return {
+    mode: raw.mode === 'demo_sites' || raw.mode === 'paused' ? raw.mode : 'audit_only',
+    sourcing_enabled: raw.sourcing_enabled !== false,
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   if (req.method !== 'POST') return json({ error: 'method not allowed' }, 405)
@@ -181,7 +197,10 @@ async function planAndDispatch(supabase: any, userId: string, request: { action:
 async function getCoverage(supabase: any, userId: string, language: Language, settings: State) {
   const { data: senders, error: senderError } = await supabase.from('senders').select('daily_limit, from_email').eq('is_active', true)
   if (senderError) throw senderError
-  const domains = language === 'en' ? ['foremp.eu'] : ['foremp.email', 'foremp.one']
+  const englishPipeline = language === 'en' ? await englishPipelineState(supabase) : null
+  const domains = language === 'en'
+    ? englishPipeline?.mode === 'demo_sites' ? ['foremp.eu'] : ['botlio.email', 'botlio.eu']
+    : ['foremp.email', 'foremp.one']
   const dailyCapacity = (senders ?? []).filter((sender: any) => domains.some((domain) => String(sender.from_email ?? '').toLowerCase().endsWith(`@${domain}`)))
     .reduce((total: number, sender: any) => total + Math.max(0, Number(sender.daily_limit) || 0), 0)
   const stockMultiplier = Math.max(1, Math.min(10, Number(settings.lead_stock_multiplier) || LEAD_STOCK_MULTIPLIER))
@@ -205,12 +224,17 @@ async function getCoverage(supabase: any, userId: string, language: Language, se
   const backlogCap = Math.max(MIN_BACKLOG_CAP, daily * backlogMultiplier)
   const upperStockLimit = target + tolerance
   const remainingDiscoveryCapacity = Math.max(0, upperStockLimit - stock)
+  const englishDisabled = language === 'en' && (englishPipeline?.mode === 'paused' || !englishPipeline?.sourcing_enabled)
   let reason = 'stock target reached'
-  if (auditBacklog >= backlogCap) reason = `audit backlog is ${auditBacklog}/${backlogCap}`
+  if (englishDisabled) reason = englishPipeline?.mode === 'paused'
+    ? 'English outreach pipeline is paused'
+    : 'English automatic sourcing is disabled'
+  else if (auditBacklog >= backlogCap) reason = `audit backlog is ${auditBacklog}/${backlogCap}`
   else if (reviewBacklog >= backlogCap) reason = `approval backlog is ${reviewBacklog}/${backlogCap}`
   else if (buildBacklog >= backlogCap) reason = `build backlog is ${buildBacklog}/${backlogCap}`
   else if (stock < target - tolerance) reason = 'needs sourcing'
-  const shouldSource = stock < target - tolerance
+  const shouldSource = !englishDisabled
+    && stock < target - tolerance
     && auditBacklog < backlogCap
     && reviewBacklog < backlogCap
     && buildBacklog < backlogCap

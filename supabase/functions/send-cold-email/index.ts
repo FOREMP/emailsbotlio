@@ -187,6 +187,7 @@ Deno.serve(async (req) => {
     model,                 // optional per-node model override
     subject_override,      // forces subject verbatim (used for follow-ups: "Re: <original>")
     is_followup,           // hint to AI it's a follow-up nudge
+    track_first_email,     // explicit per-sequence opt-in; false everywhere else
     reservation_id,       // scheduler capacity reservation; manual sends may omit
     unsubscribe_base_url,  // optional override
   } = body ?? {}
@@ -285,7 +286,8 @@ Deno.serve(async (req) => {
     typeof subject_hint === 'string' ? subject_hint : '',
     typeof subject === 'string' ? subject : '',
     typeof bodyText === 'string' ? bodyText : '',
-  ].some((value) => value.includes('{{demo_url}}')) || !!contactFields.site_lead_id
+  ].some((value) => value.includes('{{demo_url}}'))
+    || (!!contactFields.site_lead_id && contactFields.outreach_kind !== 'audit_only')
 
   if (requiresDemoUrl && !canonicalDemoUrl) {
     return new Response(JSON.stringify({ skipped: 'invalid_demo_url' }), {
@@ -432,11 +434,11 @@ Deno.serve(async (req) => {
     }
   }
 
-  // Mail 1 (the cold first touch) goes out as plain text with no tracking pixel:
-  // a short text-only 1:1 mail almost never lands in Promotions, and mail 1 is
-  // the message that decides how the whole thread gets classified.
+  // Mail 1 stays plain text by default. A sequence may explicitly opt in to
+  // first-touch tracking for a controlled experiment; this is not a global
+  // behavior change for existing outreach.
   const isFirstTouch = !is_followup
-  const trackingEnabled = !isFirstTouch
+  const trackingEnabled = !isFirstTouch || track_first_email === true
   const tracking = trackingEnabled ? trackingPixel(domainRow, url, messageId) : null
 
   // Log pending
@@ -502,7 +504,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    if (isFirstTouch) {
+    if (!trackingEnabled) {
       try {
         await sendLovableEmail(basePayload as any, { apiKey, idempotencyKey: messageId })
       } catch (err) {

@@ -6,9 +6,9 @@
 //   2. AUDIT — for up to AUDIT_PER_TICK pending_audit leads: scrape with
 //      Firecrawl, score 1-10 with Gemini, extract 2-3 concrete weaknesses.
 //      Scores of 7 or more are automatically parked as site_good_enough.
-//      Reliable screenshot-backed scores of 1–4 automatically enter the
-//      build-and-send flow; scores 5–6 and unreliable evidence wait for an
-//      operator decision.
+//      Swedish reliable scores 1–4 enter build-and-send. In English
+//      audit_only mode, reliable scores 1–5 enter the Botlio audit sequence
+//      without generating a demo; score 6 and unreliable evidence stay manual.
 //   3. GENERATE — enforce daily cap DAILY_GEN_CAP by counting leads that
 //      already moved into generating/awaiting_approval/approved today. If
 //      capacity is left, take exactly GEN_PER_TICK needs_site leads, create a
@@ -50,6 +50,26 @@ const OUTREACH_DOMAINS_BY_LANGUAGE = {
   en: ['foremp.eu'],
 } as const
 const GHOST_LIST_NAME = 'Site Leads (auto)'
+const ENGLISH_AUDIT_SEQUENCE = 'English Audit Outreach'
+
+type EnglishOutreachMode = 'audit_only' | 'demo_sites' | 'paused'
+type EnglishOutreachSettings = {
+  mode: EnglishOutreachMode
+  sourcing_enabled: boolean
+  max_audit_score: number
+  require_reliable_audit: boolean
+  track_first_email: boolean
+  daily_first_touch_limit: number
+}
+
+const DEFAULT_ENGLISH_OUTREACH_SETTINGS: EnglishOutreachSettings = {
+  mode: 'audit_only',
+  sourcing_enabled: true,
+  max_audit_score: 5,
+  require_reliable_audit: true,
+  track_first_email: true,
+  daily_first_touch_limit: 20,
+}
 
 function isCanonicalDemoUrl(value?: string | null): boolean {
   if (!value) return false
@@ -68,13 +88,36 @@ const ORPHAN_GRACE_MINUTES = 10   // 'generating' with no generated_sites row = 
 const TEMPLATE_PICKER_NVIDIA_MODEL = 'deepseek-ai/deepseek-v4-flash-0731'
 const TEMPLATE_PICKER_OPENROUTER_FALLBACK = 'deepseek/deepseek-chat-v3.1'
 
+async function resolveEnglishOutreachSettings(
+  supabase: ReturnType<typeof createClient>,
+): Promise<EnglishOutreachSettings> {
+  const { data, error } = await supabase
+    .from('app_settings')
+    .select('value')
+    .eq('key', 'english_outreach_pipeline')
+    .maybeSingle()
+  if (error) throw new Error(`english outreach settings: ${error.message}`)
+  const raw = data?.value && typeof data.value === 'object' ? data.value as Record<string, unknown> : {}
+  const mode: EnglishOutreachMode = raw.mode === 'demo_sites' || raw.mode === 'paused'
+    ? raw.mode
+    : 'audit_only'
+  return {
+    mode,
+    sourcing_enabled: raw.sourcing_enabled !== false,
+    max_audit_score: Math.max(1, Math.min(6, Number(raw.max_audit_score) || DEFAULT_ENGLISH_OUTREACH_SETTINGS.max_audit_score)),
+    require_reliable_audit: raw.require_reliable_audit !== false,
+    track_first_email: raw.track_first_email !== false,
+    daily_first_touch_limit: Math.max(1, Math.min(100, Number(raw.daily_first_touch_limit) || DEFAULT_ENGLISH_OUTREACH_SETTINGS.daily_first_touch_limit)),
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   const supabase = createClient(supabaseUrl, serviceKey)
 
-  const report = { reconciled: 0, auto_synced: 0, recovered: 0, audited: 0, auto_parked: 0, auto_qualified: 0, generated: 0, capacity: 0, errors: [] as string[] }
+  const report = { reconciled: 0, auto_synced: 0, audit_outreach_synced: 0, recovered: 0, audited: 0, auto_parked: 0, auto_qualified: 0, generated: 0, capacity: 0, errors: [] as string[] }
 
   // Manual override from the Site Leads UI: build these leads right now,
   // ignoring the automation switch and the daily cap.
@@ -133,18 +176,25 @@ Deno.serve(async (req) => {
       return json({ ok: true, ...report })
     }
 
+    const englishOutreach = await resolveEnglishOutreachSettings(supabase)
+
     // ---------------- 2. AUDIT --------------------
-    const { data: auditRows } = await supabase
+    const { data: auditRowsRaw } = await supabase
       .from('site_leads')
       .select('id, user_id, website, email, company_name, language')
       .eq('status', 'pending_audit')
       .not('website', 'is', null)
       .order('created_at', { ascending: true })
-      .limit(AUDIT_PER_TICK)
+      // Read ahead so paused English work cannot hide eligible Swedish work.
+      .limit(AUDIT_PER_TICK * 4)
 
-    for (const row of auditRows ?? []) {
+    const auditRows = (auditRowsRaw ?? [])
+      .filter((row: any) => row.language !== 'en' || englishOutreach.mode !== 'paused')
+      .slice(0, AUDIT_PER_TICK)
+
+    for (const row of auditRows) {
       try {
-        await auditOne(supabase, row as any)
+        await auditOne(supabase, row as any, englishOutreach)
         report.audited++
       } catch (e) {
         report.errors.push(`audit ${row.id}: ${(e as Error).message}`)
@@ -155,7 +205,10 @@ Deno.serve(async (req) => {
     // limited to leads still awaiting an audit decision; it never changes a
     // lead that an operator has already chosen to build, review, or send.
     report.auto_parked = await parkHighQualityAudits(supabase, report)
-    report.auto_qualified = await advanceReliableLowQualityAudits(supabase, report)
+    report.auto_qualified = await advanceReliableLowQualityAudits(supabase, englishOutreach, report)
+    if (englishOutreach.mode === 'audit_only') {
+      report.audit_outreach_synced = await syncPendingAuditOnlyLeads(supabase, englishOutreach, report)
+    }
 
     // ---------------- 3. GENERATE -----------------
     // Keep independent Swedish and English build budgets. A busy Swedish day
@@ -165,6 +218,10 @@ Deno.serve(async (req) => {
       .select('daily_limit, from_email')
       .eq('is_active', true)
     const dailyCaps = (['sv', 'en'] as const).reduce((caps, language) => {
+      if (language === 'en' && englishOutreach.mode !== 'demo_sites') {
+        caps.en = 0
+        return caps
+      }
       caps[language] = (dailySenders ?? [])
         .filter((r: any) => OUTREACH_DOMAINS_BY_LANGUAGE[language]
           .some((domain) => String(r.from_email ?? '').toLowerCase().endsWith(`@${domain}`)))
@@ -665,15 +722,238 @@ async function syncAutoSendLead(
   if (leadError) throw new Error(`lead finalize: ${leadError.message}`)
 }
 
+async function syncAuditOnlyLead(
+  supabase: ReturnType<typeof createClient>,
+  lead: any,
+): Promise<'enrolled' | 'already_contacted'> {
+  const email = String(lead.email ?? '').trim().toLowerCase()
+  if (!email) throw new Error('lead has no email')
+  if (lead.language !== 'en') throw new Error('audit-only outreach accepts English leads only')
+
+  const { data: sequences, error: sequenceError } = await supabase
+    .from('sequences')
+    .select('id, contact_list_id')
+    .eq('user_id', lead.user_id)
+    .eq('name', ENGLISH_AUDIT_SEQUENCE)
+    .limit(1)
+  if (sequenceError) throw new Error(`sequence lookup: ${sequenceError.message}`)
+  const sequence = sequences?.[0]
+  if (!sequence?.id || !sequence.contact_list_id) throw new Error(`${ENGLISH_AUDIT_SEQUENCE} is missing or has no contact list`)
+
+  const { data: triggerNodes, error: triggerError } = await supabase
+    .from('sequence_nodes')
+    .select('id')
+    .eq('sequence_id', sequence.id)
+    .eq('node_type', 'trigger')
+    .limit(1)
+  if (triggerError) throw new Error(`trigger lookup: ${triggerError.message}`)
+  const triggerId = triggerNodes?.[0]?.id
+  if (!triggerId) throw new Error(`${ENGLISH_AUDIT_SEQUENCE} has no trigger node`)
+
+  // Cross-sequence safety: once an address has actually been contacted by
+  // this account, do not quietly enroll it into a second sales sequence.
+  const { data: priorSends, error: sendLookupError } = await supabase
+    .from('sent_emails')
+    .select('id, sent_at')
+    .eq('user_id', lead.user_id)
+    .ilike('recipient_email', email)
+    .in('status', ['queued', 'sent', 'bounced', 'complained', 'unsubscribed'])
+    .order('sent_at', { ascending: false })
+    .limit(1)
+  if (sendLookupError) throw new Error(`prior outreach lookup: ${sendLookupError.message}`)
+  if (priorSends?.length) {
+    await supabase.from('site_leads').update({
+      status: 'auto_approved',
+      auto_send: false,
+      approved_at: new Date().toISOString(),
+      last_email_sent_at: priorSends[0].sent_at,
+      feedback: 'Audit outreach skipped: this address was already contacted by another sequence.',
+    }).eq('id', lead.id)
+    return 'already_contacted'
+  }
+
+  const weaknesses = Array.isArray(lead.audit_details?.weaknesses)
+    ? lead.audit_details.weaknesses.filter((value: unknown) => typeof value === 'string' && value.trim()).slice(0, 3)
+    : []
+  const structural = Array.isArray(lead.audit_details?.structural)
+    ? lead.audit_details.structural.filter((value: unknown) => typeof value === 'string' && value.trim()).slice(0, 3)
+    : []
+  const cosmetic = Array.isArray(lead.audit_details?.cosmetic)
+    ? lead.audit_details.cosmetic.filter((value: unknown) => typeof value === 'string' && value.trim()).slice(0, 3)
+    : []
+  const customFields = {
+    site_lead_id: lead.id,
+    __site_lead_id: lead.id,
+    outreach_kind: 'audit_only',
+    company_name: lead.company_name,
+    company: lead.company_name,
+    website: lead.website ?? '',
+    audit_weakness: weaknesses[0] ?? lead.audit_reason ?? '',
+    audit_weakness_2: weaknesses[1] ?? structural[0] ?? cosmetic[0] ?? '',
+    audit_weakness_3: weaknesses[2] ?? structural[1] ?? cosmetic[1] ?? '',
+    audit_score: lead.audit_score ?? '',
+    audit_confidence: lead.audit_details?.confidence ?? '',
+    category: lead.category ?? '',
+    language: 'en',
+  }
+
+  const { data: allContacts, error: allContactsError } = await supabase
+    .from('contacts')
+    .select('id, list_id, custom_fields')
+    .eq('user_id', lead.user_id)
+    .ilike('email', email)
+  if (allContactsError) throw new Error(`contact lookup: ${allContactsError.message}`)
+
+  const contactIds = (allContacts ?? []).map((contact: any) => contact.id)
+  if (contactIds.length) {
+    const { data: otherEnrollments, error: otherEnrollmentError } = await supabase
+      .from('enrollments')
+      .select('id, sequence_id, status, last_sent_at')
+      .eq('user_id', lead.user_id)
+      .in('contact_id', contactIds)
+      .neq('sequence_id', sequence.id)
+      .in('status', ['active', 'waiting_capacity', 'deferred', 'paused', 'completed', 'stopped', 'unsubscribed'])
+      .limit(1)
+    if (otherEnrollmentError) throw new Error(`cross-sequence enrollment lookup: ${otherEnrollmentError.message}`)
+    if (otherEnrollments?.length) {
+      await supabase.from('site_leads').update({
+        status: 'auto_approved',
+        auto_send: false,
+        approved_at: new Date().toISOString(),
+        feedback: 'Audit outreach skipped: this address already belongs to another outreach sequence.',
+      }).eq('id', lead.id)
+      return 'already_contacted'
+    }
+  }
+
+  const existing = (allContacts ?? []).find((contact: any) => contact.list_id === sequence.contact_list_id)
+  let contactId = existing?.id as string | undefined
+  if (contactId) {
+    const { error: updateError } = await supabase.from('contacts').update({
+      custom_fields: { ...(existing.custom_fields ?? {}), ...customFields },
+      demo_site_url: null,
+      phone: lead.phone ?? null,
+      tags: ['site-audit', 'english-outreach'],
+    }).eq('id', contactId)
+    if (updateError) throw new Error(`contact update: ${updateError.message}`)
+  } else {
+    const firstName = email.split('@')[0].split(/[._-]/)[0].replace(/^\w/, (char: string) => char.toUpperCase())
+    const { data: inserted, error: insertError } = await supabase.from('contacts').insert({
+      user_id: lead.user_id,
+      list_id: sequence.contact_list_id,
+      email,
+      first_name: firstName,
+      phone: lead.phone ?? null,
+      demo_site_url: null,
+      custom_fields: customFields,
+      tags: ['site-audit', 'english-outreach'],
+    }).select('id').single()
+    if (insertError) throw new Error(`contact create: ${insertError.message}`)
+    contactId = inserted.id
+  }
+
+  const { data: enrollments, error: enrollmentLookupError } = await supabase
+    .from('enrollments')
+    .select('id, status, current_step, last_sent_at')
+    .eq('user_id', lead.user_id)
+    .eq('sequence_id', sequence.id)
+    .eq('contact_id', contactId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+  if (enrollmentLookupError) throw new Error(`enrollment lookup: ${enrollmentLookupError.message}`)
+
+  const existingEnrollment = enrollments?.[0]
+  if (!existingEnrollment) {
+    const { error: enrollmentError } = await supabase.from('enrollments').insert({
+      user_id: lead.user_id,
+      sequence_id: sequence.id,
+      contact_id: contactId,
+      status: 'active',
+      current_node_id: triggerId,
+      current_step: 0,
+      next_send_at: new Date().toISOString(),
+    })
+    if (enrollmentError) throw new Error(`enrollment create: ${enrollmentError.message}`)
+  } else if (!existingEnrollment.last_sent_at && Number(existingEnrollment.current_step ?? 0) === 0) {
+    const { error: resumeError } = await supabase.from('enrollments').update({
+      status: 'active',
+      current_node_id: triggerId,
+      current_step: 0,
+      next_send_at: new Date().toISOString(),
+      last_error: null,
+      error_at: null,
+    }).eq('id', existingEnrollment.id)
+    if (resumeError) throw new Error(`enrollment resume: ${resumeError.message}`)
+  }
+
+  const { error: leadError } = await supabase.from('site_leads').update({
+    status: 'auto_approved',
+    auto_send: true,
+    approved_at: new Date().toISOString(),
+    feedback: null,
+  }).eq('id', lead.id)
+  if (leadError) throw new Error(`lead finalize: ${leadError.message}`)
+  return 'enrolled'
+}
+
+async function syncPendingAuditOnlyLeads(
+  supabase: ReturnType<typeof createClient>,
+  settings: EnglishOutreachSettings,
+  report: { errors: string[] },
+): Promise<number> {
+  const { data, error } = await supabase
+    .from('site_leads')
+    .select('id, user_id, company_name, website, email, phone, category, language, audit_score, audit_reason, audit_details')
+    .eq('language', 'en')
+    .in('status', ['awaiting_audit_approval', 'needs_triage', 'needs_site'])
+    .not('email', 'is', null)
+    .gte('audit_score', 1)
+    .lte('audit_score', settings.max_audit_score)
+    .order('updated_at', { ascending: true })
+    .limit(25)
+  if (error) {
+    report.errors.push(`load pending audit outreach: ${error.message}`)
+    return 0
+  }
+
+  let synced = 0
+  for (const lead of data ?? []) {
+    const details = lead.audit_details && typeof lead.audit_details === 'object'
+      ? lead.audit_details as Record<string, any>
+      : {}
+    const evidence = details.evidence && typeof details.evidence === 'object'
+      ? details.evidence as Record<string, any>
+      : {}
+    const reliable = details.uncertain !== true
+      && details.confidence !== 'low'
+      && evidence.unreadable !== true
+      && evidence.screenshot_reliable === true
+    if (details.excluded_ecommerce === true || (settings.require_reliable_audit && !reliable)) continue
+    try {
+      await syncAuditOnlyLead(supabase, lead)
+      synced++
+    } catch (syncError) {
+      const message = syncError instanceof Error ? syncError.message : String(syncError)
+      report.errors.push(`audit outreach sync ${lead.id}: ${message}`)
+      await supabase.from('site_leads').update({
+        status: 'awaiting_audit_approval',
+        feedback: `Audit outreach sync failed: ${message.slice(0, 350)}`,
+      }).eq('id', lead.id)
+    }
+  }
+  return synced
+}
+
 // ---------------------------------------------------------------------------
 // AUDIT — one shared screenshot-first evaluator for every audit entry point.
-// Scores 7–10 are automatically parked as good enough. Reliable scores 1–4
-// enter build + direct-send automatically. Scores 5–6, missing screenshots,
-// blank scrapes and rendering contradictions remain operator review work.
+// Scores 7–10 are automatically parked as good enough. English audit_only
+// uses reliable scores 1–5 directly; the demo pipeline retains its existing
+// 1–4 auto-build policy. Missing screenshots and contradictions stay manual.
 // ---------------------------------------------------------------------------
 async function auditOne(
   supabase: ReturnType<typeof createClient>,
   row: { id: string; website: string; company_name: string; email?: string | null; language?: string | null },
+  englishOutreach: EnglishOutreachSettings,
 ) {
   const scrapeProvider = await selectedScrapeProvider(supabase)
   // Vercel is unrelated to auditing and must never block it. AI routing has
@@ -705,8 +985,21 @@ async function auditOne(
       && (result.websitePresence === 'third_party_booking_or_profile'
         || result.websitePresence === 'no_functional_website')
     )
+    const isEnglishAuditOnly = row.language === 'en' && englishOutreach.mode === 'audit_only'
+    const reliableForAuditOutreach = result.confidence !== 'low'
+      && result.screenshotReliable
+      && !result.unreadable
+      && !result.uncertain
+    const auditOnlyEligible = isEnglishAuditOnly
+      && Boolean(row.email)
+      && !automaticallyExcludedEcommerce
+      && result.score >= 1
+      && result.score <= englishOutreach.max_audit_score
+      && (!englishOutreach.require_reliable_audit || reliableForAuditOutreach)
     // E-commerce is outside the offer even when its visual score is low.
-    const automaticallyNeedsSite = !automaticallyExcludedEcommerce && automaticBuildCandidate
+    const automaticallyNeedsSite = !isEnglishAuditOnly
+      && !automaticallyExcludedEcommerce
+      && automaticBuildCandidate
     // A 7 is already a good enough existing site. Scores 5–6 consume an
     // operator decision; screenshot-backed scores 1–4 build automatically.
     const recommendedStatus = automaticallyExcludedEcommerce || result.score >= AUDIT_AUTO_PARK_SCORE
@@ -714,6 +1007,8 @@ async function auditOne(
       : 'needs_site'
     const nextStatus = automaticallyExcludedEcommerce
       ? 'site_good_enough'
+      : auditOnlyEligible
+      ? 'awaiting_audit_approval'
       : automaticallyNeedsSite
       ? 'needs_site'
       : recommendedStatus === 'site_good_enough'
@@ -742,13 +1037,16 @@ async function auditOne(
         website_presence: result.websitePresence,
         excluded_ecommerce: automaticallyExcludedEcommerce,
         auto_qualified_for_build: automaticallyNeedsSite,
+        auto_qualified_for_audit_outreach: auditOnlyEligible,
         auto_qualified_low_score: autoQualifiedLowScore,
         uncertain: result.uncertain,
         confidence: result.confidence,
         ...(nextStatus === 'awaiting_audit_approval'
           ? {}
           : {
-              operator_decision: automaticallyNeedsSite && !automaticallyExcludedEcommerce ? 'build' : 'site_good_enough',
+              operator_decision: auditOnlyEligible
+                ? 'audit_outreach'
+                : automaticallyNeedsSite && !automaticallyExcludedEcommerce ? 'build' : 'site_good_enough',
               operator_decision_source: 'automation',
               operator_decided_at: auditedAt,
             }),
@@ -773,6 +1071,8 @@ async function auditOne(
       },
       ...(recommendedStatus === 'site_good_enough' && !automaticallyNeedsSite
         ? { auto_send: false, triaged_at: auditedAt }
+        : auditOnlyEligible
+          ? { auto_send: true, triaged_at: auditedAt }
         : automaticallyNeedsSite
           ? {
               auto_send: Boolean(row.email),
@@ -790,6 +1090,26 @@ async function auditOne(
         expires_at: new Date(Date.now() + 3 * 86_400_000).toISOString(),
       }, { onConflict: 'site_lead_id' })
       if (cacheError) console.warn(`audit scrape cache unavailable for ${row.id}: ${cacheError.message}`)
+    }
+    if (auditOnlyEligible) {
+      const { data: savedLead, error: savedLeadError } = await supabase
+        .from('site_leads')
+        .select('id, user_id, company_name, website, email, phone, category, language, audit_score, audit_reason, audit_details')
+        .eq('id', row.id)
+        .single()
+      if (savedLeadError) throw new Error(`load audited lead for outreach: ${savedLeadError.message}`)
+      try {
+        await syncAuditOnlyLead(supabase, savedLead)
+      } catch (syncError) {
+        const message = syncError instanceof Error ? syncError.message : String(syncError)
+        await supabase.from('site_leads').update({
+          status: 'awaiting_audit_approval',
+          feedback: `Audit outreach sync failed: ${message.slice(0, 350)}`,
+        }).eq('id', row.id)
+        // The audit itself succeeded. Do not reset this lead to pending_audit
+        // and pay to scrape/score it again merely because enrollment failed.
+        console.error(`audit outreach sync ${row.id}: ${message}`)
+      }
     }
     return
   } catch (error) {
@@ -843,11 +1163,12 @@ async function auditOne(
 // with missing/failed visual evidence stay in the manual queue.
 async function advanceReliableLowQualityAudits(
   supabase: ReturnType<typeof createClient>,
+  englishOutreach: EnglishOutreachSettings,
   report: { errors: string[] },
 ): Promise<number> {
   const { data, error } = await supabase
     .from('site_leads')
-    .select('id, email, audit_details')
+    .select('id, email, language, audit_details')
     .in('status', ['awaiting_audit_approval', 'needs_triage'])
     .lte('audit_score', 4)
     .limit(100)
@@ -859,6 +1180,9 @@ async function advanceReliableLowQualityAudits(
 
   let advanced = 0
   for (const row of data ?? []) {
+    // English audit-only leads are handled by syncPendingAuditOnlyLeads and
+    // must never be moved into the website generation queue.
+    if (row.language === 'en' && englishOutreach.mode !== 'demo_sites') continue
     const details = row.audit_details && typeof row.audit_details === 'object'
       ? row.audit_details as Record<string, any>
       : {}

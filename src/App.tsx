@@ -21,6 +21,7 @@ import SiteLeads from "./pages/SiteLeads.tsx";
 import SiteApprovals from "./pages/SiteApprovals.tsx";
 import SiteOutreach from "./pages/SiteOutreach.tsx";
 import LeadSourcing from "./pages/LeadSourcing.tsx";
+import AuditOutreach from "./pages/AuditOutreach.tsx";
 import Auth from "./pages/Auth.tsx";
 import Unsubscribe from "./pages/Unsubscribe.tsx";
 import NotFound from "./pages/NotFound.tsx";
@@ -57,6 +58,7 @@ const App = () => (
             <Route path="/site-approvals" element={protect(<SiteApprovals />)} />
             <Route path="/site-outreach" element={protect(<SiteOutreach />)} />
             <Route path="/lead-sourcing" element={protect(<LeadSourcing />)} />
+            <Route path="/audit-outreach" element={protect(<AuditOutreach />)} />
             <Route path="/unsubscribe" element={<Unsubscribe />} />
             <Route path="*" element={<NotFound />} />
           </Routes>

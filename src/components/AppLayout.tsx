@@ -3,6 +3,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Send, Users, Mail, FileSpreadsheet, Globe, BarChart3,
   Sparkles, Target, CheckCircle2, ChevronDown, Rocket, MapPinned,
+  MessageSquareText,
 } from "lucide-react";
 import Header from "@/components/Header";
 import SitePipelineAlert from "@/components/SitePipelineAlert";
@@ -23,6 +24,7 @@ const websiteTabs = [
   { to: "/site-approvals", label: "Approvals", icon: CheckCircle2 },
   { to: "/site-outreach", label: "Demo Outreach", icon: Rocket },
   { to: "/lead-sourcing", label: "Lead sourcing", icon: MapPinned },
+  { to: "/audit-outreach", label: "Audit Outreach", icon: MessageSquareText },
 
 ];
 
@@ -67,6 +69,7 @@ const AppLayout = ({ children, bare }: AppLayoutProps) => {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
+                    type="button"
                     className={cn(
                       "inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap outline-none",
                       websitesActive

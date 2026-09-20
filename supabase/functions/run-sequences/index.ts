@@ -267,7 +267,7 @@ Deno.serve(async (req) => {
     dueEnrollmentIds.length
       ? supabase
           .from('sent_emails')
-          .select('enrollment_id, status, subject, sent_at')
+          .select('enrollment_id, status, subject, sent_at, replied_at')
           .in('enrollment_id', dueEnrollmentIds)
           .in('status', COUNTED_SEND_STATUSES)
           .order('sent_at', { ascending: false })
@@ -412,6 +412,20 @@ Deno.serve(async (req) => {
       const edges = graph.edges
       const enrollmentHistory = sendHistoryByEnrollment.get(enr.id) ?? []
       const sentCount = enrollmentHistory.length
+
+      // Provider reply ingestion marks sent_emails.replied_at. Stop before
+      // walking another node so any recognised reply always ends the thread.
+      if (enrollmentHistory.some((message: any) => Boolean(message.replied_at))) {
+        await supabase.from('enrollments').update({
+          status: 'stopped',
+          next_send_at: null,
+          deferred_at: null,
+          last_error: 'sequence stopped after recipient reply',
+          error_at: null,
+        }).eq('id', enr.id)
+        console.log(`[enr ${enr.id}] recipient replied → stopped`)
+        continue
+      }
 
       if (sentCount >= 4) {
         await supabase.from('enrollments').update({
@@ -899,6 +913,9 @@ Deno.serve(async (req) => {
             model: cfg.model,
             subject_override: subjectOverride,
             is_followup: isFollowup,
+            // Opt-in per sequence. Existing demo sequences keep their
+            // deliverability-first plain-text first message.
+            track_first_email: cfg.track_first_email === true,
             reservation_id: reservationId,
           },
         })
