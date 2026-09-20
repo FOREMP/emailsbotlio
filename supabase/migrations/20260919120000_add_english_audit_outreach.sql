@@ -159,15 +159,15 @@ No link, fabricated result, audit score, false urgency, discount, hype, emoji, s
 
     insert into public.sequence_edges (sequence_id, user_id, source_node_id, target_node_id, source_handle)
     values
-      (sequence_id, owner.user_id, trigger_id, throttle_id, null),
-      (sequence_id, owner.user_id, throttle_id, schedule_1_id, null),
-      (sequence_id, owner.user_id, schedule_1_id, email_1_id, null),
-      (sequence_id, owner.user_id, email_1_id, wait_1_id, null),
-      (sequence_id, owner.user_id, wait_1_id, schedule_2_id, null),
-      (sequence_id, owner.user_id, schedule_2_id, email_2_id, null),
-      (sequence_id, owner.user_id, email_2_id, wait_2_id, null),
-      (sequence_id, owner.user_id, wait_2_id, schedule_3_id, null),
-      (sequence_id, owner.user_id, schedule_3_id, email_3_id, null);
+      (sequence_id, owner.user_id, trigger_id, throttle_id, 'default'),
+      (sequence_id, owner.user_id, throttle_id, schedule_1_id, 'default'),
+      (sequence_id, owner.user_id, schedule_1_id, email_1_id, 'default'),
+      (sequence_id, owner.user_id, email_1_id, wait_1_id, 'default'),
+      (sequence_id, owner.user_id, wait_1_id, schedule_2_id, 'default'),
+      (sequence_id, owner.user_id, schedule_2_id, email_2_id, 'default'),
+      (sequence_id, owner.user_id, email_2_id, wait_2_id, 'default'),
+      (sequence_id, owner.user_id, wait_2_id, schedule_3_id, 'default'),
+      (sequence_id, owner.user_id, schedule_3_id, email_3_id, 'default');
   end loop;
 end
 $$;
