@@ -478,7 +478,9 @@ export default function SiteOutreach() {
               .map((value: string) => value.trim().toLowerCase())
               .filter(Boolean)),
         );
-        const fallbackDomains = language === "en" ? ["foremp.eu"] : ["foremp.email", "foremp.one"];
+        const fallbackDomains = language === "en"
+          ? ["botlio.email", "botlio.eu"]
+          : ["foremp.email", "foremp.one", "foremp.eu"];
         fallbackDomains.forEach((domain) => allowedDomains.add(domain));
 
         const { data: forempSenders } = await supabase
@@ -618,7 +620,7 @@ export default function SiteOutreach() {
           </Button>
         </div>
         <p className="text-sm text-muted-foreground">
-          {language === "en" ? "4-mail English sequence from @foremp.eu" : "4-mails svensk sekvens från @foremp.email och @foremp.one"} — <strong>skickas endast måndag–fredag 09:00 Stockholm-tid</strong>.
+          {language === "en" ? "4-mail English demo sequence from Botlio domains" : "4-mails svensk sekvens från @foremp.email, @foremp.one och @foremp.eu"} — <strong>skickas endast måndag–fredag 09:00 Stockholm-tid</strong>.
           Fylls på automatiskt när du godkänner demos i Approvals (kontakt, hemsidelänk och audit-info följer med).
         </p>
       </div>
@@ -629,8 +631,8 @@ export default function SiteOutreach() {
           <p className="text-xs text-muted-foreground">
             Räknar endast <strong>nya första mail</strong> per dag. Follow-ups skickas alltid ovanpå detta.
             {language === "en"
-              ? " Totalen delas mellan aktiva @foremp.eu-senders."
-              : " Totalen delas mellan aktiva @foremp.email/@foremp.one-senders."}
+              ? " Totalen delas mellan aktiva @botlio.email/@botlio.eu-senders."
+              : " Totalen delas mellan aktiva @foremp.email/@foremp.one/@foremp.eu-senders."}
           </p>
         </div>
         <div className="flex items-end gap-2">
@@ -667,7 +669,7 @@ export default function SiteOutreach() {
           <div>
             <h2 className="text-lg font-semibold flex items-center gap-2"><BarChart3 className="h-4 w-4" /> Statistik (senaste 30 dagar)</h2>
             <p className="text-xs text-muted-foreground">Skickade, öppnade och besvarade mail per dag för Site Demo Outreach.</p>
-            <p className="text-xs text-muted-foreground">Visar nu: {language === "en" ? "English / foremp.eu" : "Svenska / foremp.email + foremp.one"}.</p>
+            <p className="text-xs text-muted-foreground">Visar nu: {language === "en" ? "English / Botlio" : "Svenska / alla Foremp-domäner"}.</p>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
             <Select value={stepFilter} onValueChange={(value) => setStepFilter(value as StepFilter)}>
@@ -910,7 +912,7 @@ export default function SiteOutreach() {
                 <div>
                   <div className="font-medium">Mail {i + 1}</div>
                   <div className="text-xs text-muted-foreground">
-                    Modell: {n.config?.model ?? "gpt-4o-mini"} · Sender-domain: {n.config?.sender_domain ?? (language === "en" ? "foremp.eu" : "foremp.email")}
+                    Modell: {n.config?.model ?? "gpt-4o-mini"} · Sender-domain: {n.config?.sender_domain ?? (language === "en" ? "botlio.email,botlio.eu" : "foremp.email,foremp.one,foremp.eu")}
                     {wait && ` · väntar ${wait.config?.duration ?? "?"} ${wait.config?.unit ?? "days"} innan nästa`}
                   </div>
                 </div>

@@ -95,13 +95,13 @@ Secondary observed issue: {{audit_weakness_2}}
 
 Instructions:
 1. Open with a direct, natural reason for writing to this specific company.
-2. Mention ONE concrete observed issue only when it is clear and customer-visible. Phrase it neutrally; never insult their current website.
-3. Connect that observation to one plausible customer action such as understanding services, trusting the business, enquiring, booking or requesting a quote. Do not invent results, traffic, lost revenue or company facts.
-4. Say that we build clear, modern websites for small businesses and ask one low-pressure question about whether improving that part of the site is currently relevant.
-5. If the address is clearly generic (info@, office@, hello@ or contact@), you may briefly ask for the person responsible for the website, but only when it reads naturally.
+2. Mention one or two concrete, customer-visible observations only when the evidence is specific. Phrase them neutrally; never insult their current website.
+3. Say that you used those observations to put together a tailored redesign concept for their website. This is a design direction, not a finished or live website, so never claim that a complete demo has already been built.
+4. Briefly explain what the concept improves, for example clearer services, easier enquiries, stronger trust or a better mobile path. Do not invent results, traffic, lost revenue or company facts.
+5. End by asking whether they would like to see the redesign direction. If the address is clearly generic, you may instead ask whether it can be forwarded to the person responsible for the website.
 
 Rules:
-No link, demo, price, audit score, technical jargon, urgency, hype, flattery, emoji, signature or unsubscribe text.
+No link, price, audit score, technical jargon, urgency, hype, flattery, emoji, signature or unsubscribe text.
 Do not call the website bad, outdated, broken or unprofessional.
 Do not use “I hope this email finds you well”, “quick question”, “just reaching out”, “boost”, “transform”, “revolutionise” or “skyrocket”.
 Write only the email body.$prompt$,
@@ -127,7 +127,7 @@ Category: {{category}}
 Primary observed issue: {{audit_weakness}}
 Secondary observed issue: {{audit_weakness_2}}
 
-Briefly clarify one practical improvement that would make the site easier for a prospective customer to use. Prefer a different observation from the first email when the secondary observation is specific. Never invent facts. End with one simple either/or question that is easy to answer.
+Refer naturally to the tailored redesign direction mentioned earlier. Briefly clarify one practical improvement that would make the site easier for a prospective customer to use. Prefer a different verified observation from the first email when the secondary observation is specific. Never invent facts or claim a finished website exists. End by asking whether they want you to send the short redesign outline.
 
 No link, price, audit score, apology, pressure, hype, signature or unsubscribe text. Do not say “following up again”, “bumping this” or “circling back”. Write only the email body.$prompt$,
           'subject_prompt', 'Return one short British-English follow-up subject line, maximum 42 characters. The system normally reuses the original subject for threading. No clickbait, emoji, exclamation mark, quotation marks, all caps or Re:.'
@@ -151,7 +151,7 @@ Company: {{company_name}}
 Category: {{category}}
 Primary observed issue: {{audit_weakness}}
 
-Briefly state that we can redesign and build the website around the pages and functions the business actually needs. Make clear there is no obligation and that you will close the thread if it is not relevant. End with one low-pressure question asking whether they want a short outline of what you would change.
+Briefly state that the redesign concept can be developed around the pages and functions the business actually needs. Make clear there is no obligation and that you will close the thread if it is not relevant. End with one low-pressure question asking whether they want you to send the direction you prepared. Never claim a complete or live website exists.
 
 No link, fabricated result, audit score, false urgency, discount, hype, emoji, signature or unsubscribe text. Do not guilt the reader. Write only the email body.$prompt$,
           'subject_prompt', 'Return one calm British-English closing subject line, maximum 42 characters. The system normally reuses the original subject for threading. No clickbait, emoji, exclamation mark, quotation marks, all caps or Re:.'

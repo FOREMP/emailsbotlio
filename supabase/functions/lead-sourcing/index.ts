@@ -198,9 +198,12 @@ async function getCoverage(supabase: any, userId: string, language: Language, se
   const { data: senders, error: senderError } = await supabase.from('senders').select('daily_limit, from_email').eq('is_active', true)
   if (senderError) throw senderError
   const englishPipeline = language === 'en' ? await englishPipelineState(supabase) : null
+  // Keep brand capacity separate from language mode. English outreach always
+  // uses Botlio, including optional English demo mode; all Foremp domains are
+  // reserved for Swedish outreach.
   const domains = language === 'en'
-    ? englishPipeline?.mode === 'demo_sites' ? ['foremp.eu'] : ['botlio.email', 'botlio.eu']
-    : ['foremp.email', 'foremp.one']
+    ? ['botlio.email', 'botlio.eu']
+    : ['foremp.email', 'foremp.one', 'foremp.eu']
   const dailyCapacity = (senders ?? []).filter((sender: any) => domains.some((domain) => String(sender.from_email ?? '').toLowerCase().endsWith(`@${domain}`)))
     .reduce((total: number, sender: any) => total + Math.max(0, Number(sender.daily_limit) || 0), 0)
   const stockMultiplier = Math.max(1, Math.min(10, Number(settings.lead_stock_multiplier) || LEAD_STOCK_MULTIPLIER))

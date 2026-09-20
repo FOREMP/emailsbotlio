@@ -46,8 +46,8 @@ const GEN_PER_TICK = 6      // how many new pipelines may START per tick
 const MAX_CONCURRENT_GEN = 24 // how many leads may be mid-pipeline at once
 const DAILY_GEN_CAP_FALLBACK = 16  // used only if we can't read sender limits
 const OUTREACH_DOMAINS_BY_LANGUAGE = {
-  sv: ['foremp.email', 'foremp.one'],
-  en: ['foremp.eu'],
+  sv: ['foremp.email', 'foremp.one', 'foremp.eu'],
+  en: ['botlio.email', 'botlio.eu'],
 } as const
 const GHOST_LIST_NAME = 'Site Leads (auto)'
 const ENGLISH_AUDIT_SEQUENCE = 'English Audit Outreach'
