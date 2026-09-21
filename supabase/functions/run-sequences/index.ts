@@ -1117,20 +1117,30 @@ Deno.serve(async (req) => {
           failed++; continue
         }
 
-        // Only fire within a 30-minute grace window AFTER the configured slot.
-        // Outside the window, defer to the next valid slot (today or future day).
-        // This prevents a "Mon–Fri 18:00" schedule from firing at e.g. 22:00
-        // just because an enrollment was reset late in the day.
+        // A schedule that falls inside the normal send window is a gate, not an
+        // exact delivery appointment. New enrollments can reach this node at any
+        // point during the day, so let them enter the existing sender pacing queue
+        // for the rest of an allowed day. Without this, a 09:00 schedule stranded
+        // leads that arrived after its old 30-minute grace window until tomorrow.
+        // Schedules outside the normal send window retain the strict grace window
+        // below, so a late-day schedule never fires at an arbitrary hour.
         const SCHEDULE_GRACE_MINS = 30
         const dayAllowedToday = allowedDays.length === 0 || allowedDays.includes(todayName)
+        const slotInsideSendWindow =
+          slotMins >= SEND_WINDOW_START * 60 && slotMins < SEND_WINDOW_END * 60
+        const mayJoinDailyPacing =
+          dayAllowedToday &&
+          slotInsideSendWindow &&
+          nowStockholmMins >= slotMins &&
+          insideSendWindow()
         const inGraceWindow = nowStockholmMins >= slotMins && nowStockholmMins < slotMins + SCHEDULE_GRACE_MINS
-        if (dayAllowedToday && inGraceWindow) {
+        if (mayJoinDailyPacing || (dayAllowedToday && inGraceWindow)) {
           await supabase.from('enrollments').update({
             current_node_id: next.target_node_id,
             next_send_at: nowIso,
           }).eq('id', enr.id)
           advanced++
-          console.log(`[enr ${enr.id}] schedule passed (today ${tod} Stockholm, in grace window) → advance`)
+          console.log(`[enr ${enr.id}] schedule passed (today ${tod} Stockholm, ${mayJoinDailyPacing ? 'daily pacing window' : 'grace window'}) → advance`)
           continue
         }
         await supabase.from('enrollments').update({
