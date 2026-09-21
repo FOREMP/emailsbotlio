@@ -9,7 +9,9 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/hooks/use-toast";
-import { Loader2, Mail, RefreshCw, Save, ShieldCheck } from "lucide-react";
+import { BarChart3, Loader2, Mail, RefreshCw, Save, ShieldCheck } from "lucide-react";
+import { VolumeTrendChart } from "@/components/analytics/VolumeTrendChart";
+import type { StepFilter } from "@/hooks/useAnalytics";
 
 type PipelineMode = "audit_only" | "demo_sites" | "paused";
 type PipelineSettings = {
@@ -21,7 +23,17 @@ type PipelineSettings = {
   daily_first_touch_limit: number;
 };
 type SequenceNode = { id: string; node_type: string; position_y: number; config: Record<string, any> };
-type StatRow = { sent: number; delivered: number; trackable: number; opened: number; replied: number; bounced: number; complained: number };
+type StatRow = {
+  day: string;
+  step_index: number;
+  sent: number;
+  delivered: number;
+  trackable: number;
+  opened: number;
+  replied: number;
+  bounced: number;
+  complained: number;
+};
 type QueueCounts = { total: number; active: number; waiting_first: number; waiting_followup: number; completed: number; stopped: number };
 type RecentEmail = { id: string; recipient_email: string; subject: string | null; body: string | null; status: string; sent_at: string; opened_at: string | null; tracking_enabled: boolean };
 
@@ -47,6 +59,7 @@ export default function AuditOutreach() {
   const [savingSettings, setSavingSettings] = useState(false);
   const [savingNode, setSavingNode] = useState<string | null>(null);
   const [dirtyNodes, setDirtyNodes] = useState<Record<string, Record<string, any>>>({});
+  const [stepFilter, setStepFilter] = useState<StepFilter>("all");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -88,6 +101,8 @@ export default function AuditOutreach() {
     setNodes((nodeResult.data ?? []) as SequenceNode[]);
     setDirtyNodes({});
     setStats((statResult.data ?? []).map((row: any) => ({
+      day: String(row.day),
+      step_index: Number(row.step_index),
       sent: Number(row.sent) || 0,
       delivered: Number(row.delivered) || 0,
       trackable: Number(row.trackable) || 0,
@@ -122,6 +137,58 @@ export default function AuditOutreach() {
     bounced: sum.bounced + row.bounced,
     complained: sum.complained + row.complained,
   }), { sent: 0, delivered: 0, trackable: 0, opened: 0, replied: 0, bounced: 0, complained: 0 }), [stats]);
+
+  const filteredStats = useMemo(() => stats.filter((row) => {
+    if (stepFilter === "all") return true;
+    if (stepFilter === "first") return row.step_index === 1;
+    if (stepFilter === "followups") return row.step_index > 1;
+    return row.step_index === Number(stepFilter.replace("step-", ""));
+  }), [stats, stepFilter]);
+
+  const filteredTotals = useMemo(() => filteredStats.reduce((sum, row) => ({
+    sent: sum.sent + row.sent,
+    delivered: sum.delivered + row.delivered,
+    trackable: sum.trackable + row.trackable,
+    opened: sum.opened + row.opened,
+    replied: sum.replied + row.replied,
+    bounced: sum.bounced + row.bounced,
+    complained: sum.complained + row.complained,
+  }), { sent: 0, delivered: 0, trackable: 0, opened: 0, replied: 0, bounced: 0, complained: 0 }), [filteredStats]);
+
+  const dailySeries = useMemo(() => {
+    const buckets = new Map<string, { date: string; sent: number; opened: number; replied: number }>();
+    const now = new Date();
+    for (let offset = 29; offset >= 0; offset -= 1) {
+      const date = new Date(now);
+      date.setDate(now.getDate() - offset);
+      const key = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Europe/Stockholm", year: "numeric", month: "2-digit", day: "2-digit",
+      }).format(date);
+      buckets.set(key, { date: key, sent: 0, opened: 0, replied: 0 });
+    }
+    for (const row of filteredStats) {
+      const bucket = buckets.get(row.day);
+      if (!bucket) continue;
+      bucket.sent += row.sent;
+      bucket.opened += row.opened;
+      bucket.replied += row.replied;
+    }
+    return Array.from(buckets.values());
+  }, [filteredStats]);
+
+  const stepBreakdown = useMemo(() => {
+    const rows = new Map<number, { step: number; sent: number; trackable: number; opened: number; replied: number }>();
+    for (const row of filteredStats) {
+      const step = Math.min(row.step_index, 3);
+      const current = rows.get(step) ?? { step, sent: 0, trackable: 0, opened: 0, replied: 0 };
+      current.sent += row.sent;
+      current.trackable += row.trackable;
+      current.opened += row.opened;
+      current.replied += row.replied;
+      rows.set(step, current);
+    }
+    return Array.from(rows.values()).sort((a, b) => a.step - b.step);
+  }, [filteredStats]);
 
   const saveSettings = async () => {
     if (!sequenceId) return;
@@ -183,6 +250,48 @@ export default function AuditOutreach() {
         ["Svar", totals.replied], ["Väntar första mail", queue?.waiting_first ?? 0], ["Aktiva", queue?.active ?? 0],
       ].map(([label, value]) => <Card key={String(label)} className="p-4"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 text-2xl font-semibold">{value}</p></Card>)}
     </div>
+
+    <Card className="p-4 space-y-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-lg font-semibold flex items-center gap-2"><BarChart3 className="h-4 w-4" /> Analytics (last 30 days)</h2>
+          <p className="text-xs text-muted-foreground">Sent, opened and replied emails for English Audit Outreach.</p>
+        </div>
+        <div className="flex items-center gap-3 flex-wrap">
+          <Select value={stepFilter} onValueChange={(value) => setStepFilter(value as StepFilter)}>
+            <SelectTrigger className="w-[220px]"><SelectValue placeholder="Step" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All emails</SelectItem>
+              <SelectItem value="first">First email only</SelectItem>
+              <SelectItem value="followups">Follow-ups only</SelectItem>
+              <SelectItem value="step-2">Email 2</SelectItem>
+              <SelectItem value="step-3">Email 3</SelectItem>
+            </SelectContent>
+          </Select>
+          <div className="flex gap-4 text-xs">
+            <div><div className="text-muted-foreground">Sent</div><div className="text-base font-semibold">{filteredTotals.sent}</div></div>
+            <div><div className="text-muted-foreground">Opened</div><div className="text-base font-semibold">{filteredTotals.opened} ({filteredTotals.trackable ? Math.round((filteredTotals.opened / filteredTotals.trackable) * 100) : 0}%)</div></div>
+            <div><div className="text-muted-foreground">Trackable</div><div className="text-base font-semibold">{filteredTotals.trackable}</div></div>
+            <div><div className="text-muted-foreground">Untracked</div><div className="text-base font-semibold">{Math.max(0, filteredTotals.delivered - filteredTotals.trackable)}</div></div>
+            <div><div className="text-muted-foreground">Replies</div><div className="text-base font-semibold">{filteredTotals.replied}</div></div>
+          </div>
+        </div>
+      </div>
+      <VolumeTrendChart data={dailySeries} />
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="text-xs text-muted-foreground text-left border-b">
+            <tr><th className="py-2 pr-3">Step</th><th className="py-2 pr-3">Sent</th><th className="py-2 pr-3">Trackable</th><th className="py-2 pr-3">Opened</th><th className="py-2 pr-3">Open rate</th><th className="py-2 pr-3">Replies</th></tr>
+          </thead>
+          <tbody>
+            {stepBreakdown.map((row) => <tr key={row.step} className="border-b border-border/60">
+              <td className="py-2 pr-3 font-medium">Email {row.step}</td><td className="py-2 pr-3">{row.sent}</td><td className="py-2 pr-3">{row.trackable}</td><td className="py-2 pr-3">{row.opened}</td><td className="py-2 pr-3">{row.trackable ? Math.round((row.opened / row.trackable) * 100) : 0}%</td><td className="py-2 pr-3">{row.replied}</td>
+            </tr>)}
+            {stepBreakdown.length === 0 && <tr><td colSpan={6} className="py-4 text-center text-muted-foreground text-xs">No data yet.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </Card>
 
     <Card className="p-5">
       <div className="mb-5 flex items-center gap-2"><ShieldCheck className="h-5 w-5" /><div><h2 className="font-semibold">Pipeline controls</h2><p className="text-sm text-muted-foreground">Changes are reversible. Demo generation remains available in the second mode.</p></div></div>
