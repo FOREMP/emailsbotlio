@@ -212,6 +212,9 @@ Deno.serve(async (req) => {
     .eq('is_active', true)
     .eq('is_verified', true)
   const verifiedDomains = new Set((verifiedDomainRows ?? []).map((d: any) => d.domain as string))
+  const verifiedDomainBrands = new Map(
+    (verifiedDomainRows ?? []).map((d: any) => [d.domain as string, d.brand as string]),
+  )
   if (verifiedDomains.size === 0) {
     return new Response(JSON.stringify({ error: 'no verified sending domain configured' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
   }
@@ -232,7 +235,10 @@ Deno.serve(async (req) => {
     const { data: all } = await q
     let pool = (all ?? []).filter((s: any) => verifiedDomains.has((s.from_email as string).split('@')[1]))
     if (strategy === 'brand' && brand) {
-      pool = pool.filter((s: any) => (s.from_email as string).endsWith(`@${brand}.io`) || (s.from_email as string).endsWith(`@${brand}.eu`) || (s.from_email as string).endsWith(`@${brand}.email`) || (s.from_email as string).endsWith(`@${brand}.one`))
+      pool = pool.filter((s: any) => {
+        const dom = (s.from_email as string).split('@')[1] ?? ''
+        return verifiedDomainBrands.get(dom) === brand
+      })
     }
     if (pool.length === 0) {
       return new Response(JSON.stringify({ error: `no verified senders available — only ${[...verifiedDomains].join(', ')} are verified with Lovable Emails` }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })

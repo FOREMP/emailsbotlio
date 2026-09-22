@@ -211,10 +211,13 @@ Deno.serve(async (req) => {
   // Load verified sending domains once per tick
   const { data: verifiedDomainRows } = await supabase
     .from('sending_domains')
-    .select('domain')
+    .select('domain, brand')
     .eq('is_active', true)
     .eq('is_verified', true)
   const verifiedDomains = new Set((verifiedDomainRows ?? []).map((d: any) => d.domain as string))
+  const verifiedDomainBrands = new Map(
+    (verifiedDomainRows ?? []).map((d: any) => [d.domain as string, d.brand as string]),
+  )
 
   // Pick due enrollments (active OR previously waiting on capacity).
   // Prioritise follow-ups + capacity-waiters first, then brand-new enrollments.
@@ -747,7 +750,7 @@ Deno.serve(async (req) => {
             if (cfg.sender_strategy === 'brand' && cfg.brand) {
               const filtered = candidates.filter((s: any) => {
                 const dom = (s.from_email as string).split('@')[1] ?? ''
-                return dom.startsWith(`${cfg.brand}.`) || dom === cfg.brand
+                return verifiedDomainBrands.get(dom) === cfg.brand
               })
               if (filtered.length === 0) {
                 console.warn(`[enr ${enr.id}] no verified senders match brand "${cfg.brand}" → failed`)
