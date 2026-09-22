@@ -805,7 +805,14 @@ Deno.serve(async (req) => {
         {
           const remainingQuota = capacityRemaining(preSenderId, isFollowupEnr)
           const minutesLeft = minutesLeftInWindow()
-          const spacing = Math.max(3, Math.min(25, Math.round(minutesLeft / Math.max(1, Number(remainingQuota ?? 1)))))
+          // Keep a sender's remaining first-touch capacity spread over the
+          // whole business window. The old 25-minute ceiling was shorter
+          // than the cadence required by the demo sequences, so every
+          // scheduler tick released another message and exhausted a daily
+          // budget by lunchtime. A high ceiling still allows urgent small
+          // batches to proceed, while a full daily budget naturally lands
+          // around one message per sender per hour.
+          const spacing = Math.max(5, Math.min(75, Math.round(minutesLeft / Math.max(1, Number(remainingQuota ?? 1)))))
           const gapMinutes = spacing + Math.floor(Math.random() * 5)
 
           let lastAt = senderLastSentAt.get(pacingKey)

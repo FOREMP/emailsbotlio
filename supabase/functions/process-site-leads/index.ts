@@ -7,8 +7,9 @@
 //      Firecrawl, score 1-10 with Gemini, extract 2-3 concrete weaknesses.
 //      Scores of 7 or more are automatically parked as site_good_enough.
 //      Swedish reliable scores 1–4 enter build-and-send. In English
-//      audit_only mode, reliable scores 1–5 enter the Botlio audit sequence
-//      without generating a demo; score 6 and unreliable evidence stay manual.
+//      audit_only mode, scores 1–6 with a contact email enter the Botlio
+//      audit sequence without generating a demo. Low-confidence evidence is
+//      retained in the audit email, rather than creating an operator backlog.
 //   3. GENERATE — enforce daily cap DAILY_GEN_CAP by counting leads that
 //      already moved into generating/awaiting_approval/approved today. If
 //      capacity is left, take exactly GEN_PER_TICK needs_site leads, create a
@@ -66,7 +67,7 @@ const DEFAULT_ENGLISH_OUTREACH_SETTINGS: EnglishOutreachSettings = {
   mode: 'audit_only',
   sourcing_enabled: true,
   max_audit_score: 5,
-  require_reliable_audit: true,
+  require_reliable_audit: false,
   track_first_email: true,
   daily_first_touch_limit: 20,
 }
@@ -947,8 +948,9 @@ async function syncPendingAuditOnlyLeads(
 // ---------------------------------------------------------------------------
 // AUDIT — one shared screenshot-first evaluator for every audit entry point.
 // Scores 7–10 are automatically parked as good enough. English audit_only
-// uses reliable scores 1–5 directly; the demo pipeline retains its existing
-// 1–4 auto-build policy. Missing screenshots and contradictions stay manual.
+// sends scored 1–6 leads with a usable contact into its audit sequence; the
+// demo pipeline retains its existing 1–4 auto-build policy. E-commerce and
+// leads with no contact remain excluded rather than being enrolled.
 // ---------------------------------------------------------------------------
 async function auditOne(
   supabase: ReturnType<typeof createClient>,
