@@ -6,7 +6,7 @@ const maxClockSkewMs = 5 * 60_000
 export function leadSourceSecret(): string | null {
   // Existing deployments already have SCRAPER_SHARED_SECRET. A dedicated secret
   // can be added later without a flag day by setting LEAD_SOURCE_SHARED_SECRET.
-  return Deno.env.get('LEAD_SOURCE_SHARED_SECRET') ?? Deno.env.get('SCRAPER_SHARED_SECRET')
+  return Deno.env.get('LEAD_SOURCE_SHARED_SECRET') ?? Deno.env.get('SCRAPER_SHARED_SECRET') ?? null
 }
 
 export async function verifyLeadSourceRequest(req: Request, rawBody: string): Promise<boolean> {
