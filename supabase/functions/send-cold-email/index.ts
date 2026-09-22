@@ -299,6 +299,12 @@ Deno.serve(async (req) => {
   let finalSubject = ''
   let finalBody = ''
   const vars = { ...contact, ...contactFields, ...(canonicalDemoUrl ? { demo_url: canonicalDemoUrl } : {}) }
+  // Some sequences intentionally use a short, transparent subject template
+  // while still using AI to adapt the body to the available evidence. Honour
+  // that configured subject instead of asking the model to invent a new one.
+  const configuredSubject = typeof subject === 'string' && subject.trim()
+    ? interpolate(subject, vars)
+    : ''
 
   if (mode === 'ai') {
     if (!prompt) {
@@ -308,9 +314,9 @@ Deno.serve(async (req) => {
       body: {
         contact,
         prompt,
-        // Follow-ups reuse the original subject below. Avoid paying for a subject
-        // generation that will immediately be discarded.
-        subject_prompt: subject_override ? '' : (subject_prompt ?? subject_hint ?? ''),
+        // Follow-ups reuse the original subject below. A configured subject is
+        // also authoritative, so neither case should spend a model call on one.
+        subject_prompt: (subject_override || configuredSubject) ? '' : (subject_prompt ?? subject_hint ?? ''),
         subject_hint, // legacy fallback for older deployments
         is_followup: !!is_followup,
         model,
@@ -319,7 +325,7 @@ Deno.serve(async (req) => {
     if (r.error) {
       return new Response(JSON.stringify({ error: 'generate-email failed', detail: r.error.message }), { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
-    finalSubject = (r.data as any).subject || subject_hint || 'Hello'
+    finalSubject = configuredSubject || (r.data as any).subject || subject_hint || 'Hello'
     finalBody = (r.data as any).body || ''
   } else {
     finalSubject = interpolate(subject ?? '', vars)
