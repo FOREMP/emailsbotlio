@@ -9,4 +9,3 @@ declare module "npm:@supabase/supabase-js@2" {
   export const createClient: any;
 }
 
-declare module "npm:*";
