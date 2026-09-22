@@ -1,6 +1,9 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { WebhookError, verifyWebhookRequest } from 'npm:@lovable.dev/webhooks-js'
 
+// Every enrollment state that can still lead to another email being sent.
+const OPEN_ENROLLMENT_STATUSES = ['active', 'waiting_capacity', 'deferred', 'paused']
+
 interface SuppressionPayload {
   email: string
   reason: 'bounce' | 'complaint' | 'unsubscribe'
