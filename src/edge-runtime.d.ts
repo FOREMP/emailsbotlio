@@ -4,4 +4,9 @@ declare const Deno: {
   env: { get(key: string): string | undefined };
 };
 
+declare module "npm:@supabase/supabase-js@2" {
+  export type SupabaseClient = any;
+  export const createClient: any;
+}
+
 declare module "npm:*";
