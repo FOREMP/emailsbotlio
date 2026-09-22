@@ -9,7 +9,8 @@
 
 import { callRoutedChat } from './ai-provider.ts'
 import { scrapeUrl, type ScrapeProvider, type ScraperPayload } from './scraper-client.ts'
-import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
+// Typed loosely so this shared helper also compiles in the browser test run.
+type SupabaseClient = any
 
 export interface AuditResult {
   score: number
