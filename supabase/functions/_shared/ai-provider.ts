@@ -107,7 +107,12 @@ export async function callRoutedChat(args: RoutedAiArgs): Promise<RoutedAiResult
       }
       return { data, provider, model }
     } catch (error) {
-      const message = (error as Error).message
+      // Providers occasionally reject a request without a normal Error
+      // object. Preserve the retry/failover path instead of throwing while
+      // formatting that failure and taking down the whole audit invocation.
+      const message = error instanceof Error
+        ? error.message
+        : String(error ?? 'unknown AI request failure')
       errors.push(`${provider}/${model}: ${message}`)
       const nextProvider = attempts[attemptIndex + 1]
       console.warn(

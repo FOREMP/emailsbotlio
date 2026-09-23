@@ -557,13 +557,11 @@ async function scoreAudit(
     : ''
   const routed = await callRoutedChat({
     supabase,
-    // Keep the screenshot audit on an NVIDIA-hosted multimodal endpoint even
-    // if another dashboard feature is temporarily set to OpenRouter. MiniMax
-    // M3 is the primary for this bounded visual JSON task; Gemini remains a paid
-    // continuity fallback only after both NVIDIA attempts fail.
-    nvidiaModel: options.secondOpinion
-      ? 'qwen/qwen3.5-397b-a17b'
-      : 'minimaxai/minimax-m3',
+    // Keep the screenshot audit on NVIDIA. Gemma 4 is a current, free,
+    // multimodal 31B endpoint with an official image-input chat API. It is
+    // materially lighter than Kimi, so the bounded audit is less likely to
+    // time out and fall through to paid OpenRouter.
+    nvidiaModel: 'google/gemma-4-31b-it',
     openrouterModel: options.secondOpinion ? 'openai/gpt-4.1-mini' : 'google/gemini-2.5-flash',
     preferredProvider: 'nvidia',
     title: options.secondOpinion ? 'Botlio Audit Second Opinion Fallback' : 'Botlio Site Audit Fallback',
