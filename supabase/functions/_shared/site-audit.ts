@@ -557,12 +557,13 @@ async function scoreAudit(
     : ''
   const routed = await callRoutedChat({
     supabase,
-    // Both audit models are NVIDIA-hosted multimodal endpoints. Force the
-    // audit path to NVIDIA even if another dashboard feature is temporarily
-    // set to OpenRouter; paid OpenRouter models remain continuity fallbacks.
+    // Keep the screenshot audit on an NVIDIA-hosted multimodal endpoint even
+    // if another dashboard feature is temporarily set to OpenRouter. MiniMax
+    // M3 is the primary for this bounded visual JSON task; Gemini remains a paid
+    // continuity fallback only after both NVIDIA attempts fail.
     nvidiaModel: options.secondOpinion
       ? 'qwen/qwen3.5-397b-a17b'
-      : 'moonshotai/kimi-k2.6',
+      : 'minimaxai/minimax-m3',
     openrouterModel: options.secondOpinion ? 'openai/gpt-4.1-mini' : 'google/gemini-2.5-flash',
     preferredProvider: 'nvidia',
     title: options.secondOpinion ? 'Botlio Audit Second Opinion Fallback' : 'Botlio Site Audit Fallback',
