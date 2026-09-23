@@ -100,7 +100,8 @@ export function shouldRequestSecondOpinion(
   hasScreenshot: boolean,
 ): boolean {
   if (!hasScreenshot) return false
-  return (score >= 4 && score <= 6) || confidence === 'low'
+  if (confidence === 'low') return true
+  return score >= 5 && score <= 6
 }
 
 /**
@@ -189,8 +190,8 @@ export async function scrapeForAudit(url: string, provider: ScrapeProvider): Pro
     fallbackFrom: payload.fallback_from ?? null,
     links: Array.isArray(payload.links) ? payload.links.filter((x): x is string => typeof x === 'string').slice(0, 60) : [],
     cachePayload: {
-      markdown: String(payload.markdown ?? '').slice(0, 12_000),
-      summary: String(payload.summary ?? '').slice(0, 2_000),
+      markdown: String(payload.markdown ?? '').slice(0, 6_000),
+      summary: String(payload.summary ?? '').slice(0, 1_200),
       screenshot: typeof payload.screenshot === 'string' ? payload.screenshot.slice(0, 2_000) : null,
       screenshot_quality: screenshotQuality,
       metadata: {
@@ -198,7 +199,7 @@ export async function scrapeForAudit(url: string, provider: ScrapeProvider): Pro
         description: String(payload.metadata?.description ?? '').slice(0, 1_000),
         statusCode: payload.metadata?.statusCode ?? 200,
       },
-      links: Array.isArray(payload.links) ? payload.links.filter((x): x is string => typeof x === 'string').slice(0, 60) : [],
+      links: Array.isArray(payload.links) ? payload.links.filter((x): x is string => typeof x === 'string').slice(0, 30) : [],
       branding: payload.branding ?? null,
       provider_used: payload.provider_used ?? provider,
       fallback_from: payload.fallback_from ?? null,
@@ -483,7 +484,7 @@ function auditUserContent(
         : 'Ingen skärmbild tillgänglig — modernitet kan inte bedömas säkert.',
       '',
       'Textinnehåll (utdrag):',
-      scraped.markdown.slice(0, 4000) || '(inget textutdrag)',
+      scraped.markdown.slice(0, 2500) || '(inget textutdrag)',
     ].join('\n'),
   }]
   if (scraped.screenshot) {
@@ -536,7 +537,7 @@ function appendSupplementaryEvidence(
         ? 'En skärmbild av den interna sidan bifogas och är ett användbart visuellt underlag.'
         : 'Skärmbilden för den interna sidan är osäker eller saknas; dra inga slutsatser om att sidan är tom.',
       'Textinnehåll (utdrag):',
-      scraped.markdown.slice(0, 3000) || '(inget textutdrag)',
+      scraped.markdown.slice(0, 1800) || '(inget textutdrag)',
     ].join('\n'),
   }]
   if (scraped.screenshot) next.push({ type: 'image_url', image_url: { url: scraped.screenshot } })
@@ -562,7 +563,7 @@ async function scoreAudit(
     // materially lighter than Kimi, so the bounded audit is less likely to
     // time out and fall through to paid OpenRouter.
     nvidiaModel: 'google/gemma-4-31b-it',
-    openrouterModel: options.secondOpinion ? 'openai/gpt-4.1-mini' : 'google/gemini-2.5-flash',
+    openrouterModel: 'google/gemini-2.5-flash',
     preferredProvider: 'nvidia',
     title: options.secondOpinion ? 'Botlio Audit Second Opinion Fallback' : 'Botlio Site Audit Fallback',
     timeoutMs: 60_000,

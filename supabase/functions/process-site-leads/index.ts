@@ -22,7 +22,7 @@ import {
   activePipelineBreakers,
   recordPipelineFailure,
 } from '../_shared/site-pipeline-health.ts'
-import { selectedScrapeProvider, ScraperError } from '../_shared/scraper-client.ts'
+import { selectedScrapeProvider, ScraperError, type ScrapeProvider } from '../_shared/scraper-client.ts'
 import { auditWebsite, classifyAuditDisposition } from '../_shared/site-audit.ts'
 import { callRoutedChat } from '../_shared/ai-provider.ts'
 import { classifyNiche, templateForNiche, type NicheKey } from '../_shared/niche.ts'
@@ -40,6 +40,7 @@ const corsHeaders = {
 }
 
 const AUDIT_PER_TICK = 3    // Firecrawl+Gemini per invocation — keep memory low
+const AUDIT_AI_RETRY_LIMIT = 2 // avoid endless scrape+model loops on provider/runtime failures
 // Sites at this quality are parked automatically. The Swedish evidence-led
 // disposition below can also park cosmetic-only 5–6 results.
 const AUDIT_AUTO_PARK_SCORE = 7
@@ -281,7 +282,7 @@ Deno.serve(async (req) => {
     // ---------------- 2. AUDIT --------------------
     const { data: auditRowsRaw } = await supabase
       .from('site_leads')
-      .select('id, user_id, website, email, company_name, language')
+      .select('id, user_id, website, email, phone, category, company_name, language, audit_details')
       .eq('status', 'pending_audit')
       .not('website', 'is', null)
       .order('created_at', { ascending: true })
@@ -292,12 +293,20 @@ Deno.serve(async (req) => {
       .filter((row: any) => row.language !== 'en' || englishOutreach.mode !== 'paused')
       .slice(0, AUDIT_PER_TICK)
 
-    for (const row of auditRows) {
-      try {
-        await auditOne(supabase, row as any, englishOutreach)
-        report.audited++
-      } catch (e) {
-        report.errors.push(`audit ${row.id}: ${(e as Error).message}`)
+    if (auditRows.length) {
+      const scrapeProvider = await selectedScrapeProvider(supabase)
+      const breakers = await activePipelineBreakers(supabase, [scrapeProvider])
+      if (breakers.length) {
+        report.errors.push(`skip audit: pipeline paused: ${breakers.map((breaker) => breaker.provider).join(', ')}`)
+      } else {
+        for (const row of auditRows) {
+          try {
+            await auditOne(supabase, row as any, englishOutreach, scrapeProvider)
+            report.audited++
+          } catch (e) {
+            report.errors.push(`audit ${row.id}: ${(e as Error).message}`)
+          }
+        }
       }
     }
 
@@ -1091,16 +1100,20 @@ async function syncPendingAuditOnlyLeads(
 // ---------------------------------------------------------------------------
 async function auditOne(
   supabase: ReturnType<typeof createClient>,
-  row: { id: string; website: string; company_name: string; email?: string | null; language?: string | null },
+  row: {
+    id: string
+    website: string
+    company_name: string
+    user_id?: string | null
+    email?: string | null
+    phone?: string | null
+    category?: string | null
+    language?: string | null
+    audit_details?: Record<string, any> | null
+  },
   englishOutreach: EnglishOutreachSettings,
+  scrapeProvider: ScrapeProvider,
 ) {
-  const scrapeProvider = await selectedScrapeProvider(supabase)
-  // Vercel is unrelated to auditing and must never block it. AI routing has
-  // its own NVIDIA -> OpenRouter fallback, so only the selected scraper's
-  // explicit circuit breaker is checked here.
-  const breakers = await activePipelineBreakers(supabase, [scrapeProvider])
-  if (breakers.length) throw new Error(`pipeline paused: ${breakers.map((breaker) => breaker.provider).join(', ')}`)
-
   await supabase.from('site_leads').update({ status: 'auditing' }).eq('id', row.id)
 
   try {
@@ -1273,8 +1286,50 @@ async function auditOne(
     const typed = error instanceof ScraperError ? error : null
     if (!typed) {
       // AI/provider and persistence failures are not website verdicts. Leave
-      // the lead retryable instead of saving a fabricated neutral score.
-      await supabase.from('site_leads').update({ status: 'pending_audit' }).eq('id', row.id)
+      // the lead retryable briefly, then hold it for manual review instead of
+      // burning screenshot + model calls every scheduled tick.
+      const previousDetails = row.audit_details && typeof row.audit_details === 'object'
+        ? row.audit_details
+        : {}
+      const retryCount = Math.max(0, Number(previousDetails.audit_retry_count) || 0) + 1
+      const message = error instanceof Error ? error.message : String(error)
+      const retryDetails = {
+        ...previousDetails,
+        audit_retry_count: retryCount,
+        last_audit_error: message.slice(0, 500),
+        last_audit_error_at: new Date().toISOString(),
+      }
+      if (retryCount >= AUDIT_AI_RETRY_LIMIT) {
+        const reason = row.language === 'en'
+          ? 'The audit provider failed repeatedly and this lead needs a manual check.'
+          : 'Auditmodellen misslyckades upprepade gånger och leadet behöver kontrolleras manuellt.'
+        await supabase.from('site_leads').update({
+          status: 'awaiting_audit_approval',
+          auto_send: false,
+          audit_score: 5,
+          audit_reason: reason,
+          audit_details: {
+            ...retryDetails,
+            weaknesses: [reason],
+            structural: [],
+            cosmetic: [],
+            recommended_status: 'needs_site',
+            uncertain: true,
+            confidence: 'low',
+            evidence: {
+              ...(previousDetails.evidence && typeof previousDetails.evidence === 'object' ? previousDetails.evidence : {}),
+              rubric_version: 'screenshot_consensus_v4',
+              screenshot_used: false,
+              audit_retry_limit_reached: true,
+            },
+          },
+        }).eq('id', row.id)
+      } else {
+        await supabase.from('site_leads').update({
+          status: 'pending_audit',
+          audit_details: retryDetails,
+        }).eq('id', row.id)
+      }
       throw error
     }
     const providerFailure = typed && (
