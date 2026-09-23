@@ -48,6 +48,10 @@ export interface AuditResult {
   secondProviderUsed: string | null
   secondModelUsed: string | null
   secondOpinionError: string | null
+  /** A relevant internal page used only for a borderline second opinion. */
+  supplementaryPageUrl: string | null
+  supplementaryPageScreenshotReliable: boolean | null
+  supplementaryPageProviderUsed: string | null
   /** Short-lived compact scrape reused by generation to avoid a second homepage capture. */
   scrapeCache: Record<string, unknown> | null
 }
@@ -69,7 +73,15 @@ export interface ScrapeResult {
   blocked: boolean
   providerUsed: string
   fallbackFrom: string | null
+  links: string[]
   cachePayload: Record<string, unknown> | null
+}
+
+export type AuditDisposition = 'needs_site' | 'site_good_enough' | 'manual_review'
+
+export type AuditDispositionResult = {
+  disposition: AuditDisposition
+  reason: string
 }
 
 export function guardedAuditScore(
@@ -106,6 +118,40 @@ export function shouldAutoBuildAudit(
     && !result.isEcommerce
 }
 
+// The model's score is helpful, but this final guard is deliberately based on
+// concrete evidence. It prevents a merely dated, generic or CTA-light site
+// from becoming a build job, while letting confirmed broken/no-site cases move
+// through automatically.
+const HARD_STRUCTURAL_PATTERN = /\b(404|not found|sidan hittas inte|sidan kunde inte hittas|broken (?:link|image|page)|trasig(?:a|t|) (?:länk|bild|sida)|placeholder|platshållar|fel (?:företagsnamn|namn)|wrong (?:company|business|name)|under construction|underhåll(?:sarbete)?|maintenance|parked domain|parkerad domän|no (?:working|functional|owned) (?:website|site)|ingen (?:fungerande |egen )?(?:hemsida|webbplats)|third[- ]party (?:booking|profile)|tredjeparts(?:profil|bokning)|bara (?:en )?(?:bokningssida|profil))\b/i
+const COSMETIC_ONLY_PATTERN = /\b(cookie|cookies|kakor|consent|cta|call[- ]to[- ]action|generisk|generic|mallkänsla|template feel|typografi|typography|(?:svag|weak) hierarki|visuell hierarki|visual hierarchy|saknar priser|saknar prisinformation|missing prices?|steril|tunn copy|thin copy|daterad(?: design)?|dated(?: design| look)?|outdated(?: design| look)?|gammal(?: design)?|old(?: design| look)?|bildkvalitet|image quality|färg(?:er)?|colou?rs?|font|typsnitt|copy|textmängd|text length)\b/i
+
+/**
+ * Convert audit evidence into the three operational outcomes. This is shared
+ * by fresh audits and the re-audit path so the queue does not depend on a
+ * model's occasionally inconsistent use of the word "structural".
+ */
+export function classifyAuditDisposition(
+  result: Pick<AuditResult, 'score' | 'isEcommerce' | 'websitePresence' | 'structural' | 'cosmetic' | 'unreadable' | 'uncertain' | 'screenshotReliable' | 'confidence'>,
+): AuditDispositionResult {
+  if (result.isEcommerce) return { disposition: 'site_good_enough', reason: 'E-commerce is outside the website offer.' }
+  if (result.unreadable || result.uncertain || !result.screenshotReliable || result.confidence === 'low') {
+    return { disposition: 'manual_review', reason: 'The available evidence is not reliable enough for an automatic decision.' }
+  }
+  if (result.websitePresence === 'third_party_booking_or_profile' || result.websitePresence === 'no_functional_website') {
+    return { disposition: 'needs_site', reason: 'The evidence confirms that the business does not have a usable owned website.' }
+  }
+  const issues = [...result.structural, ...result.cosmetic].map((item) => item.trim()).filter(Boolean)
+  const hasHardIssue = issues.some((issue) => HARD_STRUCTURAL_PATTERN.test(issue))
+  if (hasHardIssue && result.score <= 4) {
+    return { disposition: 'needs_site', reason: 'A concrete broken, placeholder or non-functional website issue was verified.' }
+  }
+  const onlyCosmetic = issues.length > 0 && issues.every((issue) => COSMETIC_ONLY_PATTERN.test(issue))
+  if (result.websitePresence === 'owned_site' && (onlyCosmetic || result.score >= 7)) {
+    return { disposition: 'site_good_enough', reason: onlyCosmetic ? 'Only cosmetic improvements were identified on a functioning owned website.' : 'The existing site meets the automatic quality threshold.' }
+  }
+  return { disposition: 'manual_review', reason: 'The audit identifies a potentially useful opportunity, but not enough verified evidence for an automatic decision.' }
+}
+
 export function normaliseUrl(raw: string): string {
   const s = (raw ?? '').trim()
   if (!s) return ''
@@ -118,7 +164,7 @@ export async function scrapeForAudit(url: string, provider: ScrapeProvider): Pro
   const empty: ScrapeResult = {
     markdown: '', title: '', description: '', screenshot: null, screenshotReliable: false,
     screenshotQuality: null, blocked: true,
-    providerUsed: provider, fallbackFrom: null,
+    providerUsed: provider, fallbackFrom: null, links: [],
     cachePayload: null,
   }
   if (!url) return empty
@@ -141,6 +187,7 @@ export async function scrapeForAudit(url: string, provider: ScrapeProvider): Pro
     blocked: false,
     providerUsed: payload.provider_used ?? provider,
     fallbackFrom: payload.fallback_from ?? null,
+    links: Array.isArray(payload.links) ? payload.links.filter((x): x is string => typeof x === 'string').slice(0, 60) : [],
     cachePayload: {
       markdown: String(payload.markdown ?? '').slice(0, 12_000),
       summary: String(payload.summary ?? '').slice(0, 2_000),
@@ -445,6 +492,57 @@ function auditUserContent(
   return content
 }
 
+function selectSupplementaryPage(homeUrl: string, links: string[]): string | null {
+  let home: URL
+  try {
+    home = new URL(homeUrl)
+  } catch {
+    return null
+  }
+  const homePath = home.pathname.replace(/\/+$/, '') || '/'
+  const preferred = /\/(?:tjanster|tjänster|services?|behandlingar|kontakt|contact|om-oss|about|booking|boka)(?:[/?#]|$)/i
+  const excluded = /\/(?:blogg?|news|nyheter|privacy|integritet|cookies?|terms|villkor|cart|checkout|konto|account|login|wp-admin)(?:[/?#]|$)/i
+  const candidates = links.map((raw) => {
+    try {
+      const candidate = new URL(raw, home)
+      candidate.hash = ''
+      return candidate
+    } catch {
+      return null
+    }
+  }).filter((candidate): candidate is URL => Boolean(candidate))
+    .filter((candidate) => candidate.hostname.replace(/^www\./, '') === home.hostname.replace(/^www\./, ''))
+    .filter((candidate) => (candidate.pathname.replace(/\/+$/, '') || '/') !== homePath)
+    .filter((candidate) => !excluded.test(candidate.pathname))
+
+  const preferredCandidate = candidates.find((candidate) => preferred.test(candidate.pathname))
+  return (preferredCandidate ?? candidates[0])?.toString() ?? null
+}
+
+function appendSupplementaryEvidence(
+  content: unknown[],
+  pageUrl: string,
+  scraped: ScrapeResult,
+): unknown[] {
+  const next = [...content, {
+    type: 'text',
+    text: [
+      '',
+      `YTTERLIGARE INTERN SIDA: ${pageUrl}`,
+      'Detta är extra bevis för den oberoende granskningen. Jämför den med startsidan. En kort sida är inte i sig ett fel.',
+      `Titel: ${scraped.title}`,
+      `Metabeskrivning: ${scraped.description}`,
+      scraped.screenshotReliable
+        ? 'En skärmbild av den interna sidan bifogas och är ett användbart visuellt underlag.'
+        : 'Skärmbilden för den interna sidan är osäker eller saknas; dra inga slutsatser om att sidan är tom.',
+      'Textinnehåll (utdrag):',
+      scraped.markdown.slice(0, 3000) || '(inget textutdrag)',
+    ].join('\n'),
+  }]
+  if (scraped.screenshot) next.push({ type: 'image_url', image_url: { url: scraped.screenshot } })
+  return next
+}
+
 async function scoreAudit(
   supabase: SupabaseClient,
   userContent: unknown[],
@@ -539,6 +637,9 @@ export async function auditWebsite(
       secondProviderUsed: null,
       secondModelUsed: null,
       secondOpinionError: null,
+      supplementaryPageUrl: null,
+      supplementaryPageScreenshotReliable: null,
+      supplementaryPageProviderUsed: null,
       scrapeCache: scraped.cachePayload,
     }
   }
@@ -556,10 +657,36 @@ export async function auditWebsite(
   )
   let second: AuditJudgment | null = null
   let secondOpinionError: string | null = null
+  let supplementaryPageUrl: string | null = null
+  let supplementaryPageScreenshotReliable: boolean | null = null
+  let supplementaryPageProviderUsed: string | null = null
   if (needsSecondOpinion) {
     try {
-      const rawSecond = await scoreAudit(supabase, userContent, language, { secondOpinion: true })
-      second = normaliseJudgmentEvidence(rawSecond, scraped, language)
+      // Borderline audits receive one relevant internal page (services,
+      // contact, booking or about) from the same self-hosted scraper path.
+      // This is more useful than asking a second model to repeat the exact
+      // same home-page guess, and stays within the existing low-rate queue.
+      const candidateUrl = selectSupplementaryPage(url, scraped.links)
+      let secondContent = userContent
+      let secondScrape = scraped
+      if (candidateUrl) {
+        try {
+          const supplementary = await scrapeForAudit(candidateUrl, scrapeProvider)
+          const hasSupplementaryEvidence = Boolean(supplementary.screenshot)
+            || supplementary.markdown.replace(/\s+/g, '').length > 40
+          if (hasSupplementaryEvidence) {
+            supplementaryPageUrl = candidateUrl
+            supplementaryPageScreenshotReliable = supplementary.screenshotReliable
+            supplementaryPageProviderUsed = supplementary.providerUsed
+            secondContent = appendSupplementaryEvidence(userContent, candidateUrl, supplementary)
+            secondScrape = supplementary
+          }
+        } catch (error) {
+          console.warn(`audit supplementary page unavailable for ${url}: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
+      const rawSecond = await scoreAudit(supabase, secondContent, language, { secondOpinion: true })
+      second = normaliseJudgmentEvidence(rawSecond, secondScrape, language)
     } catch (error) {
       // The first visual verdict is still useful. A second-opinion outage must
       // not stall the entire audit queue; mark the result low-confidence so it
@@ -610,6 +737,9 @@ export async function auditWebsite(
     secondProviderUsed: second?.provider ?? null,
     secondModelUsed: second?.model ?? null,
     secondOpinionError,
+    supplementaryPageUrl,
+    supplementaryPageScreenshotReliable,
+    supplementaryPageProviderUsed,
     scrapeCache: scraped.cachePayload,
   }
 }

@@ -307,7 +307,7 @@ export default function AuditOutreach() {
     </Card>
 
     <div className="space-y-4">
-      <div><h2 className="text-lg font-semibold">Three-email sequence</h2><p className="text-sm text-muted-foreground">Each prompt receives verified audit observations. Signatures and unsubscribe handling are appended by the sender.</p></div>
+      <div><h2 className="text-lg font-semibold">Three-email sequence</h2><p className="text-sm text-muted-foreground">A first email is sent only when there is one verified, concrete website observation and the contact matches the audited business. Signatures and unsubscribe handling are appended by the sender.</p></div>
       {sendNodes.map((node, index) => {
         const config = dirtyNodes[node.id] ?? node.config;
         return <Card key={node.id} className="p-5">

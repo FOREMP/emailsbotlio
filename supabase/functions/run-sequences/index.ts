@@ -262,8 +262,9 @@ Deno.serve(async (req) => {
   const dueEnrollmentIds = due.map((row: any) => row.id as string)
   const dueContactIds = Array.from(new Set(due.map((row: any) => row.contact_id as string).filter(Boolean)))
   const dueUserIds = Array.from(new Set(due.map((row: any) => row.user_id as string).filter(Boolean)))
+  const dueSequenceIds = Array.from(new Set(due.map((row: any) => row.sequence_id as string).filter(Boolean)))
 
-  const [contactsResult, sendHistoryResult, sendersResult] = await Promise.all([
+  const [contactsResult, sendHistoryResult, sendersResult, sequencesResult] = await Promise.all([
     dueContactIds.length
       ? supabase.from('contacts').select('*').in('id', dueContactIds)
       : Promise.resolve({ data: [], error: null }),
@@ -282,13 +283,21 @@ Deno.serve(async (req) => {
           .in('user_id', dueUserIds)
           .eq('is_active', true)
       : Promise.resolve({ data: [], error: null }),
+    dueSequenceIds.length
+      ? supabase
+          .from('sequences')
+          .select('id, status')
+          .in('id', dueSequenceIds)
+      : Promise.resolve({ data: [], error: null }),
   ])
 
   if (contactsResult.error) throw new Error(`due contacts preload failed: ${contactsResult.error.message}`)
   if (sendHistoryResult.error) throw new Error(`due send history preload failed: ${sendHistoryResult.error.message}`)
   if (sendersResult.error) throw new Error(`active senders preload failed: ${sendersResult.error.message}`)
+  if (sequencesResult.error) throw new Error(`sequence status preload failed: ${sequencesResult.error.message}`)
 
   const contactById = new Map((contactsResult.data ?? []).map((row: any) => [row.id as string, row]))
+  const sequenceStatusById = new Map((sequencesResult.data ?? []).map((row: any) => [row.id as string, String(row.status ?? '')]))
   const sendHistoryByEnrollment = new Map<string, any[]>()
   for (const row of sendHistoryResult.data ?? []) {
     if (!row.enrollment_id) continue
@@ -393,6 +402,13 @@ Deno.serve(async (req) => {
   for (const enr of due ?? []) {
     processed++
     try {
+      // A sequence-level pause must be authoritative. Previously the runner
+      // only inspected the enrollment state, so a campaign marked "paused"
+      // in the UI could still send its already queued contacts.
+      if (sequenceStatusById.get(enr.sequence_id) !== 'active') {
+        console.log(`[enr ${enr.id}] skipped — sequence ${enr.sequence_id} is not active`)
+        continue
+      }
       // ATOMIC CLAIM: prevent concurrent invocations (cron + manual trigger) from
       // processing the same enrollment twice. We bump updated_at and require it to
       // still match what we read; if another worker already claimed/advanced this

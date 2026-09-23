@@ -6,7 +6,8 @@
 //   2. AUDIT — for up to AUDIT_PER_TICK pending_audit leads: scrape with
 //      Firecrawl, score 1-10 with Gemini, extract 2-3 concrete weaknesses.
 //      Scores of 7 or more are automatically parked as site_good_enough.
-//      Swedish reliable scores 1–4 enter build-and-send. In English
+//      Swedish sites with verified hard failures enter build-and-send, while
+//      cosmetic-only sites are parked and ambiguous cases remain reviewable. In English
 //      audit_only mode, scores 1–6 with a contact email enter the Botlio
 //      audit sequence without generating a demo. Low-confidence evidence is
 //      retained in the audit email, rather than creating an operator backlog.
@@ -22,7 +23,7 @@ import {
   recordPipelineFailure,
 } from '../_shared/site-pipeline-health.ts'
 import { selectedScrapeProvider, ScraperError } from '../_shared/scraper-client.ts'
-import { auditWebsite, shouldAutoBuildAudit } from '../_shared/site-audit.ts'
+import { auditWebsite, classifyAuditDisposition } from '../_shared/site-audit.ts'
 import { callRoutedChat } from '../_shared/ai-provider.ts'
 import { classifyNiche, templateForNiche, type NicheKey } from '../_shared/niche.ts'
 import {
@@ -39,9 +40,8 @@ const corsHeaders = {
 }
 
 const AUDIT_PER_TICK = 3    // Firecrawl+Gemini per invocation — keep memory low
-// Sites at this quality are parked automatically. Keep this one value shared
-// by the audit result and the legacy-row repair below: only 1–6 go to the
-// operator's audit decision queue.
+// Sites at this quality are parked automatically. The Swedish evidence-led
+// disposition below can also park cosmetic-only 5–6 results.
 const AUDIT_AUTO_PARK_SCORE = 7
 const GEN_PER_TICK = 6      // how many new pipelines may START per tick
 const MAX_CONCURRENT_GEN = 24 // how many leads may be mid-pipeline at once
@@ -88,6 +88,105 @@ const STALE_PIPELINE_MINUTES = 180 // queued work may legitimately wait; don't f
 const ORPHAN_GRACE_MINUTES = 10   // 'generating' with no generated_sites row = dead job
 const TEMPLATE_PICKER_NVIDIA_MODEL = 'deepseek-ai/deepseek-v4-flash-0731'
 const TEMPLATE_PICKER_OPENROUTER_FALLBACK = 'deepseek/deepseek-chat-v3.1'
+
+// Audit-led outreach is only safe when we can connect the destination address
+// to the business that was actually audited, and when the audit supplies a
+// customer-visible fact. This prevents the very damaging failure mode where a
+// perfectly valid email address for Company A receives a message about Company
+// B, or an LLM fills a generic "dated design" claim into every first email.
+const FREE_EMAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com',
+  'icloud.com', 'me.com', 'yahoo.com', 'yahoo.co.uk', 'aol.com', 'proton.me',
+  'protonmail.com', 'gmx.com', 'mail.com',
+])
+const GENERIC_DOMAIN_TOKENS = new Set([
+  'www', 'com', 'co', 'uk', 'se', 'net', 'org', 'ltd', 'limited', 'llp',
+  'plc', 'inc', 'the', 'and', 'for', 'of', 'company', 'services', 'service',
+])
+const UNSAFE_AUDIT_OBSERVATION = /\b(dated|outdated|old[- ]fashioned|generic|visual design|user experience|weak hierarchy|thin copy|could improve|needs improving|enhance|enhancement|modernis|better website)\b/i
+const CONCRETE_AUDIT_OBSERVATION = /\b(broken|missing|placeholder|default|under construction|not found|404|error|incorrect|wrong (?:company|business|name)|third[- ]party|booking (?:page|profile|platform)|no (?:phone|email|contact|service|opening)|hard to read|unreadable|not visible|does not load|fails? to load|no own (?:website|domain)|only (?:a )?(?:facebook|instagram|booking|profile))\b/i
+
+function hostnameFor(value: unknown): string | null {
+  const raw = String(value ?? '').trim()
+  if (!raw) return null
+  try {
+    return new URL(raw.includes('://') ? raw : `https://${raw}`).hostname.toLowerCase().replace(/^www\./, '') || null
+  } catch {
+    return null
+  }
+}
+
+function domainTokens(value: unknown): Set<string> {
+  const host = hostnameFor(value)
+  if (!host) return new Set()
+  return new Set(host
+    .split(/[.\-_/]+/)
+    .map((token) => token.toLowerCase().replace(/[^a-z0-9]/g, ''))
+    .filter((token) => token.length >= 3 && !GENERIC_DOMAIN_TOKENS.has(token)))
+}
+
+function companyTokens(value: unknown): Set<string> {
+  return new Set(String(value ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/)
+    .filter((token) => token.length >= 4 && !GENERIC_DOMAIN_TOKENS.has(token)))
+}
+
+function overlaps(left: Set<string>, right: Set<string>): boolean {
+  for (const token of left) if (right.has(token)) return true
+  return false
+}
+
+function verifyLeadEmailIdentity(lead: any): { ok: boolean; reason?: string } {
+  const email = String(lead?.email ?? '').trim().toLowerCase()
+  const emailDomain = email.split('@')[1] ?? ''
+  if (!email || !emailDomain) return { ok: false, reason: 'No usable email address is available.' }
+  // A personal mailbox cannot be domain-verified, but it is not proof of a
+  // mismatch either. The existing duplicate, suppression and reply safeguards
+  // still apply to it.
+  if (FREE_EMAIL_DOMAINS.has(emailDomain)) return { ok: true }
+
+  const websiteHost = hostnameFor(lead?.website)
+  if (!websiteHost) return { ok: true }
+  const emailTokens = domainTokens(emailDomain)
+  const websiteTokens = domainTokens(websiteHost)
+  const businessTokens = companyTokens(lead?.company_name)
+  if (emailDomain === websiteHost || overlaps(emailTokens, websiteTokens) || overlaps(emailTokens, businessTokens)) return { ok: true }
+  return { ok: false, reason: `The email domain ${emailDomain} does not match the audited website or company name.` }
+}
+
+function selectConcreteAuditObservation(lead: any): string | null {
+  const structural = Array.isArray(lead?.audit_details?.structural)
+    ? lead.audit_details.structural
+    : []
+  for (const value of structural) {
+    const observation = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
+    if (!observation || observation.length > 260) continue
+    if (UNSAFE_AUDIT_OBSERVATION.test(observation)) continue
+    if (CONCRETE_AUDIT_OBSERVATION.test(observation)) return observation
+  }
+  return null
+}
+
+async function holdLeadForOutreachReview(
+  supabase: ReturnType<typeof createClient>,
+  lead: any,
+  reason: string,
+) {
+  const details = lead?.audit_details && typeof lead.audit_details === 'object' ? lead.audit_details : {}
+  await supabase.from('site_leads').update({
+    status: 'needs_triage',
+    auto_send: false,
+    feedback: `Outreach held for review: ${reason}`,
+    audit_details: {
+      ...details,
+      outreach_sync_state: 'held',
+      outreach_hold_reason: reason,
+      outreach_held_at: new Date().toISOString(),
+    },
+  }).eq('id', lead.id)
+}
 
 async function resolveEnglishOutreachSettings(
   supabase: ReturnType<typeof createClient>,
@@ -605,9 +704,31 @@ async function syncAutoSendLead(
   supabase: ReturnType<typeof createClient>,
   lead: any,
   demoUrl: string,
-): Promise<void> {
+): Promise<'enrolled' | 'held_for_review'> {
   const email = String(lead.email ?? '').trim().toLowerCase()
   if (!email) throw new Error('lead has no email')
+
+  const identity = verifyLeadEmailIdentity(lead)
+  if (!identity.ok) {
+    await holdLeadForOutreachReview(supabase, lead, identity.reason ?? 'The contact identity could not be verified.')
+    return 'held_for_review'
+  }
+
+  // Demo outreach is a different sequence from audit-only outreach. Do not
+  // turn a successfully generated demo into a second cold approach merely
+  // because the same address happened to be imported twice.
+  const { data: priorSends, error: priorSendsError } = await supabase
+    .from('sent_emails')
+    .select('id')
+    .eq('user_id', lead.user_id)
+    .ilike('recipient_email', email)
+    .in('status', ['queued', 'sent', 'bounced', 'complained', 'unsubscribed'])
+    .limit(1)
+  if (priorSendsError) throw new Error(`prior outreach lookup: ${priorSendsError.message}`)
+  if (priorSends?.length) {
+    await holdLeadForOutreachReview(supabase, lead, 'This address was already contacted by another outreach sequence.')
+    return 'held_for_review'
+  }
 
   const language = lead.language === 'en' ? 'en' : 'sv'
   const sequenceName = language === 'en' ? 'Site Demo Outreach EN' : 'Site Demo Outreach'
@@ -721,15 +842,31 @@ async function syncAutoSendLead(
     feedback: null,
   }).eq('id', lead.id)
   if (leadError) throw new Error(`lead finalize: ${leadError.message}`)
+  return 'enrolled'
 }
 
 async function syncAuditOnlyLead(
   supabase: ReturnType<typeof createClient>,
   lead: any,
-): Promise<'enrolled' | 'already_contacted'> {
+): Promise<'enrolled' | 'already_contacted' | 'held_for_review'> {
   const email = String(lead.email ?? '').trim().toLowerCase()
   if (!email) throw new Error('lead has no email')
   if (lead.language !== 'en') throw new Error('audit-only outreach accepts English leads only')
+
+  const identity = verifyLeadEmailIdentity(lead)
+  if (!identity.ok) {
+    await holdLeadForOutreachReview(supabase, lead, identity.reason ?? 'The contact identity could not be verified.')
+    return 'held_for_review'
+  }
+  const observation = selectConcreteAuditObservation(lead)
+  if (!observation) {
+    await holdLeadForOutreachReview(
+      supabase,
+      lead,
+      'The audit did not contain one concrete, customer-visible website observation.',
+    )
+    return 'held_for_review'
+  }
 
   const { data: sequences, error: sequenceError } = await supabase
     .from('sequences')
@@ -773,15 +910,6 @@ async function syncAuditOnlyLead(
     return 'already_contacted'
   }
 
-  const weaknesses = Array.isArray(lead.audit_details?.weaknesses)
-    ? lead.audit_details.weaknesses.filter((value: unknown) => typeof value === 'string' && value.trim()).slice(0, 3)
-    : []
-  const structural = Array.isArray(lead.audit_details?.structural)
-    ? lead.audit_details.structural.filter((value: unknown) => typeof value === 'string' && value.trim()).slice(0, 3)
-    : []
-  const cosmetic = Array.isArray(lead.audit_details?.cosmetic)
-    ? lead.audit_details.cosmetic.filter((value: unknown) => typeof value === 'string' && value.trim()).slice(0, 3)
-    : []
   const customFields = {
     site_lead_id: lead.id,
     __site_lead_id: lead.id,
@@ -789,9 +917,12 @@ async function syncAuditOnlyLead(
     company_name: lead.company_name,
     company: lead.company_name,
     website: lead.website ?? '',
-    audit_weakness: weaknesses[0] ?? lead.audit_reason ?? '',
-    audit_weakness_2: weaknesses[1] ?? structural[0] ?? cosmetic[0] ?? '',
-    audit_weakness_3: weaknesses[2] ?? structural[1] ?? cosmetic[1] ?? '',
+    // Never let a vague cosmetic score become email copy. The only observation
+    // supplied to this sequence has passed the concrete-evidence gate above.
+    audit_outreach_observation: observation,
+    audit_weakness: observation,
+    audit_weakness_2: '',
+    audit_weakness_3: '',
     audit_score: lead.audit_score ?? '',
     audit_confidence: lead.audit_details?.confidence ?? '',
     category: lead.category ?? '',
@@ -904,9 +1035,11 @@ async function syncPendingAuditOnlyLeads(
 ): Promise<number> {
   const { data, error } = await supabase
     .from('site_leads')
-    .select('id, user_id, company_name, website, email, phone, category, language, audit_score, audit_reason, audit_details')
+    .select('id, user_id, company_name, website, email, phone, category, language, audit_score, audit_reason, audit_details, auto_send, last_email_sent_at')
     .eq('language', 'en')
-    .in('status', ['awaiting_audit_approval', 'needs_triage', 'needs_site'])
+    .in('status', ['awaiting_audit_approval', 'needs_triage', 'needs_site', 'auto_approved'])
+    .eq('auto_send', true)
+    .is('last_email_sent_at', null)
     .not('email', 'is', null)
     .gte('audit_score', 1)
     .lte('audit_score', settings.max_audit_score)
@@ -922,6 +1055,10 @@ async function syncPendingAuditOnlyLeads(
     const details = lead.audit_details && typeof lead.audit_details === 'object'
       ? lead.audit_details as Record<string, any>
       : {}
+    // A held row needs an operator decision, not another write attempt every
+    // ten minutes. This also avoids needless database I/O while the campaign
+    // is intentionally paused for review.
+    if (details.outreach_sync_state === 'held') continue
     const evidence = details.evidence && typeof details.evidence === 'object'
       ? details.evidence as Record<string, any>
       : {}
@@ -978,35 +1115,37 @@ async function auditOne(
     // so it is always parked. The audit model is explicitly told not to mark
     // bookings, menus, catalogues or enquiry forms as e-commerce.
     const automaticallyExcludedEcommerce = result.isEcommerce
-    // A confirmed booking/profile-only presence is a stronger signal than
-    // the score: it has no owned site to preserve, so it can go directly to
-    // the normal build-and-send queue. "uncertain" never takes this route.
-    const autoQualifiedLowScore = shouldAutoBuildAudit(result)
-    const automaticBuildCandidate = autoQualifiedLowScore || (
-      result.confidence !== 'low'
-      && (result.websitePresence === 'third_party_booking_or_profile'
-        || result.websitePresence === 'no_functional_website')
-    )
+    // Swedish audit decisions use evidence, not a bare score: a dated or
+    // generic site is parked, verified broken/no-site evidence builds, and
+    // only genuinely contradictory/uncertain cases reach manual review.
+    const swedishDisposition = classifyAuditDisposition(result)
+    const automaticBuildCandidate = swedishDisposition.disposition === 'needs_site'
     const isEnglishAuditOnly = row.language === 'en' && englishOutreach.mode === 'audit_only'
     const reliableForAuditOutreach = result.confidence !== 'low'
       && result.screenshotReliable
       && !result.unreadable
       && !result.uncertain
+    const auditOutreachObservation = selectConcreteAuditObservation({ audit_details: { structural: result.structural } })
+    const contactIdentity = verifyLeadEmailIdentity(row)
     const auditOnlyEligible = isEnglishAuditOnly
       && Boolean(row.email)
       && !automaticallyExcludedEcommerce
       && result.score >= 1
       && result.score <= englishOutreach.max_audit_score
+      && Boolean(auditOutreachObservation)
+      && contactIdentity.ok
       && (!englishOutreach.require_reliable_audit || reliableForAuditOutreach)
     // E-commerce is outside the offer even when its visual score is low.
     const automaticallyNeedsSite = !isEnglishAuditOnly
       && !automaticallyExcludedEcommerce
       && automaticBuildCandidate
-    // A 7 is already a good enough existing site. Scores 5–6 consume an
-    // operator decision; screenshot-backed scores 1–4 build automatically.
-    const recommendedStatus = automaticallyExcludedEcommerce || result.score >= AUDIT_AUTO_PARK_SCORE
+    const recommendedStatus = automaticallyExcludedEcommerce
       ? 'site_good_enough'
-      : 'needs_site'
+      : row.language === 'en'
+        ? (result.score >= AUDIT_AUTO_PARK_SCORE ? 'site_good_enough' : 'needs_site')
+        : swedishDisposition.disposition === 'site_good_enough'
+          ? 'site_good_enough'
+          : 'needs_site'
     const nextStatus = automaticallyExcludedEcommerce
       ? 'site_good_enough'
       : auditOnlyEligible
@@ -1036,11 +1175,24 @@ async function auditOne(
         recommended_status: automaticallyExcludedEcommerce
           ? 'site_good_enough'
           : automaticallyNeedsSite ? 'needs_site' : recommendedStatus,
+        automated_disposition: row.language === 'en'
+          ? null
+          : swedishDisposition.disposition,
+        automated_disposition_reason: row.language === 'en'
+          ? null
+          : swedishDisposition.reason,
         website_presence: result.websitePresence,
         excluded_ecommerce: automaticallyExcludedEcommerce,
         auto_qualified_for_build: automaticallyNeedsSite,
         auto_qualified_for_audit_outreach: auditOnlyEligible,
-        auto_qualified_low_score: autoQualifiedLowScore,
+        audit_outreach_observation: auditOutreachObservation,
+        audit_outreach_identity_verified: contactIdentity.ok,
+        audit_outreach_hold_reason: !contactIdentity.ok
+          ? contactIdentity.reason
+          : isEnglishAuditOnly && !auditOutreachObservation
+            ? 'No concrete customer-visible website observation was found.'
+            : null,
+        auto_qualified_low_score: automaticBuildCandidate && result.score <= 4,
         uncertain: result.uncertain,
         confidence: result.confidence,
         ...(nextStatus === 'awaiting_audit_approval'
@@ -1069,6 +1221,9 @@ async function auditOne(
           second_score: result.secondScore,
           score_disagreement: result.scoreDisagreement,
           second_opinion_error: result.secondOpinionError,
+          supplementary_page_url: result.supplementaryPageUrl,
+          supplementary_page_screenshot_reliable: result.supplementaryPageScreenshotReliable,
+          supplementary_page_scrape_provider: result.supplementaryPageProviderUsed,
         },
       },
       ...(recommendedStatus === 'site_good_enough' && !automaticallyNeedsSite
