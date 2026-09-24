@@ -558,10 +558,10 @@ async function scoreAudit(
     : ''
   const routed = await callRoutedChat({
     supabase,
-    // Keep the screenshot audit on NVIDIA. Qwen 3.5 122B is multimodal and
-    // should be a better fit than Gemma here: still visual, but less prone to
-    // the long 60s stalls that were trapping leads in the auditing state.
-    nvidiaModel: 'qwen/qwen3.5-122b-a10b',
+    // Keep the screenshot audit on NVIDIA first. Llama 3.2 11B Vision is a
+    // live multimodal endpoint and should be fast enough for the Edge runtime;
+    // Gemini remains the fallback when NVIDIA is unavailable or times out.
+    nvidiaModel: 'meta/llama-3.2-11b-vision-instruct',
     openrouterModel: 'google/gemini-2.5-flash',
     preferredProvider: 'nvidia',
     title: options.secondOpinion ? 'Botlio Audit Second Opinion Fallback' : 'Botlio Site Audit Fallback',
