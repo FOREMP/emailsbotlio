@@ -558,20 +558,18 @@ async function scoreAudit(
     : ''
   const routed = await callRoutedChat({
     supabase,
-    // Keep the screenshot audit on NVIDIA. Gemma 4 is a current, free,
-    // multimodal 31B endpoint with an official image-input chat API. It is
-    // materially lighter than Kimi, so the bounded audit is less likely to
-    // time out and fall through to paid OpenRouter.
-    nvidiaModel: 'google/gemma-4-31b-it',
+    // Keep the screenshot audit on NVIDIA. Qwen 3.5 122B is multimodal and
+    // should be a better fit than Gemma here: still visual, but less prone to
+    // the long 60s stalls that were trapping leads in the auditing state.
+    nvidiaModel: 'qwen/qwen3.5-122b-a10b',
     openrouterModel: 'google/gemini-2.5-flash',
     preferredProvider: 'nvidia',
     title: options.secondOpinion ? 'Botlio Audit Second Opinion Fallback' : 'Botlio Site Audit Fallback',
-    timeoutMs: 60_000,
+    timeoutMs: 45_000,
     requireJsonObject: true,
-    // Retry NVIDIA once on transient endpoint/capacity errors before paying
-    // for OpenRouter. Every attempt still passes through the shared 40 rpm
-    // reservation function.
-    nvidiaAttempts: 2,
+    // Do not spend the full Edge Function runtime on repeated NVIDIA stalls.
+    // A failed attempt can be retried by the next cron tick if needed.
+    nvidiaAttempts: 1,
     body: {
       temperature: 0,
       top_p: 1,
