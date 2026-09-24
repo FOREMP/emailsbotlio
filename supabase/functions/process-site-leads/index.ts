@@ -1278,6 +1278,8 @@ async function auditOne(
         auto_qualified_low_score: automaticBuildCandidate && result.score <= 4,
         uncertain: result.uncertain,
         confidence: result.confidence,
+        jev_confidence: auditEngine === 'jev' ? result.decisionConfidence ?? null : null,
+        jev_decision: auditEngine === 'jev' ? result.decisionLabel ?? null : null,
         ...(nextStatus === 'awaiting_audit_approval'
           ? {}
           : {
@@ -1298,6 +1300,8 @@ async function auditOne(
           scraped_text_characters: result.markdown.length,
           scrape_provider: result.providerUsed,
           first_model: result.modelUsed,
+          decision_confidence: result.decisionConfidence ?? null,
+          decision_label: result.decisionLabel ?? null,
           first_score: result.firstScore,
           second_opinion_used: result.secondOpinionUsed,
           second_provider: result.secondProviderUsed,

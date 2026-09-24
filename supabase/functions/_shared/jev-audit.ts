@@ -30,7 +30,7 @@ type JevDecision = {
 }
 
 const JEV_MODEL = 'typesafe/jev-1.13'
-const JEV_CONFIDENT_THRESHOLD = 0.82
+const JEV_CONFIDENT_THRESHOLD = 0.60
 
 export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult> {
   const url = normaliseUrl(ctx.url)
@@ -91,7 +91,9 @@ export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult
     screenshot: null,
     screenshotReliable: false,
     screenshotQuality: scraped.screenshotQuality,
-    confidence: confident ? 'high' : decision.confidence >= 0.65 ? 'medium' : 'low',
+    confidence: confident ? 'high' : decision.confidence >= 0.45 ? 'medium' : 'low',
+    decisionConfidence: decision.confidence,
+    decisionLabel: decision.decision,
     secondOpinionUsed: false,
     firstScore: score,
     secondScore: null,
@@ -359,6 +361,8 @@ function emptyManualResult(language: 'sv' | 'en', url: string, scraped: Awaited<
     screenshotReliable: false,
     screenshotQuality: scraped.screenshotQuality,
     confidence: 'low',
+    decisionConfidence: 0,
+    decisionLabel: 'needs_review',
     secondOpinionUsed: false,
     firstScore: 5,
     secondScore: null,

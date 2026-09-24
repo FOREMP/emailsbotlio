@@ -27,6 +27,10 @@ type LeadRow = {
   audit_details: {
     weaknesses?: string[];
     recommended_status?: "needs_site" | "site_good_enough";
+    audit_engine?: string;
+    confidence?: "high" | "medium" | "low";
+    jev_confidence?: number | null;
+    jev_decision?: string | null;
     operator_decision?: "build" | "site_good_enough";
     operator_decision_source?: "manual" | "automation";
     operator_decided_at?: string;
@@ -737,6 +741,14 @@ export default function SiteApprovals() {
                 {row.audit_details?.recommended_status && (
                   <div className="mt-2 text-xs text-muted-foreground">
                     AI-rekommendation: {row.audit_details.recommended_status === "needs_site" ? "bygg en ny hemsida" : "befintlig hemsida räcker"}.
+                  </div>
+                )}
+                {row.audit_details?.audit_engine === "jev" && (
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    JEV: {row.audit_details.jev_decision ?? "okänt beslut"}
+                    {typeof row.audit_details.jev_confidence === "number"
+                      ? ` · ${Math.round(row.audit_details.jev_confidence * 100)}% säker`
+                      : ""}
                   </div>
                 )}
                 {row.audit_details?.weaknesses?.length && (

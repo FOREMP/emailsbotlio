@@ -38,6 +38,10 @@ export interface AuditResult {
   screenshotQuality: Record<string, unknown> | null
   /** Confidence after the optional second opinion has been reconciled. */
   confidence: 'high' | 'medium' | 'low'
+  /** Numeric decision confidence when the audit engine exposes it, e.g. JEV. */
+  decisionConfidence?: number
+  /** Raw decision label when the audit engine exposes it, e.g. JEV. */
+  decisionLabel?: string
   /** The second vision model is used only for uncertain/borderline results. */
   secondOpinionUsed: boolean
   firstScore: number
