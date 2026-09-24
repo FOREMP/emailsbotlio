@@ -565,7 +565,7 @@ async function scoreAudit(
     openrouterModel: 'google/gemini-2.5-flash',
     preferredProvider: 'nvidia',
     title: options.secondOpinion ? 'Botlio Audit Second Opinion Fallback' : 'Botlio Site Audit Fallback',
-    timeoutMs: 45_000,
+    timeoutMs: 30_000,
     requireJsonObject: true,
     // Do not spend the full Edge Function runtime on repeated NVIDIA stalls.
     // A failed attempt can be retried by the next cron tick if needed.

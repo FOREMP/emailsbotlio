@@ -53,6 +53,9 @@ const OUTREACH_DOMAINS_BY_LANGUAGE = {
 } as const
 const GHOST_LIST_NAME = 'Site Leads (auto)'
 const ENGLISH_AUDIT_SEQUENCE = 'English Audit Outreach'
+// Bump this when the shared audit model changes so Supabase rebuilds the
+// function bundle instead of continuing to serve an older _shared/site-audit.ts.
+const AUDIT_MODEL_BUNDLE_VERSION = 'audit-llama-3.2-11b-vision-2026-09-24'
 const STOCKHOLM_TZ = 'Europe/Stockholm'
 const SEND_WINDOW_START = 9
 const SEND_WINDOW_END = 16
@@ -240,7 +243,7 @@ Deno.serve(async (req) => {
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   const supabase = createClient(supabaseUrl, serviceKey)
 
-  const report = { reconciled: 0, auto_synced: 0, audit_outreach_synced: 0, recovered: 0, audited: 0, auto_parked: 0, auto_qualified: 0, generated: 0, capacity: 0, errors: [] as string[] }
+  const report = { audit_model_bundle: AUDIT_MODEL_BUNDLE_VERSION, reconciled: 0, auto_synced: 0, audit_outreach_synced: 0, recovered: 0, audited: 0, auto_parked: 0, auto_qualified: 0, generated: 0, capacity: 0, errors: [] as string[] }
 
   // Manual override from the Site Leads UI: build these leads right now,
   // ignoring the automation switch and the daily cap.
