@@ -160,8 +160,12 @@ export function normaliseUrl(raw: string): string {
   return `https://${s.replace(/^\/+/, '')}`
 }
 
-/** Scrape once through the configured provider boundary, requesting a screenshot. */
-export async function scrapeForAudit(url: string, provider: ScrapeProvider): Promise<ScrapeResult> {
+/** Scrape once through the configured provider boundary. Screenshot is optional for cheap text-first audits. */
+export async function scrapeForAudit(
+  url: string,
+  provider: ScrapeProvider,
+  options: { screenshot?: boolean } = { screenshot: true },
+): Promise<ScrapeResult> {
   const empty: ScrapeResult = {
     markdown: '', title: '', description: '', screenshot: null, screenshotReliable: false,
     screenshotQuality: null, blocked: true,
@@ -169,7 +173,7 @@ export async function scrapeForAudit(url: string, provider: ScrapeProvider): Pro
     cachePayload: null,
   }
   if (!url) return empty
-  const payload: ScraperPayload = await scrapeUrl(provider, url, { screenshot: true })
+  const payload: ScraperPayload = await scrapeUrl(provider, url, { screenshot: options.screenshot !== false })
   const screenshot = typeof payload.screenshot === 'string' && payload.screenshot.trim()
     ? payload.screenshot
     : null

@@ -24,6 +24,7 @@ import {
 } from '../_shared/site-pipeline-health.ts'
 import { selectedScrapeProvider, ScraperError, type ScrapeProvider } from '../_shared/scraper-client.ts'
 import { auditWebsite, classifyAuditDisposition } from '../_shared/site-audit.ts'
+import { auditWebsiteWithJev } from '../_shared/jev-audit.ts'
 import { callRoutedChat } from '../_shared/ai-provider.ts'
 import { classifyNiche, templateForNiche, type NicheKey } from '../_shared/niche.ts'
 import {
@@ -39,7 +40,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const AUDIT_PER_TICK = 3    // Firecrawl+Gemini per invocation — keep memory low
+const AUDIT_PER_TICK = 1    // keep Edge runtime stable; JEV mode is fast, current screenshot audit is heavy
 const AUDIT_AI_RETRY_LIMIT = 2 // avoid endless scrape+model loops on provider/runtime failures
 // Sites at this quality are parked automatically. The Swedish evidence-led
 // disposition below can also park cosmetic-only 5–6 results.
@@ -55,7 +56,7 @@ const GHOST_LIST_NAME = 'Site Leads (auto)'
 const ENGLISH_AUDIT_SEQUENCE = 'English Audit Outreach'
 // Bump this when the shared audit model changes so Supabase rebuilds the
 // function bundle instead of continuing to serve an older _shared/site-audit.ts.
-const AUDIT_MODEL_BUNDLE_VERSION = 'audit-llama-3.2-11b-vision-2026-09-24'
+const AUDIT_MODEL_BUNDLE_VERSION = 'audit-jev-selectable-2026-09-24'
 const STOCKHOLM_TZ = 'Europe/Stockholm'
 const SEND_WINDOW_START = 9
 const SEND_WINDOW_END = 16
@@ -303,6 +304,7 @@ Deno.serve(async (req) => {
     }
 
     const englishOutreach = await resolveEnglishOutreachSettings(supabase)
+    const auditEngine = await resolveSiteAuditEngine(supabase)
 
     // ---------------- 2. AUDIT --------------------
     const { data: auditRowsRaw } = await supabase
@@ -326,7 +328,7 @@ Deno.serve(async (req) => {
       } else {
         for (const row of auditRows) {
           try {
-            await auditOne(supabase, row as any, englishOutreach, scrapeProvider)
+            await auditOne(supabase, row as any, englishOutreach, scrapeProvider, auditEngine)
             report.audited++
           } catch (e) {
             report.errors.push(`audit ${row.id}: ${(e as Error).message}`)
@@ -1142,17 +1144,30 @@ async function auditOne(
   },
   englishOutreach: EnglishOutreachSettings,
   scrapeProvider: ScrapeProvider,
+  auditEngine: SiteAuditEngine,
 ) {
   await supabase.from('site_leads').update({ status: 'auditing' }).eq('id', row.id)
 
   try {
-    const result = await auditWebsite(
-      row.website,
-      row.company_name,
-      row.language === 'en' ? 'en' : 'sv',
-      supabase,
-      scrapeProvider,
-    )
+    const language = row.language === 'en' ? 'en' : 'sv'
+    const result = auditEngine === 'jev'
+      ? await auditWebsiteWithJev({
+          url: row.website,
+          companyName: row.company_name,
+          language,
+          category: row.category ?? null,
+          email: row.email ?? null,
+          phone: row.phone ?? null,
+          supabase,
+          scrapeProvider,
+        })
+      : await auditWebsite(
+          row.website,
+          row.company_name,
+          language,
+          supabase,
+          scrapeProvider,
+        )
     // E-commerce with a real cart and checkout is outside the product scope,
     // so it is always parked. The audit model is explicitly told not to mark
     // bookings, menus, catalogues or enquiry forms as e-commerce.
@@ -1160,16 +1175,29 @@ async function auditOne(
     // Swedish audit decisions use evidence, not a bare score: a dated or
     // generic site is parked, verified broken/no-site evidence builds, and
     // only genuinely contradictory/uncertain cases reach manual review.
-    const swedishDisposition = classifyAuditDisposition(result)
-    const automaticBuildCandidate = swedishDisposition.disposition === 'needs_site'
+    const jevConfident = auditEngine === 'jev' && result.confidence === 'high' && !result.uncertain
+    const swedishDisposition = auditEngine === 'jev'
+      ? {
+          disposition: result.isEcommerce || result.score >= AUDIT_AUTO_PARK_SCORE
+            ? 'site_good_enough'
+            : jevConfident && result.score <= 4
+              ? 'needs_site'
+              : 'manual_review',
+          reason: result.reason,
+        } as const
+      : classifyAuditDisposition(result)
+    const automaticBuildCandidate = auditEngine === 'jev'
+      ? jevConfident && !result.isEcommerce && result.score <= 4
+      : swedishDisposition.disposition === 'needs_site'
     const isEnglishAuditOnly = row.language === 'en' && englishOutreach.mode === 'audit_only'
     const reliableForAuditOutreach = result.confidence !== 'low'
-      && result.screenshotReliable
+      && (auditEngine === 'jev' ? jevConfident : result.screenshotReliable)
       && !result.unreadable
       && !result.uncertain
     const auditOutreachObservation = selectConcreteAuditObservation({ audit_details: { structural: result.structural } })
     const contactIdentity = verifyLeadEmailIdentity(row)
-    const auditOnlyEligible = isEnglishAuditOnly
+    const auditOnlyEligible = auditEngine !== 'jev'
+      && isEnglishAuditOnly
       && Boolean(row.email)
       && !automaticallyExcludedEcommerce
       && result.score >= 1
@@ -1178,10 +1206,18 @@ async function auditOne(
       && contactIdentity.ok
       && (!englishOutreach.require_reliable_audit || reliableForAuditOutreach)
     // E-commerce is outside the offer even when its visual score is low.
-    const automaticallyNeedsSite = !isEnglishAuditOnly
+    const automaticallyNeedsSite = (auditEngine === 'jev' || !isEnglishAuditOnly)
       && !automaticallyExcludedEcommerce
       && automaticBuildCandidate
-    const recommendedStatus = automaticallyExcludedEcommerce
+    const recommendedStatus = auditEngine === 'jev'
+      ? (automaticallyExcludedEcommerce
+        ? 'site_good_enough'
+        : !jevConfident
+          ? 'awaiting_audit_approval'
+          : result.score <= 4
+            ? 'needs_site'
+            : 'site_good_enough')
+      : automaticallyExcludedEcommerce
       ? 'site_good_enough'
       : row.language === 'en'
         ? (result.score >= AUDIT_AUTO_PARK_SCORE ? 'site_good_enough' : 'needs_site')
@@ -1210,17 +1246,22 @@ async function auditOne(
       audit_reason: result.reason,
       audit_details: {
         audited_at: auditedAt,
-        rubric_version: 'screenshot_consensus_v4',
+        rubric_version: auditEngine === 'jev' ? 'jev_decision_v1' : 'screenshot_consensus_v4',
+        audit_engine: auditEngine,
         weaknesses: result.weaknesses,
         structural: result.structural,
         cosmetic: result.cosmetic,
         recommended_status: automaticallyExcludedEcommerce
           ? 'site_good_enough'
           : automaticallyNeedsSite ? 'needs_site' : recommendedStatus,
-        automated_disposition: row.language === 'en'
+        automated_disposition: auditEngine === 'jev'
+          ? swedishDisposition.disposition
+          : row.language === 'en'
           ? null
           : swedishDisposition.disposition,
-        automated_disposition_reason: row.language === 'en'
+        automated_disposition_reason: auditEngine === 'jev'
+          ? swedishDisposition.reason
+          : row.language === 'en'
           ? null
           : swedishDisposition.reason,
         website_presence: result.websitePresence,
@@ -1247,7 +1288,8 @@ async function auditOne(
               operator_decided_at: auditedAt,
             }),
         evidence: {
-          rubric_version: 'screenshot_consensus_v4',
+          rubric_version: auditEngine === 'jev' ? 'jev_decision_v1' : 'screenshot_consensus_v4',
+          audit_engine: auditEngine,
           screenshot_used: Boolean(result.screenshot),
           screenshot_reliable: result.screenshotReliable,
           unreadable: result.unreadable,
@@ -1482,6 +1524,28 @@ async function parkHighQualityAudits(
     return 0
   }
   return data?.length ?? 0
+}
+
+type SiteAuditEngine = 'current' | 'jev'
+let cachedAuditEngine: SiteAuditEngine | null = null
+async function resolveSiteAuditEngine(
+  supabase: ReturnType<typeof createClient>,
+): Promise<SiteAuditEngine> {
+  const envMode = Deno.env.get('SITE_AUDIT_ENGINE')
+  if (envMode === 'jev' || envMode === 'current') return envMode
+  if (cachedAuditEngine) return cachedAuditEngine
+  const { data, error } = await supabase
+    .from('app_settings')
+    .select('value')
+    .eq('key', 'site_audit_engine')
+    .maybeSingle()
+  if (error) {
+    console.warn(`site_audit_engine read failed; keeping current audit: ${error.message}`)
+    cachedAuditEngine = 'current'
+    return cachedAuditEngine
+  }
+  cachedAuditEngine = (data?.value as any)?.engine === 'jev' ? 'jev' : 'current'
+  return cachedAuditEngine
 }
 
 // ---------------------------------------------------------------------------

@@ -134,6 +134,7 @@ export default function SiteLeads() {
   const [genMode, setGenMode] = useState<"template" | "freeform">("template");
   // Firecrawl stays the default until the self-hosted worker has been tested.
   const [scrapeProvider, setScrapeProvider] = useState<"firecrawl" | "botlio_scraper">("firecrawl");
+  const [auditEngine, setAuditEngine] = useState<"current" | "jev">("current");
 
   const loadCounts = async () => {
     const { data, error } = await (supabase as any).rpc("get_site_lead_counts", { p_language: null });
@@ -285,6 +286,36 @@ export default function SiteLeads() {
     }
   };
 
+  const loadAuditEngine = async () => {
+    const { data } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("key", "site_audit_engine")
+      .maybeSingle();
+    setAuditEngine(((data?.value as any)?.engine === "jev" ? "jev" : "current"));
+  };
+
+  const changeAuditEngine = async (engine: "current" | "jev") => {
+    setAutoBusy(true);
+    try {
+      const { error } = await supabase
+        .from("app_settings")
+        .upsert({ key: "site_audit_engine", value: { engine } as any, updated_at: new Date().toISOString() });
+      if (error) throw error;
+      setAuditEngine(engine);
+      toast({
+        title: engine === "jev" ? "Auditmotor: JEV" : "Auditmotor: Nuvarande AI",
+        description: engine === "jev"
+          ? "JEV tar automatiska beslut när den är säker. Osäkra leads går vidare till dig."
+          : "Nuvarande screenshot-baserade auditflöde används igen.",
+      });
+    } catch (err) {
+      toast({ title: "Kunde inte byta auditmotor", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setAutoBusy(false);
+    }
+  };
+
 
 
   const changeAutoState = async (state: "running" | "paused" | "stopped") => {
@@ -338,7 +369,7 @@ export default function SiteLeads() {
     }
   };
 
-  useEffect(() => { loadAutoState(); loadGenMode(); loadScrapeProvider(); }, []);
+  useEffect(() => { loadAutoState(); loadGenMode(); loadScrapeProvider(); loadAuditEngine(); }, []);
   useEffect(() => { load(); }, [page, search, statusFilter, nicheFilter, languageFilter, sortBy]);
   useEffect(() => { setPage(1); }, [search, statusFilter, nicheFilter, languageFilter, sortBy]);
 
@@ -674,6 +705,21 @@ export default function SiteLeads() {
           </Button>
           <p className="text-xs text-muted-foreground basis-full">
             Gäller nya audits och nya hemsidesbyggen. Firecrawl ändras inte och kan alltid väljas tillbaka om den egna servern behöver underhåll.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 border-t pt-3">
+          <div className="text-sm font-medium">Auditmotor</div>
+          <Button size="sm" variant={auditEngine === "current" ? "default" : "outline"}
+            disabled={autoBusy || auditEngine === "current"} onClick={() => changeAuditEngine("current")}>
+            Nuvarande AI-audit
+          </Button>
+          <Button size="sm" variant={auditEngine === "jev" ? "default" : "outline"}
+            disabled={autoBusy || auditEngine === "jev"} onClick={() => changeAuditEngine("jev")}>
+            JEV beslut
+          </Button>
+          <p className="text-xs text-muted-foreground basis-full">
+            JEV är text- och struktur-baserad: säker dålig sajt går direkt till hemsidesbygge,
+            säker bra sajt parkeras, och osäkra fall visas för dig.
           </p>
         </div>
       </Card>
