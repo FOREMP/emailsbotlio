@@ -53,6 +53,9 @@ const OUTREACH_DOMAINS_BY_LANGUAGE = {
 } as const
 const GHOST_LIST_NAME = 'Site Leads (auto)'
 const ENGLISH_AUDIT_SEQUENCE = 'English Audit Outreach'
+const STOCKHOLM_TZ = 'Europe/Stockholm'
+const SEND_WINDOW_START = 9
+const SEND_WINDOW_END = 16
 
 type EnglishOutreachMode = 'audit_only' | 'demo_sites' | 'paused'
 type EnglishOutreachSettings = {
@@ -71,6 +74,25 @@ const DEFAULT_ENGLISH_OUTREACH_SETTINGS: EnglishOutreachSettings = {
   require_reliable_audit: false,
   track_first_email: true,
   daily_first_touch_limit: 20,
+}
+
+function stockholmParts(now = new Date()) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: STOCKHOLM_TZ, hour12: false,
+    hour: '2-digit', minute: '2-digit', weekday: 'short',
+  }).formatToParts(now).map((part) => [part.type, part.value])) as any
+  return {
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+    weekday: String(parts.weekday),
+  }
+}
+
+function insideSendWindow(now = new Date()): boolean {
+  const parts = stockholmParts(now)
+  if (parts.weekday === 'Sat' || parts.weekday === 'Sun') return false
+  const minutes = parts.hour * 60 + parts.minute
+  return minutes >= SEND_WINDOW_START * 60 && minutes < SEND_WINDOW_END * 60
 }
 
 function isCanonicalDemoUrl(value?: string | null): boolean {
@@ -751,15 +773,17 @@ async function syncAutoSendLead(
   const sequence = sequences?.[0]
   if (!sequence?.id || !sequence.contact_list_id) throw new Error(`${sequenceName} is missing or has no contact list`)
 
-  const { data: triggerNodes, error: triggerError } = await supabase
+  const { data: entryNodes, error: triggerError } = await supabase
     .from('sequence_nodes')
-    .select('id')
+    .select('id, node_type, position_y')
     .eq('sequence_id', sequence.id)
-    .eq('node_type', 'trigger')
-    .limit(1)
+    .in('node_type', ['trigger', 'send_email'])
+    .order('position_y', { ascending: true })
   if (triggerError) throw new Error(`trigger lookup: ${triggerError.message}`)
-  const triggerId = triggerNodes?.[0]?.id
+  const triggerId = entryNodes?.find((node: any) => node.node_type === 'trigger')?.id
   if (!triggerId) throw new Error(`${sequenceName} has no trigger node`)
+  const firstSendId = entryNodes?.find((node: any) => node.node_type === 'send_email')?.id
+  const entryNodeId = insideSendWindow() && firstSendId ? firstSendId : triggerId
 
   const weakness = lead.audit_details?.weaknesses?.[0] ?? lead.audit_reason ?? ''
   const siteFields = {
@@ -825,7 +849,7 @@ async function syncAutoSendLead(
       sequence_id: sequence.id,
       contact_id: contactId,
       status: 'active',
-      current_node_id: triggerId,
+      current_node_id: entryNodeId,
       current_step: 0,
       next_send_at: new Date().toISOString(),
     })
@@ -835,7 +859,7 @@ async function syncAutoSendLead(
     // enrollment that has already sent mail, which would create duplicates.
     const { error: resumeError } = await supabase.from('enrollments').update({
       status: 'active',
-      current_node_id: triggerId,
+      current_node_id: entryNodeId,
       current_step: 0,
       next_send_at: new Date().toISOString(),
       last_error: null,
@@ -887,15 +911,17 @@ async function syncAuditOnlyLead(
   const sequence = sequences?.[0]
   if (!sequence?.id || !sequence.contact_list_id) throw new Error(`${ENGLISH_AUDIT_SEQUENCE} is missing or has no contact list`)
 
-  const { data: triggerNodes, error: triggerError } = await supabase
+  const { data: entryNodes, error: triggerError } = await supabase
     .from('sequence_nodes')
-    .select('id')
+    .select('id, node_type, position_y')
     .eq('sequence_id', sequence.id)
-    .eq('node_type', 'trigger')
-    .limit(1)
+    .in('node_type', ['trigger', 'send_email'])
+    .order('position_y', { ascending: true })
   if (triggerError) throw new Error(`trigger lookup: ${triggerError.message}`)
-  const triggerId = triggerNodes?.[0]?.id
+  const triggerId = entryNodes?.find((node: any) => node.node_type === 'trigger')?.id
   if (!triggerId) throw new Error(`${ENGLISH_AUDIT_SEQUENCE} has no trigger node`)
+  const firstSendId = entryNodes?.find((node: any) => node.node_type === 'send_email')?.id
+  const entryNodeId = insideSendWindow() && firstSendId ? firstSendId : triggerId
 
   // Cross-sequence safety: once an address has actually been contacted by
   // this account, do not quietly enroll it into a second sales sequence.
@@ -1010,7 +1036,7 @@ async function syncAuditOnlyLead(
       sequence_id: sequence.id,
       contact_id: contactId,
       status: 'active',
-      current_node_id: triggerId,
+      current_node_id: entryNodeId,
       current_step: 0,
       next_send_at: new Date().toISOString(),
     })
@@ -1018,7 +1044,7 @@ async function syncAuditOnlyLead(
   } else if (!existingEnrollment.last_sent_at && Number(existingEnrollment.current_step ?? 0) === 0) {
     const { error: resumeError } = await supabase.from('enrollments').update({
       status: 'active',
-      current_node_id: triggerId,
+      current_node_id: entryNodeId,
       current_step: 0,
       next_send_at: new Date().toISOString(),
       last_error: null,
