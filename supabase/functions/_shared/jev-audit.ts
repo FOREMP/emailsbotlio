@@ -213,7 +213,7 @@ async function decideWithJev(state: Record<string, unknown>): Promise<JevDecisio
       decision: {
         type: 'choice',
         instructions: 'Choose the operational audit decision. Be conservative: if the evidence is unclear, choose needs_review.',
-        choices: {
+        criteria: {
           needs_site: 'The business should get a new Botlio demo website. Evidence shows no owned functional website, a third-party profile only, a broken/empty/parked website, or a clearly weak website that blocks customer action.',
           site_good_enough: 'The business has an owned website that is functional enough, modern enough, or only has cosmetic issues.',
           needs_review: 'The evidence is incomplete, contradictory, blocked, or too uncertain for automation.',
@@ -223,20 +223,42 @@ async function decideWithJev(state: Record<string, unknown>): Promise<JevDecisio
       quality_score: {
         type: 'score',
         instructions: 'Rate the current website quality from 1 to 10 for whether it needs replacement by a simple local business website. 1 means no usable owned website. 10 means excellent and clearly not worth replacing.',
-        min: 1,
-        max: 10,
+        criteria: [
+          '1 — no usable owned website, parked domain, broken site, or third-party profile only',
+          '2 — extremely weak, empty, unreadable, or blocks basic customer action',
+          '3 — very weak and clearly worth replacing with a simple premium local-business website',
+          '4 — weak enough that a demo website is likely useful',
+          '5 — mixed or unclear; needs human review unless other evidence is strong',
+          '6 — usable but imperfect; normally review rather than auto-build',
+          '7 — good enough for customers; do not build a demo automatically',
+          '8 — modern and clear enough; only minor cosmetic improvements',
+          '9 — strong website; not a good target for this offer',
+          '10 — excellent website; definitely not worth replacing',
+        ],
       },
       has_owned_website: {
         type: 'noul',
         instructions: 'Does the evidence show a real owned business website, not only a third-party booking/profile/social page?',
+        criteria: {
+          false: 'The evidence shows no owned site, only a third-party profile/booking/social page, a parked domain, or a broken/empty site.',
+          true: 'The evidence shows a real owned business website with its own pages and customer-facing information.',
+        },
       },
       is_ecommerce: {
         type: 'noul',
         instructions: 'Is this a true e-commerce site with cart/checkout as a core function, not just booking, menu, prices, or enquiry forms?',
+        criteria: {
+          false: 'The site is not a true online shop. Booking, menus, price lists, quote forms, and enquiry forms are not e-commerce.',
+          true: 'The site has real shop/cart/checkout functionality as a core part of the business.',
+        },
       },
       third_party_only: {
         type: 'noul',
         instructions: 'Does the business appear to rely only on a third-party profile/booking page instead of its own website?',
+        criteria: {
+          false: 'The business appears to have an owned website, even if it also links to a booking platform.',
+          true: 'The evidence is mainly a third-party profile, booking page, marketplace page, or social profile rather than an owned website.',
+        },
       },
     },
   }
@@ -345,7 +367,7 @@ function readConfidence(answer: any): number {
 
 function readNoul(answer: any): number {
   if (!answer) return 0.5
-  const value = answer.value ?? answer.answer ?? answer.probability ?? answer.confidence ?? answer.score
+  const value = answer.noul ?? answer.value ?? answer.answer ?? answer.probability ?? answer.confidence ?? answer.score
   if (typeof value === 'boolean') return value ? 1 : 0
   return Number.isFinite(Number(value)) ? Number(value) : 0.5
 }
