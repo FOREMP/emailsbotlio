@@ -42,6 +42,7 @@ const corsHeaders = {
 
 const AUDIT_PER_TICK = 1    // keep Edge runtime stable; JEV mode is fast, current screenshot audit is heavy
 const AUDIT_AI_RETRY_LIMIT = 2 // avoid endless scrape+model loops on provider/runtime failures
+const STALE_AUDIT_MINUTES = 12 // Edge can terminate mid-audit; reset these rows so the queue keeps moving
 // Sites at this quality are parked automatically. The Swedish evidence-led
 // disposition below can also park cosmetic-only 5–6 results.
 const AUDIT_AUTO_PARK_SCORE = 7
@@ -244,7 +245,7 @@ Deno.serve(async (req) => {
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   const supabase = createClient(supabaseUrl, serviceKey)
 
-  const report = { audit_model_bundle: AUDIT_MODEL_BUNDLE_VERSION, reconciled: 0, auto_synced: 0, audit_outreach_synced: 0, recovered: 0, audited: 0, auto_parked: 0, auto_qualified: 0, generated: 0, capacity: 0, errors: [] as string[] }
+  const report = { audit_model_bundle: AUDIT_MODEL_BUNDLE_VERSION, reconciled: 0, auto_synced: 0, audit_outreach_synced: 0, recovered: 0, audit_recovered: 0, audited: 0, auto_parked: 0, auto_qualified: 0, generated: 0, capacity: 0, errors: [] as string[] }
 
   // Manual override from the Site Leads UI: build these leads right now,
   // ignoring the automation switch and the daily cap.
@@ -284,6 +285,7 @@ Deno.serve(async (req) => {
     // intentionally idempotent: a lead/contact can never get two enrollments.
     report.auto_synced = await syncPendingAutoSendLeads(supabase, report)
     report.recovered = await recoverStuckGenerations(supabase, supabaseUrl, serviceKey, report)
+    report.audit_recovered = await recoverStuckAudits(supabase, report)
 
 
     // Operator on/off switch (Igång / Pausad / Stoppad) from /site-leads.
@@ -449,6 +451,62 @@ Deno.serve(async (req) => {
     return json({ error: (err as Error).message, ...report }, 500)
   }
 })
+
+// ---------------------------------------------------------------------------
+// AUDIT RECOVER — an Edge Function can be terminated after a row is marked
+// auditing but before the catch block persists the retry. Reset stale rows so
+// one dead audit cannot hide the whole pending_audit queue.
+// ---------------------------------------------------------------------------
+async function recoverStuckAudits(
+  supabase: ReturnType<typeof createClient>,
+  report: { errors: string[] },
+): Promise<number> {
+  const cutoff = new Date(Date.now() - STALE_AUDIT_MINUTES * 60_000).toISOString()
+  const { data, error } = await supabase
+    .from('site_leads')
+    .select('id, audit_details')
+    .eq('status', 'auditing')
+    .lt('updated_at', cutoff)
+    .limit(25)
+
+  if (error) {
+    report.errors.push(`recover stale audits: ${error.message}`)
+    return 0
+  }
+  if (!data?.length) return 0
+
+  let recovered = 0
+  for (const row of data as any[]) {
+    const previousDetails = row.audit_details && typeof row.audit_details === 'object'
+      ? row.audit_details
+      : {}
+    const staleCount = Math.max(0, Number(previousDetails.stale_audit_recovered_count) || 0) + 1
+    const details = {
+      ...previousDetails,
+      stale_audit_recovered_count: staleCount,
+      stale_audit_recovered_at: new Date().toISOString(),
+    }
+    const recoveredStatus = staleCount >= 3 ? 'awaiting_audit_approval' : 'pending_audit'
+    const patch: Record<string, unknown> = {
+      status: recoveredStatus,
+      audit_details: details,
+      updated_at: new Date().toISOString(),
+    }
+    if (recoveredStatus === 'awaiting_audit_approval') {
+      patch.audit_score = 5
+      patch.audit_reason = 'Auditen fastnade upprepade gånger och behöver kontrolleras manuellt.'
+    }
+
+    const { error: updateError } = await supabase
+      .from('site_leads')
+      .update(patch)
+      .eq('id', row.id)
+
+    if (updateError) report.errors.push(`recover stale audit ${row.id}: ${updateError.message}`)
+    else recovered++
+  }
+  return recovered
+}
 
 // ---------------------------------------------------------------------------
 // RECOVER — site generation is intentionally serial, so one old row stuck in

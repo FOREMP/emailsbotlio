@@ -47,7 +47,10 @@ export class ScraperError extends Error {
 }
 
 const FIRECRAWL_V2 = 'https://api.firecrawl.dev/v2'
-const BOTLIO_CAPACITY_RETRIES = 1
+// The worker already waits for its browser queue. Retrying inside the Edge
+// Function can burn most of the runtime budget before the audit even reaches
+// Firecrawl/model fallback, leaving the lead stuck in status='auditing'.
+const BOTLIO_CAPACITY_RETRIES = 0
 
 export async function selectedScrapeProvider(supabase: any): Promise<ScrapeProvider> {
   const { data, error } = await supabase
