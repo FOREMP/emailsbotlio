@@ -193,7 +193,7 @@ async function pickReviewSnippets(
 ): Promise<Record<string, string[]>> {
   const routed = await callRoutedChat({
     supabase,
-    nvidiaModel: 'deepseek-ai/deepseek-v4-flash-0731',
+    nvidiaModel: 'deepseek-ai/deepseek-v3.2',
     openrouterModel: 'deepseek/deepseek-chat-v3.1',
     title: 'Botlio Review Picker Fallback',
     timeoutMs: 30_000,

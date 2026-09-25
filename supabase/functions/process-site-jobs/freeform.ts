@@ -20,9 +20,9 @@ import {
 import { callRoutedChat } from '../_shared/ai-provider.ts'
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
-export const BUILD_MODEL = 'deepseek/deepseek-v4-flash-0731'
+export const BUILD_MODEL = 'deepseek/deepseek-chat-v3.1'
 export const BUILD_FALLBACK_MODEL = 'deepseek/deepseek-chat-v3.1'
-export const NVIDIA_BUILD_MODEL = 'deepseek-ai/deepseek-v4-flash-0731'
+export const NVIDIA_BUILD_MODEL = 'deepseek-ai/deepseek-v3.2'
 export const LANG_MODEL = 'openai/gpt-4o-mini'
 const VERSION = 13
 const MAX_PAGES = 6
