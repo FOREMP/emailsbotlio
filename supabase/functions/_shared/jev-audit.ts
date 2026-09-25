@@ -31,15 +31,32 @@ type JevDecision = {
 
 const JEV_MODEL = 'typesafe/jev-1.13'
 const JEV_CONFIDENT_THRESHOLD = 0.60
+const VISION_SUMMARY_MODEL = 'google/gemini-2.5-flash-lite'
+
+type VisionSummary = {
+  available: boolean
+  model?: string
+  modernity_score?: number
+  conversion_clarity_score?: number
+  visual_trust_score?: number
+  mobile_or_layout_risk?: string
+  summary?: string
+  strengths?: string[]
+  weaknesses?: string[]
+  raw?: Record<string, unknown>
+  error?: string
+}
 
 export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult> {
   const url = normaliseUrl(ctx.url)
-  const scraped = await scrapeForAudit(url, ctx.scrapeProvider, { screenshot: false })
+  const scraped = await scrapeForAudit(url, ctx.scrapeProvider, { screenshot: true })
   const hasText = scraped.markdown.replace(/\s+/g, ' ').trim().length > 40
 
   if (!hasText && !scraped.title && !scraped.description && scraped.links.length === 0) {
     return emptyManualResult(ctx.language, url, scraped)
   }
+
+  const visionSummary = await describeScreenshotForJev(ctx, scraped.screenshot)
 
   const decision = await decideWithJev({
     business_name: ctx.companyName,
@@ -53,6 +70,7 @@ export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult
     markdown_excerpt: compactText(scraped.markdown, 7_000),
     links: scraped.links.slice(0, 40),
     provider_used: scraped.providerUsed,
+    screenshot_evidence: visionSummary,
     rules: [
       'Botlio sells simple premium presentation websites for local service businesses.',
       'True e-commerce with cart/checkout is outside the offer and should be skipped as good enough.',
@@ -60,6 +78,7 @@ export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult
       'A normal owned website that is modern enough, complete, or mainly has cosmetic issues is site_good_enough.',
       'If evidence is weak, contradictory, or too incomplete, choose needs_review.',
       'Do not punish small sites only because they have little text. Decide from usefulness for customers.',
+      'Use screenshot_evidence as visual context only. JEV still makes the final decision.',
     ].join(' '),
   })
 
@@ -88,8 +107,8 @@ export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult
     url,
     title: scraped.title,
     markdown: scraped.markdown,
-    screenshot: null,
-    screenshotReliable: false,
+    screenshot: scraped.screenshot,
+    screenshotReliable: scraped.screenshotReliable,
     screenshotQuality: scraped.screenshotQuality,
     confidence: confident ? 'high' : decision.confidence >= 0.45 ? 'medium' : 'low',
     decisionConfidence: decision.confidence,
@@ -116,7 +135,73 @@ export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult
         is_ecommerce: decision.isEcommerce,
         third_party_only: decision.isThirdPartyOnly,
       },
+      screenshot_evidence: visionSummary,
     },
+  }
+}
+
+async function describeScreenshotForJev(ctx: LeadContext, screenshot: string | null): Promise<VisionSummary> {
+  if (!screenshot) return { available: false, error: 'no screenshot returned by scraper' }
+  const apiKey = Deno.env.get('OPENROUTER_API_KEY')
+  if (!apiKey) return { available: false, error: 'OPENROUTER_API_KEY missing for screenshot summary' }
+
+  const prompt = ctx.language === 'en'
+    ? 'Look only at the screenshot of the current website. From Botlio’s perspective, judge whether the visible design looks modern, trustworthy, easy to contact/book, and worth replacing with a simple premium local-business website. Do not decide the final status. Return strict JSON only.'
+    : 'Titta bara på screenshoten av den nuvarande hemsidan. Från Botlios perspektiv, bedöm om den synliga designen känns modern, trovärdig, lätt att kontakta/boka via, och värd att ersätta med en enkel premiumhemsida för lokala företag. Ta inte slutbeslutet. Returnera bara strikt JSON.'
+
+  try {
+    const response = await fetchWithTimeout('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://botlio.app',
+        'X-Title': 'Botlio Screenshot Summary for JEV',
+      },
+      body: JSON.stringify({
+        model: VISION_SUMMARY_MODEL,
+        temperature: 0,
+        max_tokens: 450,
+        response_format: { type: 'json_object' },
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a concise website visual auditor. Return JSON with keys: modernity_score, conversion_clarity_score, visual_trust_score, summary, strengths, weaknesses, mobile_or_layout_risk. Scores are 1-10.',
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: `${prompt}\nBusiness: ${ctx.companyName}\nCategory: ${ctx.category ?? ''}` },
+              { type: 'image_url', image_url: { url: screenshot } },
+            ],
+          },
+        ],
+      }),
+    }, 20_000)
+    const raw = await response.text()
+    if (!response.ok) return { available: false, model: VISION_SUMMARY_MODEL, error: `${response.status}: ${raw.slice(0, 300)}` }
+    const data = JSON.parse(raw || '{}')
+    const text = extractAssistantText(data)
+    const parsed = parseJsonObject(text)
+    if (!parsed) return { available: false, model: VISION_SUMMARY_MODEL, error: 'vision summary returned no JSON' }
+    return {
+      available: true,
+      model: VISION_SUMMARY_MODEL,
+      modernity_score: clampScore(Number(parsed.modernity_score ?? 5)),
+      conversion_clarity_score: clampScore(Number(parsed.conversion_clarity_score ?? 5)),
+      visual_trust_score: clampScore(Number(parsed.visual_trust_score ?? 5)),
+      mobile_or_layout_risk: String(parsed.mobile_or_layout_risk ?? '').slice(0, 220),
+      summary: String(parsed.summary ?? '').slice(0, 500),
+      strengths: arrayOfStrings(parsed.strengths).slice(0, 4),
+      weaknesses: arrayOfStrings(parsed.weaknesses).slice(0, 5),
+      raw: parsed,
+    }
+  } catch (error) {
+    return {
+      available: false,
+      model: VISION_SUMMARY_MODEL,
+      error: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300),
+    }
   }
 }
 
@@ -268,6 +353,38 @@ function readNoul(answer: any): number {
 function readNumber(answer: any, fallback: number): number {
   const value = answer?.value ?? answer?.answer ?? answer?.score ?? answer?.number
   return Number.isFinite(Number(value)) ? Number(value) : fallback
+}
+
+function extractAssistantText(data: any): string {
+  const content = data?.choices?.[0]?.message?.content
+  if (Array.isArray(content)) {
+    return content.map((part: any) => part?.text ?? '').join('').trim()
+  }
+  return String(content ?? '').trim()
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | null {
+  const cleaned = text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```\s*$/i, '').trim()
+  if (!cleaned) return null
+  try {
+    const parsed = JSON.parse(cleaned)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+  } catch {
+    const match = cleaned.match(/\{[\s\S]*\}/)
+    if (!match) return null
+    try {
+      const parsed = JSON.parse(match[0])
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+    } catch {
+      return null
+    }
+  }
+}
+
+function arrayOfStrings(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item ?? '').trim()).filter(Boolean).map((item) => item.slice(0, 240))
+    : []
 }
 
 function normalizeDecision(value: string): JevDecision['decision'] {

@@ -1168,6 +1168,9 @@ async function auditOne(
           supabase,
           scrapeProvider,
         )
+    if (auditEngine === 'jev') {
+      console.log(`jev audit decision ${row.id}: ${result.decisionLabel ?? 'unknown'} confidence=${result.decisionConfidence ?? 'n/a'} score=${result.score}`)
+    }
     // E-commerce with a real cart and checkout is outside the product scope,
     // so it is always parked. The audit model is explicitly told not to mark
     // bookings, menus, catalogues or enquiry forms as e-commerce.
@@ -1531,13 +1534,13 @@ async function parkHighQualityAudits(
 }
 
 type SiteAuditEngine = 'current' | 'jev'
-let cachedAuditEngine: SiteAuditEngine | null = null
+let cachedAuditEngine: { value: SiteAuditEngine; expiresAt: number } | null = null
 async function resolveSiteAuditEngine(
   supabase: ReturnType<typeof createClient>,
 ): Promise<SiteAuditEngine> {
   const envMode = Deno.env.get('SITE_AUDIT_ENGINE')
   if (envMode === 'jev' || envMode === 'current') return envMode
-  if (cachedAuditEngine) return cachedAuditEngine
+  if (cachedAuditEngine && cachedAuditEngine.expiresAt > Date.now()) return cachedAuditEngine.value
   const { data, error } = await supabase
     .from('app_settings')
     .select('value')
@@ -1545,11 +1548,14 @@ async function resolveSiteAuditEngine(
     .maybeSingle()
   if (error) {
     console.warn(`site_audit_engine read failed; keeping current audit: ${error.message}`)
-    cachedAuditEngine = 'current'
-    return cachedAuditEngine
+    cachedAuditEngine = { value: 'current', expiresAt: Date.now() + 10_000 }
+    return cachedAuditEngine.value
   }
-  cachedAuditEngine = (data?.value as any)?.engine === 'jev' ? 'jev' : 'current'
-  return cachedAuditEngine
+  cachedAuditEngine = {
+    value: (data?.value as any)?.engine === 'jev' ? 'jev' : 'current',
+    expiresAt: Date.now() + 30_000,
+  }
+  return cachedAuditEngine.value
 }
 
 // ---------------------------------------------------------------------------
