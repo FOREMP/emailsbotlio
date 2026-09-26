@@ -14,14 +14,42 @@ const maxHttpBytes = Number(process.env.MAX_HTTP_BYTES || 1_500_000)
 const maxBrowserConcurrency = Math.max(1, Number(process.env.MAX_BROWSER_CONCURRENCY || 1))
 const maxBrowserQueue = Math.max(1, Number(process.env.MAX_BROWSER_QUEUE || 12))
 const browserQueueTimeoutMs = Math.max(5_000, Number(process.env.BROWSER_QUEUE_TIMEOUT_MS || 30_000))
+const browserJobTimeoutMs = Math.max(20_000, Number(process.env.BROWSER_JOB_TIMEOUT_MS || 55_000))
+const browserCloseTimeoutMs = Math.max(2_000, Number(process.env.BROWSER_CLOSE_TIMEOUT_MS || 5_000))
+const dnsLookupTimeoutMs = Math.max(500, Number(process.env.DNS_LOOKUP_TIMEOUT_MS || 3_000))
+// Keep the cache short. It removes repeated lookups during one page render
+// without trusting a public hostname's old address for a long time.
+const dnsCacheTtlMs = Math.max(5_000, Number(process.env.DNS_CACHE_TTL_MS || 30_000))
 let activeBrowsers = 0
 const browserWaiters = []
+const activeBrowserJobs = new Map()
+const dnsCache = new Map()
+let completedBrowserJobs = 0
+let browserJobTimeouts = 0
+let browserJobFailures = 0
+let lastBrowserSuccessAt = null
+let lastBrowserErrorAt = null
+let lastBrowserError = null
 
 if (!sharedSecret) throw new Error('SCRAPER_SHARED_SECRET is required')
 
 function json(res, status, body) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
   res.end(JSON.stringify(body))
+}
+
+async function withTimeout(promise, timeoutMs, message) {
+  let timer
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 async function readBody(req) {
@@ -71,7 +99,22 @@ async function assertSafeUrl(raw) {
     if (unsafeIp(host)) throw new Error('private addresses are blocked')
     return url
   }
-  const records = await dns.lookup(host, { all: true, verbatim: true })
+  const cached = dnsCache.get(host)
+  let records
+  if (cached && cached.expiresAt > Date.now()) {
+    records = cached.records
+  } else {
+    records = await withTimeout(
+      dns.lookup(host, { all: true, verbatim: true }),
+      dnsLookupTimeoutMs,
+      `DNS lookup timed out for ${host}`,
+    )
+    if (dnsCache.size >= 500) {
+      const oldest = dnsCache.keys().next().value
+      if (oldest) dnsCache.delete(oldest)
+    }
+    dnsCache.set(host, { records, expiresAt: Date.now() + dnsCacheTtlMs })
+  }
   if (!records.length || records.some((record) => unsafeIp(record.address))) throw new Error('host resolves to a blocked address')
   return url
 }
@@ -185,11 +228,61 @@ function releaseBrowserSlot() {
 
 async function withBrowser(fn) {
   await acquireBrowserSlot()
+  const jobId = randomUUID()
+  const startedAt = Date.now()
+  activeBrowserJobs.set(jobId, startedAt)
   let browser
-  try { browser = await chromium.launch({ headless: true }); return await fn(browser) }
+  let job
+  let launch
+  try {
+    launch = chromium.launch({ headless: true })
+    // A launch that resolves after our deadline must not leave an orphaned
+    // Chromium process behind.
+    launch.catch(() => {})
+    browser = await withTimeout(
+      launch,
+      12_000,
+      'browser launch timed out',
+    )
+    job = Promise.resolve().then(() => fn(browser))
+    const result = await withTimeout(
+      job,
+      browserJobTimeoutMs,
+      `browser job timed out after ${browserJobTimeoutMs}ms`,
+    )
+    completedBrowserJobs++
+    lastBrowserSuccessAt = new Date().toISOString()
+    return result
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    browserJobFailures++
+    if (/browser (?:job|launch) timed out/i.test(message)) browserJobTimeouts++
+    lastBrowserErrorAt = new Date().toISOString()
+    lastBrowserError = message.slice(0, 300)
+    throw error
+  }
   finally {
-    await browser?.close().catch(() => {})
+    // Closing Chromium rejects any still-running page operation. Attach a
+    // handler first so a timed-out job cannot later become an unhandled
+    // rejection after the HTTP request has already finished.
+    job?.catch(() => {})
+    let closeTimedOut = false
+    if (!browser && launch) {
+      launch.then((lateBrowser) => lateBrowser.close().catch(() => {})).catch(() => {})
+    }
+    if (browser) {
+      await withTimeout(
+        browser.close().catch(() => {}),
+        browserCloseTimeoutMs,
+        'browser close timed out',
+      ).catch(() => { closeTimedOut = true })
+    }
+    activeBrowserJobs.delete(jobId)
     releaseBrowserSlot()
+    if (closeTimedOut) {
+      console.error('Chromium did not close cleanly; restarting scraper worker')
+      setTimeout(() => process.exit(1), 25).unref()
+    }
   }
 }
 
@@ -310,7 +403,16 @@ async function browserScrape(rawUrl, screenshot) {
     })
     await page.route('**/*', async (route) => {
       const requestUrl = route.request().url()
-      try { await assertSafeUrl(requestUrl); await route.continue() } catch { await route.abort() }
+      const resourceType = route.request().resourceType()
+      if (resourceType === 'media' || resourceType === 'websocket' || resourceType === 'eventsource') {
+        return route.abort()
+      }
+      try {
+        await assertSafeUrl(requestUrl)
+        await route.continue()
+      } catch {
+        await route.abort().catch(() => {})
+      }
     })
     await page.goto(safe.toString(), { waitUntil: 'domcontentloaded', timeout: 30_000 })
     const screenshotQuality = await settlePageForScreenshot(page)
@@ -386,15 +488,31 @@ void cleanupOldScreenshots()
 createServer(async (req, res) => {
   try {
     const path = new URL(req.url || '/', 'http://localhost').pathname
-    if (req.method === 'GET' && path === '/health') return json(res, 200, {
-      ok: true,
-      service: 'botlio-scraper',
-      browser_slots: maxBrowserConcurrency,
-      browser_active: activeBrowsers,
-      browser_queue_depth: browserWaiters.length,
-      browser_queue_limit: maxBrowserQueue,
-      browser_queue_timeout_ms: browserQueueTimeoutMs,
-    })
+    if (req.method === 'GET' && path === '/health') {
+      const now = Date.now()
+      const oldestBrowserJobMs = activeBrowserJobs.size
+        ? Math.max(...[...activeBrowserJobs.values()].map((startedAt) => now - startedAt))
+        : 0
+      const stuck = oldestBrowserJobMs > browserJobTimeoutMs + browserCloseTimeoutMs
+      return json(res, stuck ? 503 : 200, {
+        ok: !stuck,
+        service: 'botlio-scraper',
+        browser_slots: maxBrowserConcurrency,
+        browser_active: activeBrowsers,
+        browser_active_jobs: activeBrowserJobs.size,
+        browser_oldest_job_ms: oldestBrowserJobMs,
+        browser_job_timeout_ms: browserJobTimeoutMs,
+        browser_queue_depth: browserWaiters.length,
+        browser_queue_limit: maxBrowserQueue,
+        browser_queue_timeout_ms: browserQueueTimeoutMs,
+        browser_jobs_completed: completedBrowserJobs,
+        browser_job_failures: browserJobFailures,
+        browser_job_timeouts: browserJobTimeouts,
+        last_browser_success_at: lastBrowserSuccessAt,
+        last_browser_error_at: lastBrowserErrorAt,
+        last_browser_error: lastBrowserError,
+      })
+    }
     const shot = path.match(/^\/v1\/screenshots\/([a-f0-9]{32})\.png$/)
     if (req.method === 'GET' && shot) {
       const image = await readFile(join(screenshotDir, `${shot[1]}.png`))
@@ -412,7 +530,22 @@ createServer(async (req, res) => {
       ? 400
       : /browser (?:capacity|queue)|busy/i.test(message)
         ? 429
+        : /browser (?:job|launch) timed out/i.test(message)
+          ? 504
         : 502
     return json(res, status, { ok: false, error: message })
   }
 }).listen(port, '0.0.0.0', () => console.log(`Botlio scraper listening on ${port}`))
+
+// A normal timeout should close Chromium and release its slot. This watchdog
+// is the final safety net for native browser hangs where even browser.close()
+// cannot make progress. Docker's restart policy then starts a clean worker.
+setInterval(() => {
+  const now = Date.now()
+  const stuck = [...activeBrowserJobs.values()].some(
+    (startedAt) => now - startedAt > browserJobTimeoutMs + browserCloseTimeoutMs + 10_000,
+  )
+  if (!stuck) return
+  console.error('Browser watchdog detected a stuck job; restarting scraper worker')
+  process.exit(1)
+}, 5_000).unref()

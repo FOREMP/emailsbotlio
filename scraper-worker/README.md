@@ -23,6 +23,25 @@ does not send email or make AI calls.
 6. Test `https://scraper.foremp.eu/health`. Then add the same random secret and
    the HTTPS URL to Supabase Edge Function secrets.
 
+## Updating the Lightsail worker
+
+The production checkout is `/opt/emailsbotlio`. After the repository change is
+available on `main`, rebuild only the website scraper with:
+
+```sh
+cd /opt/emailsbotlio
+sudo git pull --ff-only origin main
+sudo docker compose -f scraper-worker/docker-compose.yml --env-file scraper-worker/.env -p botlio-scraper up -d --build scraper
+sudo docker compose -f scraper-worker/docker-compose.yml --env-file scraper-worker/.env -p botlio-scraper ps
+curl -fsS https://scraper.foremp.eu/health
+```
+
+An idle healthy worker reports `browser_active: 0`, `browser_active_jobs: 0`,
+and HTTP 200. Browser work has a hard deadline. If Chromium does not respond or
+close, the worker exits and Docker's restart policy starts a clean process.
+The container also has a healthcheck and a larger shared-memory allocation to
+avoid Chromium stalls.
+
 ## Request security
 
 Every scrape request must include a timestamp and HMAC-SHA256 signature using

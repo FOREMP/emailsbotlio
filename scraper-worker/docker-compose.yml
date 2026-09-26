@@ -2,11 +2,26 @@ services:
   scraper:
     build: .
     restart: unless-stopped
+    init: true
     env_file: .env
+    environment:
+      BROWSER_JOB_TIMEOUT_MS: ${BROWSER_JOB_TIMEOUT_MS:-55000}
+      BROWSER_CLOSE_TIMEOUT_MS: ${BROWSER_CLOSE_TIMEOUT_MS:-5000}
+      DNS_LOOKUP_TIMEOUT_MS: ${DNS_LOOKUP_TIMEOUT_MS:-3000}
+      DNS_CACHE_TTL_MS: ${DNS_CACHE_TTL_MS:-30000}
     volumes:
       - scraper_screenshots:/var/lib/botlio-scraper/screenshots
     ports:
       - "127.0.0.1:3000:3000"
+    shm_size: 512mb
+    mem_limit: 1200m
+    cpus: 1.25
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 2
+      start_period: 30s
     security_opt:
       - no-new-privileges:true
     cap_drop:
