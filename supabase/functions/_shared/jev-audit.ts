@@ -47,6 +47,17 @@ type VisionSummary = {
   error?: string
 }
 
+type JevCalibration = {
+  rawJevScore: number
+  visualScore: number | null
+  combinedScore: number
+  scoreDisagreement: number | null
+  decisionConflict: boolean
+  visualEvidenceReliable: boolean
+  manualReviewRequired: boolean
+  routingReason: string
+}
+
 export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult> {
   const url = normaliseUrl(ctx.url)
   const scraped = await scrapeForAudit(url, ctx.scrapeProvider, { screenshot: true })
@@ -74,25 +85,31 @@ export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult
     rules: [
       'Botlio sells simple premium presentation websites for local service businesses.',
       'True e-commerce with cart/checkout is outside the offer and should be skipped as good enough.',
-      'A third-party booking/profile page only, no owned website, parked domain, empty site, broken site, or very weak site is a needs_site result.',
-      'A normal owned website that is modern enough, complete, or mainly has cosmetic issues is site_good_enough.',
+      'A third-party booking/profile page only, no owned website, parked domain, empty site, broken site, or a site where a simple premium Botlio demo would be a clear commercial improvement is a needs_site result.',
+      'A merely functional website is not automatically good enough. site_good_enough requires a modern, trustworthy and clear customer experience that a simple premium Botlio demo would not materially improve.',
+      'A dated but usable owned website can score 4-6. Do not force it into site_good_enough just because links and contact details work.',
       'If evidence is weak, contradictory, or too incomplete, choose needs_review.',
       'Do not punish small sites only because they have little text. Decide from usefulness for customers.',
-      'Use screenshot_evidence as visual context only. JEV still makes the final decision.',
+      'Use screenshot_evidence as material evidence. The final system will reconcile your structured decision with the independent visual scores.',
     ].join(' '),
   })
 
-  const confident = decision.confidence >= JEV_CONFIDENT_THRESHOLD && decision.decision !== 'needs_review'
+  const baseConfident = decision.confidence >= JEV_CONFIDENT_THRESHOLD && decision.decision !== 'needs_review'
   const isEcommerce = decision.decision === 'skip_ecommerce' || decision.isEcommerce >= 0.82
   const websitePresence = inferWebsitePresence(decision)
-  const score = normalizeScore(decision, confident)
-  const reason = buildReason(ctx.language, decision, confident)
-  const structural = buildStructuralEvidence(ctx.language, decision, confident, scraped.markdown)
-  const cosmetic = decision.decision === 'site_good_enough'
-    ? [ctx.language === 'en'
-      ? 'The existing website appears usable enough for customers.'
-      : 'Den befintliga hemsidan verkar tillräckligt användbar för kunder.']
-    : []
+  const calibration = calibrateScore(decision, visionSummary, scraped.screenshotReliable, websitePresence, isEcommerce, baseConfident)
+  const confident = baseConfident && !calibration.manualReviewRequired
+  const score = calibration.combinedScore
+  const reason = buildReason(ctx.language, decision, calibration, confident)
+  const structural = buildStructuralEvidence(ctx.language, decision, baseConfident, scraped.markdown)
+  const visualWeaknesses = visionSummary.available ? (visionSummary.weaknesses ?? []) : []
+  const cosmetic = visualWeaknesses.length
+    ? visualWeaknesses
+    : decision.decision === 'site_good_enough'
+      ? [ctx.language === 'en'
+        ? 'The existing website is usable, but its visual quality was considered separately.'
+        : 'Den befintliga hemsidan är användbar, men den visuella kvaliteten har bedömts separat.']
+      : []
 
   return {
     score,
@@ -103,7 +120,7 @@ export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult
     structural,
     cosmetic,
     unreadable: false,
-    uncertain: !confident,
+    uncertain: calibration.manualReviewRequired,
     url,
     title: scraped.title,
     markdown: scraped.markdown,
@@ -113,15 +130,29 @@ export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult
     confidence: confident ? 'high' : decision.confidence >= 0.45 ? 'medium' : 'low',
     decisionConfidence: decision.confidence,
     decisionLabel: decision.decision,
-    secondOpinionUsed: false,
-    firstScore: score,
-    secondScore: null,
-    scoreDisagreement: null,
+    auditDiagnostics: {
+      calibration_version: 'jev_visual_calibration_v2',
+      jev_raw_score: calibration.rawJevScore,
+      visual_score: calibration.visualScore,
+      combined_score: calibration.combinedScore,
+      score_disagreement: calibration.scoreDisagreement,
+      decision_conflict: calibration.decisionConflict,
+      visual_evidence_reliable: calibration.visualEvidenceReliable,
+      manual_review_required: calibration.manualReviewRequired,
+      routing_reason: calibration.routingReason,
+      vision_modernity_score: visionSummary.modernity_score ?? null,
+      vision_conversion_clarity_score: visionSummary.conversion_clarity_score ?? null,
+      vision_visual_trust_score: visionSummary.visual_trust_score ?? null,
+    },
+    secondOpinionUsed: visionSummary.available,
+    firstScore: calibration.rawJevScore,
+    secondScore: calibration.visualScore,
+    scoreDisagreement: calibration.scoreDisagreement,
     providerUsed: scraped.providerUsed,
     modelUsed: JEV_MODEL,
-    secondProviderUsed: null,
-    secondModelUsed: null,
-    secondOpinionError: null,
+    secondProviderUsed: visionSummary.available ? 'openrouter' : null,
+    secondModelUsed: visionSummary.available ? (visionSummary.model ?? VISION_SUMMARY_MODEL) : null,
+    secondOpinionError: visionSummary.available ? null : (visionSummary.error ?? 'visual evidence unavailable'),
     supplementaryPageUrl: null,
     supplementaryPageScreenshotReliable: null,
     supplementaryPageProviderUsed: null,
@@ -131,6 +162,13 @@ export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult
       jev_decision: {
         decision: decision.decision,
         confidence: decision.confidence,
+        raw_quality_score: calibration.rawJevScore,
+        visual_score: calibration.visualScore,
+        combined_score: calibration.combinedScore,
+        score_disagreement: calibration.scoreDisagreement,
+        decision_conflict: calibration.decisionConflict,
+        manual_review_required: calibration.manualReviewRequired,
+        routing_reason: calibration.routingReason,
         has_owned_website: decision.hasOwnedWebsite,
         is_ecommerce: decision.isEcommerce,
         third_party_only: decision.isThirdPartyOnly,
@@ -212,10 +250,10 @@ async function decideWithJev(state: Record<string, unknown>): Promise<JevDecisio
     questions: {
       decision: {
         type: 'choice',
-        instructions: 'Choose the operational audit decision. Be conservative: if the evidence is unclear, choose needs_review.',
+        instructions: 'Choose the operational audit decision for Botlio. Judge commercial replacement value, not only whether the current site technically works. If evidence is unclear, choose needs_review.',
         criteria: {
-          needs_site: 'The business should get a new Botlio demo website. Evidence shows no owned functional website, a third-party profile only, a broken/empty/parked website, or a clearly weak website that blocks customer action.',
-          site_good_enough: 'The business has an owned website that is functional enough, modern enough, or only has cosmetic issues.',
+          needs_site: 'A simple premium Botlio demo would be a clear material improvement. Includes no owned site, third-party-only, broken/empty/parked sites, and visibly dated or unclear sites with weak trust, hierarchy or customer action.',
+          site_good_enough: 'The owned website is already modern, trustworthy and clear enough that a simple premium Botlio demo would not be a material improvement. Functionality alone is not sufficient.',
           needs_review: 'The evidence is incomplete, contradictory, blocked, or too uncertain for automation.',
           skip_ecommerce: 'The website is a true online shop/e-commerce site with cart or checkout. This is outside Botlio’s current fixed-price offer.',
         },
@@ -425,18 +463,86 @@ function inferWebsitePresence(decision: JevDecision): WebsitePresence {
   return 'uncertain'
 }
 
-function normalizeScore(decision: JevDecision, confident: boolean): number {
-  if (!confident) return Math.min(6, Math.max(5, clampScore(decision.score)))
-  if (decision.decision === 'needs_site') return Math.min(4, clampScore(decision.score))
-  if (decision.decision === 'skip_ecommerce' || decision.decision === 'site_good_enough') return Math.max(7, clampScore(decision.score))
-  return clampScore(decision.score)
+function calibrateScore(
+  decision: JevDecision,
+  vision: VisionSummary,
+  screenshotReliable: boolean,
+  websitePresence: WebsitePresence,
+  isEcommerce: boolean,
+  baseConfident: boolean,
+): JevCalibration {
+  const rawJevScore = clampScore(decision.score)
+  const visionScores = [vision.modernity_score, vision.conversion_clarity_score, vision.visual_trust_score]
+    .filter((value): value is number => Number.isFinite(value))
+  const visualScore = vision.available && visionScores.length === 3
+    ? roundOne(visionScores[0] * 0.45 + visionScores[1] * 0.30 + visionScores[2] * 0.25)
+    : null
+  const visualEvidenceReliable = visualScore !== null && screenshotReliable
+  let combinedScore = visualScore === null
+    ? rawJevScore
+    : clampScore(rawJevScore * 0.40 + visualScore * 0.60)
+
+  // Ownership and commerce are discrete routing facts. They must not flatten
+  // every ordinary owned website into an artificial 1/7 score distribution.
+  if (!isEcommerce && baseConfident && (websitePresence === 'no_functional_website' || websitePresence === 'third_party_booking_or_profile')) {
+    combinedScore = Math.min(3, combinedScore)
+  }
+
+  const scoreDisagreement = visualScore === null ? null : roundOne(Math.abs(rawJevScore - visualScore))
+  const decisionConflict = decision.decision === 'site_good_enough'
+    ? combinedScore <= 4
+    : decision.decision === 'needs_site'
+      ? combinedScore >= 7
+      : false
+  const ownedSiteNeedsVisualEvidence = websitePresence === 'owned_site' && !visualEvidenceReliable
+  const manualReviewRequired = !isEcommerce && (
+    !baseConfident
+    || decision.decision === 'needs_review'
+    || websitePresence === 'uncertain'
+    || ownedSiteNeedsVisualEvidence
+    || (scoreDisagreement !== null && scoreDisagreement >= 3)
+    || decisionConflict
+    || (combinedScore >= 5 && combinedScore <= 6)
+  )
+
+  const routingReason = isEcommerce
+    ? 'ecommerce_outside_offer'
+    : websitePresence === 'no_functional_website' || websitePresence === 'third_party_booking_or_profile'
+      ? 'no_owned_or_third_party_site'
+      : !baseConfident
+        ? 'jev_low_confidence'
+        : !visualEvidenceReliable
+          ? 'visual_evidence_unreliable'
+          : scoreDisagreement !== null && scoreDisagreement >= 3
+            ? 'jev_visual_disagreement'
+            : decisionConflict
+              ? 'decision_score_conflict'
+              : combinedScore <= 4
+                ? 'clear_replacement_candidate'
+                : combinedScore >= 7
+                  ? 'existing_site_good_enough'
+                  : 'borderline_quality'
+
+  return {
+    rawJevScore,
+    visualScore,
+    combinedScore,
+    scoreDisagreement,
+    decisionConflict,
+    visualEvidenceReliable,
+    manualReviewRequired,
+    routingReason,
+  }
 }
 
-function buildReason(language: 'sv' | 'en', decision: JevDecision, confident: boolean): string {
+function buildReason(language: 'sv' | 'en', decision: JevDecision, calibration: JevCalibration, confident: boolean): string {
   if (!confident || decision.decision === 'needs_review') {
+    const scores = calibration.visualScore === null
+      ? `JEV ${calibration.rawJevScore}/10`
+      : `JEV ${calibration.rawJevScore}/10, visual ${calibration.visualScore}/10, combined ${calibration.combinedScore}/10`
     return language === 'en'
-      ? 'JEV could not make a confident automatic audit decision from the available website evidence.'
-      : 'JEV kunde inte ta ett säkert automatiskt audit-beslut från det tillgängliga underlaget.'
+      ? `Manual review is required after the calibrated JEV audit (${scores}; ${calibration.routingReason}).`
+      : `Manuell kontroll krävs efter den kalibrerade JEV-auditen (${scores}; ${calibration.routingReason}).`
   }
   if (decision.decision === 'skip_ecommerce') {
     return language === 'en'
@@ -449,8 +555,8 @@ function buildReason(language: 'sv' | 'en', decision: JevDecision, confident: bo
       : 'Den befintliga hemsidan verkar tillräckligt bra för att inte behöva en ny demosida.'
   }
   return language === 'en'
-    ? 'The website evidence strongly suggests this business should receive a new demo website.'
-    : 'Webbplatsunderlaget visar med hög säkerhet att företaget bör få en ny demosida.'
+    ? `The calibrated JEV audit indicates a clear replacement candidate (${calibration.combinedScore}/10).`
+    : `Den kalibrerade JEV-auditen visar en tydlig kandidat för ny hemsida (${calibration.combinedScore}/10).`
 }
 
 function buildStructuralEvidence(language: 'sv' | 'en', decision: JevDecision, confident: boolean, markdown: string): string[] {
@@ -531,6 +637,10 @@ function clamp01(value: number): number {
 function clampScore(value: number): number {
   if (!Number.isFinite(value)) return 5
   return Math.max(1, Math.min(10, Math.round(value)))
+}
+
+function roundOne(value: number): number {
+  return Math.round(value * 10) / 10
 }
 
 async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs: number): Promise<Response> {

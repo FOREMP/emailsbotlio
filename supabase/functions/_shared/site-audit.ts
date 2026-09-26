@@ -42,6 +42,8 @@ export interface AuditResult {
   decisionConfidence?: number
   /** Raw decision label when the audit engine exposes it, e.g. JEV. */
   decisionLabel?: string
+  /** Engine-specific score components kept for calibration and operator review. */
+  auditDiagnostics?: Record<string, unknown>
   /** The second vision model is used only for uncertain/borderline results. */
   secondOpinionUsed: boolean
   firstScore: number

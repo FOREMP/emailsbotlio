@@ -1277,7 +1277,9 @@ async function auditOne(
           ? 'awaiting_audit_approval'
           : result.score <= 4
             ? 'needs_site'
-            : 'site_good_enough')
+            : result.score >= AUDIT_AUTO_PARK_SCORE
+              ? 'site_good_enough'
+              : 'awaiting_audit_approval')
       : automaticallyExcludedEcommerce
       ? 'site_good_enough'
       : row.language === 'en'
@@ -1307,7 +1309,7 @@ async function auditOne(
       audit_reason: result.reason,
       audit_details: {
         audited_at: auditedAt,
-        rubric_version: auditEngine === 'jev' ? 'jev_decision_v1' : 'screenshot_consensus_v4',
+        rubric_version: auditEngine === 'jev' ? 'jev_visual_calibration_v2' : 'screenshot_consensus_v4',
         audit_engine: auditEngine,
         weaknesses: result.weaknesses,
         structural: result.structural,
@@ -1341,6 +1343,7 @@ async function auditOne(
         confidence: result.confidence,
         jev_confidence: auditEngine === 'jev' ? result.decisionConfidence ?? null : null,
         jev_decision: auditEngine === 'jev' ? result.decisionLabel ?? null : null,
+        ...(auditEngine === 'jev' ? (result.auditDiagnostics ?? {}) : {}),
         ...(nextStatus === 'awaiting_audit_approval'
           ? {}
           : {
@@ -1351,7 +1354,7 @@ async function auditOne(
               operator_decided_at: auditedAt,
             }),
         evidence: {
-          rubric_version: auditEngine === 'jev' ? 'jev_decision_v1' : 'screenshot_consensus_v4',
+          rubric_version: auditEngine === 'jev' ? 'jev_visual_calibration_v2' : 'screenshot_consensus_v4',
           audit_engine: auditEngine,
           screenshot_used: Boolean(result.screenshot),
           screenshot_reliable: result.screenshotReliable,

@@ -31,6 +31,12 @@ type LeadRow = {
     confidence?: "high" | "medium" | "low";
     jev_confidence?: number | null;
     jev_decision?: string | null;
+    jev_raw_score?: number | null;
+    visual_score?: number | null;
+    combined_score?: number | null;
+    score_disagreement?: number | null;
+    routing_reason?: string | null;
+    rubric_version?: string | null;
     operator_decision?: "build" | "site_good_enough";
     operator_decision_source?: "manual" | "automation";
     operator_decided_at?: string;
@@ -59,6 +65,18 @@ const STATUS_BADGE: Record<string, string> = {
 const APPROVAL_STATUSES = ["awaiting_audit_approval", "awaiting_approval", "generating", "failed", "approved", "auto_approved", "site_good_enough", "needs_triage", "needs_site"] as const;
 const APPROVALS_PAGE_SIZE = 20;
 const APPROVALS_REFRESH_MS = 30_000;
+
+const JEV_ROUTING_LABELS: Record<string, string> = {
+  ecommerce_outside_offer: "E-handel ligger utanför erbjudandet",
+  no_owned_or_third_party_site: "Saknar egen fungerande hemsida",
+  jev_low_confidence: "JEV hade låg säkerhet",
+  visual_evidence_unreliable: "Bildunderlaget var inte tillräckligt säkert",
+  jev_visual_disagreement: "JEV och bildbedömningen skiljer sig för mycket",
+  decision_score_conflict: "Beslut och poäng motsäger varandra",
+  clear_replacement_candidate: "Tydlig kandidat för ny hemsida",
+  existing_site_good_enough: "Befintlig hemsida bedöms tillräckligt bra",
+  borderline_quality: "Gränsfall som behöver manuell kontroll",
+};
 
 function isCanonicalDemoUrl(value?: string | null): boolean {
   if (!value) return false;
@@ -675,6 +693,11 @@ export default function SiteApprovals() {
                     <Badge variant="outline" className="ml-1 text-[10px]">manuell granskning vald</Badge>
                   )}
                   <Badge variant="outline">{(row.language ?? "sv").toUpperCase()}</Badge>
+                  {row.audit_details?.audit_engine === "jev" && (
+                    <Badge className="border-violet-300 bg-violet-100 text-violet-800 hover:bg-violet-100">
+                      JEV-audit
+                    </Badge>
+                  )}
                   {row.template_family && <Badge variant="outline" title="Vald modern mallfamilj">{row.template_family}{row.template_variant ? ` · ${row.template_variant}` : ""}</Badge>}
                   {row.audit_score != null && (
                     <>
@@ -744,11 +767,24 @@ export default function SiteApprovals() {
                   </div>
                 )}
                 {row.audit_details?.audit_engine === "jev" && (
-                  <div className="mt-2 text-xs text-muted-foreground">
-                    JEV: {row.audit_details.jev_decision ?? "okänt beslut"}
-                    {typeof row.audit_details.jev_confidence === "number"
-                      ? ` · ${Math.round(row.audit_details.jev_confidence * 100)}% säker`
-                      : ""}
+                  <div className="mt-2 rounded border border-violet-200 bg-violet-50 p-2 text-xs text-violet-950">
+                    <div className="font-medium">
+                      JEV: {row.audit_details.jev_decision ?? "okänt beslut"}
+                      {typeof row.audit_details.jev_confidence === "number"
+                        ? ` · ${Math.round(row.audit_details.jev_confidence * 100)}% säker`
+                        : ""}
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-violet-800">
+                      {typeof row.audit_details.jev_raw_score === "number" && <span>JEV-poäng {row.audit_details.jev_raw_score}/10</span>}
+                      {typeof row.audit_details.visual_score === "number" && <span>Bildpoäng {row.audit_details.visual_score}/10</span>}
+                      {typeof row.audit_details.combined_score === "number" && <span>Slutpoäng {row.audit_details.combined_score}/10</span>}
+                      {typeof row.audit_details.score_disagreement === "number" && <span>Skillnad {row.audit_details.score_disagreement}</span>}
+                    </div>
+                    {row.audit_details.routing_reason && (
+                      <div className="mt-1 text-violet-700">
+                        Orsak: {JEV_ROUTING_LABELS[row.audit_details.routing_reason] ?? row.audit_details.routing_reason}
+                      </div>
+                    )}
                   </div>
                 )}
                 {row.audit_details?.weaknesses?.length && (
