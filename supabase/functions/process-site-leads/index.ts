@@ -400,7 +400,11 @@ Deno.serve(async (req) => {
       en: Math.max(0, dailyCaps.en - usedToday.en),
     }
     const capacity = languageCapacity.sv + languageCapacity.en
-    report.capacity = capacity
+    const { data: buildRow } = await supabase
+      .from('app_settings').select('value').eq('key', 'site_build_state').maybeSingle()
+    const buildStopped = (buildRow as any)?.value?.state === 'stopped'
+    report.capacity = buildStopped ? 0 : capacity
+    if (buildStopped) report.errors.push('skip generate: website building stopped by operator')
 
     if (capacity > 0) {
       // Bounded-concurrency pipeline: keep up to MAX_CONCURRENT_GEN leads
