@@ -406,7 +406,7 @@ Deno.serve(async (req) => {
     report.capacity = buildStopped ? 0 : capacity
     if (buildStopped) report.errors.push('skip generate: website building stopped by operator')
 
-    if (capacity > 0) {
+    if (!buildStopped && capacity > 0) {
       // Bounded-concurrency pipeline: keep up to MAX_CONCURRENT_GEN leads
       // mid-flight so the daily quota can actually be reached, instead of the
       // old strictly-serial gate where one lead blocked the whole queue.
