@@ -57,7 +57,7 @@ const GHOST_LIST_NAME = 'Site Leads (auto)'
 const ENGLISH_AUDIT_SEQUENCE = 'English Audit Outreach'
 // Bump this when the shared audit model changes so Supabase rebuilds the
 // function bundle instead of continuing to serve an older _shared/site-audit.ts.
-const AUDIT_MODEL_BUNDLE_VERSION = 'audit-jev-selectable-2026-09-24'
+const AUDIT_MODEL_BUNDLE_VERSION = 'audit-jev-operator-calibration-v3-2026-09-27'
 const STOCKHOLM_TZ = 'Europe/Stockholm'
 const SEND_WINDOW_START = 9
 const SEND_WINDOW_END = 16
@@ -79,6 +79,21 @@ const DEFAULT_ENGLISH_OUTREACH_SETTINGS: EnglishOutreachSettings = {
   require_reliable_audit: false,
   track_first_email: true,
   daily_first_touch_limit: 20,
+}
+
+const BEAUTY_CATEGORY_PATTERN = /\b(salong|salon|h[aå]r\s?salong|h[aå]rv[aå]rd|fris[oö]r|hair\s?dresser|hair\s?salon|barber|beauty|sk[oö]nhet|kosmetik|cosmetic|esthetic|aesthetic|nagel|nail|lash|lashes|bryn|brow|spa|wellness|massage|hudv[aå]rd|skin\s?care|klinik|clinic|terapeut|therap(?:y|ist)|fysioterapi|physio|tandl[aä]kare|dentist)\b/i
+const OUTSIDE_SIMPLE_WEBSITE_OFFER_PATTERN = /\b(butik|shop|store|retail|grossist|wholesale|hotell?|hotel|kyrka|church|park|utbildning|education|skola|school|hemsjukv[aå]rd|home\s?health(?:care)?|fastighetsm[aä]klare|estate\s?agent|realtor)\b/i
+
+function normalizedLeadCategory(category?: string | null): string {
+  return String(category ?? '').normalize('NFKC').replace(/[_/-]+/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function isBeautyCategory(category?: string | null): boolean {
+  return BEAUTY_CATEGORY_PATTERN.test(normalizedLeadCategory(category))
+}
+
+function isOutsideSimpleWebsiteOffer(category?: string | null): boolean {
+  return OUTSIDE_SIMPLE_WEBSITE_OFFER_PATTERN.test(normalizedLeadCategory(category))
 }
 
 function stockholmParts(now = new Date()) {
@@ -1233,22 +1248,48 @@ async function auditOne(
     // so it is always parked. The audit model is explicitly told not to mark
     // bookings, menus, catalogues or enquiry forms as e-commerce.
     const automaticallyExcludedEcommerce = result.isEcommerce
+    const jevDiagnostics = auditEngine === 'jev' ? (result.auditDiagnostics ?? {}) : {}
+    const categoryOutsideOffer = auditEngine === 'jev' && isOutsideSimpleWebsiteOffer(row.category)
+    const strongExistingSiteEvidence = auditEngine === 'jev'
+      && !isBeautyCategory(row.category)
+      && result.websitePresence === 'owned_site'
+      && result.screenshotReliable
+      && jevDiagnostics.visual_evidence_reliable === true
+      && Number(jevDiagnostics.visual_score ?? 0) >= 7
+      && Number(jevDiagnostics.vision_modernity_score ?? 0) >= 7
+    const automaticallyGoodEnough = automaticallyExcludedEcommerce
+      || categoryOutsideOffer
+      || strongExistingSiteEvidence
+    const calibratedRoutingReason = categoryOutsideOffer
+      ? 'category_outside_simple_website_offer'
+      : strongExistingSiteEvidence
+        ? 'strong_existing_visual_evidence'
+        : String(jevDiagnostics.routing_reason ?? result.reason)
+    const calibratedAuditReason = categoryOutsideOffer
+      ? (language === 'en'
+        ? 'The business category is outside the current simple website offer, so no demo should be built automatically.'
+        : 'Företagskategorin ligger utanför det nuvarande erbjudandet för enkla hemsidor, så ingen demo ska byggas automatiskt.')
+      : strongExistingSiteEvidence
+        ? (language === 'en'
+          ? 'Reliable visual evidence shows an owned website that is already modern and clear enough for this offer.'
+          : 'Tillförlitligt bildunderlag visar en egen hemsida som redan är tillräckligt modern och tydlig för detta erbjudande.')
+        : result.reason
     // Swedish audit decisions use evidence, not a bare score: a dated or
     // generic site is parked, verified broken/no-site evidence builds, and
     // only genuinely contradictory/uncertain cases reach manual review.
     const jevConfident = auditEngine === 'jev' && result.confidence === 'high' && !result.uncertain
     const swedishDisposition = auditEngine === 'jev'
       ? {
-          disposition: result.isEcommerce || result.score >= AUDIT_AUTO_PARK_SCORE
+          disposition: automaticallyGoodEnough || result.score >= AUDIT_AUTO_PARK_SCORE
             ? 'site_good_enough'
             : jevConfident && result.score <= 4
               ? 'needs_site'
               : 'manual_review',
-          reason: result.reason,
+          reason: calibratedAuditReason,
         } as const
       : classifyAuditDisposition(result)
     const automaticBuildCandidate = auditEngine === 'jev'
-      ? jevConfident && !result.isEcommerce && result.score <= 4
+      ? jevConfident && !automaticallyGoodEnough && result.score <= 4
       : swedishDisposition.disposition === 'needs_site'
     const isEnglishAuditOnly = row.language === 'en' && englishOutreach.mode === 'audit_only'
     const reliableForAuditOutreach = result.confidence !== 'low'
@@ -1260,7 +1301,7 @@ async function auditOne(
     const auditOnlyEligible = auditEngine !== 'jev'
       && isEnglishAuditOnly
       && Boolean(row.email)
-      && !automaticallyExcludedEcommerce
+      && !automaticallyGoodEnough
       && result.score >= 1
       && result.score <= englishOutreach.max_audit_score
       && Boolean(auditOutreachObservation)
@@ -1268,10 +1309,10 @@ async function auditOne(
       && (!englishOutreach.require_reliable_audit || reliableForAuditOutreach)
     // E-commerce is outside the offer even when its visual score is low.
     const automaticallyNeedsSite = (auditEngine === 'jev' || !isEnglishAuditOnly)
-      && !automaticallyExcludedEcommerce
+      && !automaticallyGoodEnough
       && automaticBuildCandidate
     const recommendedStatus = auditEngine === 'jev'
-      ? (automaticallyExcludedEcommerce
+      ? (automaticallyGoodEnough
         ? 'site_good_enough'
         : !jevConfident
           ? 'awaiting_audit_approval'
@@ -1280,14 +1321,14 @@ async function auditOne(
             : result.score >= AUDIT_AUTO_PARK_SCORE
               ? 'site_good_enough'
               : 'awaiting_audit_approval')
-      : automaticallyExcludedEcommerce
+      : automaticallyGoodEnough
       ? 'site_good_enough'
       : row.language === 'en'
         ? (result.score >= AUDIT_AUTO_PARK_SCORE ? 'site_good_enough' : 'needs_site')
         : swedishDisposition.disposition === 'site_good_enough'
           ? 'site_good_enough'
           : 'needs_site'
-    const nextStatus = automaticallyExcludedEcommerce
+    const nextStatus = automaticallyGoodEnough
       ? 'site_good_enough'
       : auditOnlyEligible
       ? 'awaiting_audit_approval'
@@ -1306,15 +1347,15 @@ async function auditOne(
     const { error: updateError } = await supabase.from('site_leads').update({
       status: nextStatus,
       audit_score: result.score,
-      audit_reason: result.reason,
+      audit_reason: calibratedAuditReason,
       audit_details: {
         audited_at: auditedAt,
-        rubric_version: auditEngine === 'jev' ? 'jev_visual_calibration_v2' : 'screenshot_consensus_v4',
+        rubric_version: auditEngine === 'jev' ? 'jev_operator_calibration_v3' : 'screenshot_consensus_v4',
         audit_engine: auditEngine,
         weaknesses: result.weaknesses,
         structural: result.structural,
         cosmetic: result.cosmetic,
-        recommended_status: automaticallyExcludedEcommerce
+        recommended_status: automaticallyGoodEnough
           ? 'site_good_enough'
           : automaticallyNeedsSite ? 'needs_site' : recommendedStatus,
         automated_disposition: auditEngine === 'jev'
@@ -1329,6 +1370,9 @@ async function auditOne(
           : swedishDisposition.reason,
         website_presence: result.websitePresence,
         excluded_ecommerce: automaticallyExcludedEcommerce,
+        excluded_category: categoryOutsideOffer,
+        strong_existing_site_evidence: strongExistingSiteEvidence,
+        calibrated_routing_reason: calibratedRoutingReason,
         auto_qualified_for_build: automaticallyNeedsSite,
         auto_qualified_for_audit_outreach: auditOnlyEligible,
         audit_outreach_observation: auditOutreachObservation,
@@ -1349,12 +1393,12 @@ async function auditOne(
           : {
               operator_decision: auditOnlyEligible
                 ? 'audit_outreach'
-                : automaticallyNeedsSite && !automaticallyExcludedEcommerce ? 'build' : 'site_good_enough',
+                : automaticallyNeedsSite && !automaticallyGoodEnough ? 'build' : 'site_good_enough',
               operator_decision_source: 'automation',
               operator_decided_at: auditedAt,
             }),
         evidence: {
-          rubric_version: auditEngine === 'jev' ? 'jev_visual_calibration_v2' : 'screenshot_consensus_v4',
+          rubric_version: auditEngine === 'jev' ? 'jev_operator_calibration_v3' : 'screenshot_consensus_v4',
           audit_engine: auditEngine,
           screenshot_used: Boolean(result.screenshot),
           screenshot_reliable: result.screenshotReliable,

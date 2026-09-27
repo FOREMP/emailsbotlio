@@ -86,8 +86,10 @@ export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult
       'Botlio sells simple premium presentation websites for local service businesses.',
       'True e-commerce with cart/checkout is outside the offer and should be skipped as good enough.',
       'A third-party booking/profile page only, no owned website, parked domain, empty site, broken site, or a site where a simple premium Botlio demo would be a clear commercial improvement is a needs_site result.',
-      'A merely functional website is not automatically good enough. site_good_enough requires a modern, trustworthy and clear customer experience that a simple premium Botlio demo would not materially improve.',
-      'A dated but usable owned website can score 4-6. Do not force it into site_good_enough just because links and contact details work.',
+      'Judge material customer-facing shortcomings, not personal design taste. An acceptable owned website is site_good_enough when a Botlio demo would mainly be a cosmetic restyle.',
+      'Words such as dated, basic, generic, typography, imagery, or simple navigation are weak evidence by themselves. They justify needs_site only together with a concrete customer problem such as unclear services, missing trust/contact/action, broken layout, unreadable content, or severe mobile usability.',
+      'Cookie and consent banners are temporary overlays, not website defects. Ignore them when judging quality unless the underlying page cannot be assessed at all.',
+      'A merely functional site can still need replacement, but needs_site requires at least one material failure or multiple independent concrete weaknesses. Do not use cosmetic observations alone.',
       'If evidence is weak, contradictory, or too incomplete, choose needs_review.',
       'Do not punish small sites only because they have little text. Decide from usefulness for customers.',
       'Use screenshot_evidence as material evidence. The final system will reconcile your structured decision with the independent visual scores.',
@@ -102,7 +104,9 @@ export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult
   const score = calibration.combinedScore
   const reason = buildReason(ctx.language, decision, calibration, confident)
   const structural = buildStructuralEvidence(ctx.language, decision, baseConfident, scraped.markdown)
-  const visualWeaknesses = visionSummary.available ? (visionSummary.weaknesses ?? []) : []
+  const visualWeaknesses = visionSummary.available
+    ? (visionSummary.weaknesses ?? []).filter(isMaterialVisualObservation)
+    : []
   const cosmetic = visualWeaknesses.length
     ? visualWeaknesses
     : decision.decision === 'site_good_enough'
@@ -131,7 +135,7 @@ export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult
     decisionConfidence: decision.confidence,
     decisionLabel: decision.decision,
     auditDiagnostics: {
-      calibration_version: 'jev_visual_calibration_v2',
+      calibration_version: 'jev_operator_calibration_v3',
       jev_raw_score: calibration.rawJevScore,
       visual_score: calibration.visualScore,
       combined_score: calibration.combinedScore,
@@ -184,8 +188,8 @@ async function describeScreenshotForJev(ctx: LeadContext, screenshot: string | n
   if (!apiKey) return { available: false, error: 'OPENROUTER_API_KEY missing for screenshot summary' }
 
   const prompt = ctx.language === 'en'
-    ? 'Look only at the screenshot of the current website. From Botlio’s perspective, judge whether the visible design looks modern, trustworthy, easy to contact/book, and worth replacing with a simple premium local-business website. Do not decide the final status. Return strict JSON only.'
-    : 'Titta bara på screenshoten av den nuvarande hemsidan. Från Botlios perspektiv, bedöm om den synliga designen känns modern, trovärdig, lätt att kontakta/boka via, och värd att ersätta med en enkel premiumhemsida för lokala företag. Ta inte slutbeslutet. Returnera bara strikt JSON.'
+    ? 'Look only at the screenshot of the current website. From Botlio’s perspective, judge whether customers can clearly understand the offer, trust the business, and contact, book, or request a quote. Separate material usability or trust problems from cosmetic taste. A plain, generic, or slightly dated design is not by itself a reason to replace a working site. Ignore cookie/consent banners and assess the page behind them. Do not decide the final status. Return strict JSON only.'
+    : 'Titta bara på screenshoten av den nuvarande hemsidan. Från Botlios perspektiv, bedöm om kunder tydligt kan förstå erbjudandet, känna förtroende och kontakta, boka eller begära offert. Skilj verkliga problem med användbarhet eller förtroende från kosmetisk smak. En enkel, generisk eller något daterad design är inte ensam ett skäl att ersätta en fungerande sajt. Ignorera cookie- och samtyckesrutor och bedöm sidan bakom dem. Ta inte slutbeslutet. Returnera bara strikt JSON.'
 
   try {
     const response = await fetchWithTimeout('https://openrouter.ai/api/v1/chat/completions', {
@@ -204,7 +208,7 @@ async function describeScreenshotForJev(ctx: LeadContext, screenshot: string | n
         messages: [
           {
             role: 'system',
-            content: 'You are a concise website visual auditor. Return JSON with keys: modernity_score, conversion_clarity_score, visual_trust_score, summary, strengths, weaknesses, mobile_or_layout_risk. Scores are 1-10.',
+            content: 'You are a concise website visual auditor. Material weaknesses are customer-facing failures; cosmetic preferences are not. Never list cookie or consent overlays as weaknesses. Return JSON with keys: modernity_score, conversion_clarity_score, visual_trust_score, summary, strengths, weaknesses, mobile_or_layout_risk. Scores are 1-10.',
           },
           {
             role: 'user',
@@ -250,10 +254,10 @@ async function decideWithJev(state: Record<string, unknown>): Promise<JevDecisio
     questions: {
       decision: {
         type: 'choice',
-        instructions: 'Choose the operational audit decision for Botlio. Judge commercial replacement value, not only whether the current site technically works. If evidence is unclear, choose needs_review.',
+        instructions: 'Choose the operational audit decision for Botlio. Judge material commercial replacement value, not personal design taste. Cosmetic-only improvements are site_good_enough. If evidence is unclear, choose needs_review.',
         criteria: {
-          needs_site: 'A simple premium Botlio demo would be a clear material improvement. Includes no owned site, third-party-only, broken/empty/parked sites, and visibly dated or unclear sites with weak trust, hierarchy or customer action.',
-          site_good_enough: 'The owned website is already modern, trustworthy and clear enough that a simple premium Botlio demo would not be a material improvement. Functionality alone is not sufficient.',
+          needs_site: 'A simple premium Botlio demo would solve a concrete customer-facing problem. Includes no owned site, third-party-only, broken/empty/parked sites, unreadable or severely weak mobile layout, unclear services, or missing trust/contact/customer action. Cosmetic wording such as dated, basic or generic is insufficient alone.',
+          site_good_enough: 'The owned website is usable, trustworthy and clear enough that a simple premium Botlio demo would mainly be a cosmetic restyle. It does not need to be excellent or fashionable.',
           needs_review: 'The evidence is incomplete, contradictory, blocked, or too uncertain for automation.',
           skip_ecommerce: 'The website is a true online shop/e-commerce site with cart or checkout. This is outside Botlio’s current fixed-price offer.',
         },
@@ -445,6 +449,14 @@ function arrayOfStrings(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((item) => String(item ?? '').trim()).filter(Boolean).map((item) => item.slice(0, 240))
     : []
+}
+
+function isMaterialVisualObservation(value: string): boolean {
+  const normalized = value.toLowerCase()
+  // Consent UI is temporary and was a recurring false-positive in the
+  // operator-reviewed calibration sample. It must not become sales evidence.
+  if (/cookie|cookies|consent|samtycke|kakor|gdpr/.test(normalized)) return false
+  return true
 }
 
 function normalizeDecision(value: string): JevDecision['decision'] {
