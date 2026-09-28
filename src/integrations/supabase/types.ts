@@ -1649,6 +1649,9 @@ export type Database = {
           audit_reason: string | null
           audit_score: number | null
           auto_send: boolean
+          call_note: string | null
+          call_status: string
+          called_at: string | null
           category: string | null
           company_name: string
           company_name_normalized: string
@@ -1695,6 +1698,9 @@ export type Database = {
           audit_reason: string | null
           audit_score: number | null
           auto_send: boolean
+          call_note: string | null
+          call_status: string
+          called_at: string | null
           category: string | null
           company_name: string
           company_name_normalized: string
@@ -1734,34 +1740,34 @@ export type Database = {
       }
       get_call_lead_queue: {
         Args: {
-          p_language?: string | null
+          p_language?: string
           p_limit?: number
           p_min_opens?: number
           p_offset?: number
           p_only_uncalled?: boolean
-          p_since?: string | null
+          p_since?: string
         }
         Returns: {
-          call_note: string | null
+          call_note: string
           call_status: string
-          called_at: string | null
+          called_at: string
           company_name: string
-          demo_url: string | null
-          email: string | null
+          demo_url: string
+          email: string
           has_reply: boolean
           language: string
-          last_opened_at: string | null
-          last_sent_at: string | null
-          latest_subject: string | null
+          last_opened_at: string
+          last_sent_at: string
+          latest_subject: string
           lead_id: string
           lead_status: string
           max_single_email_opens: number
           opened_email_count: number
-          phone: string | null
+          phone: string
           sent_email_count: number
           total_count: number
           total_opens: number
-          website: string | null
+          website: string
         }[]
       }
       get_lead_stock_counts: {
