@@ -22,10 +22,11 @@ import { callRoutedChat } from '../_shared/ai-provider.ts'
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 export const BUILD_MODEL = 'deepseek/deepseek-chat-v3.1'
 export const BUILD_FALLBACK_MODEL = 'deepseek/deepseek-chat-v3.1'
-// NVIDIA's hosted v3.2 endpoint was removed. V4.1 Flash is the current
-// low-active-parameter coding model in the NIM catalog, making it a better fit
-// for one bounded JSON page at a time than a large reasoning model.
-export const NVIDIA_BUILD_MODEL = 'deepseek-ai/deepseek-v4.1-flash'
+// DeepSeek V4.1 Flash is a 284B MoE model and queues badly on the shared NIM
+// free tier, so page builds kept hitting the request timeout. Nemotron 3.5
+// Lightning activates only 3B parameters per token and is tuned for structured
+// output, which keeps one bounded JSON page well inside the timeout budget.
+export const NVIDIA_BUILD_MODEL = 'nvidia/nemotron-3.5-lightning-30b-a3b'
 export const LANG_MODEL = 'openai/gpt-4o-mini'
 const VERSION = 13
 const MAX_PAGES = 6
