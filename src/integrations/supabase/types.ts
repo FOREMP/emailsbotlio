@@ -1350,6 +1350,9 @@ export type Database = {
           audit_reason: string | null
           audit_score: number | null
           auto_send: boolean
+          call_note: string | null
+          call_status: string
+          called_at: string | null
           category: string | null
           company_name: string
           company_name_normalized: string
@@ -1387,6 +1390,9 @@ export type Database = {
           audit_reason?: string | null
           audit_score?: number | null
           auto_send?: boolean
+          call_note?: string | null
+          call_status?: string
+          called_at?: string | null
           category?: string | null
           company_name: string
           company_name_normalized: string
@@ -1424,6 +1430,9 @@ export type Database = {
           audit_reason?: string | null
           audit_score?: number | null
           auto_send?: boolean
+          call_note?: string | null
+          call_status?: string
+          called_at?: string | null
           category?: string | null
           company_name?: string
           company_name_normalized?: string
@@ -1722,6 +1731,38 @@ export type Database = {
           isOneToOne: false
           isSetofReturn: true
         }
+      }
+      get_call_lead_queue: {
+        Args: {
+          p_language?: string | null
+          p_limit?: number
+          p_min_opens?: number
+          p_offset?: number
+          p_only_uncalled?: boolean
+          p_since?: string | null
+        }
+        Returns: {
+          call_note: string | null
+          call_status: string
+          called_at: string | null
+          company_name: string
+          demo_url: string | null
+          email: string | null
+          has_reply: boolean
+          language: string
+          last_opened_at: string | null
+          last_sent_at: string | null
+          latest_subject: string | null
+          lead_id: string
+          lead_status: string
+          max_single_email_opens: number
+          opened_email_count: number
+          phone: string | null
+          sent_email_count: number
+          total_count: number
+          total_opens: number
+          website: string | null
+        }[]
       }
       get_lead_stock_counts: {
         Args: { _language: string; _user_id: string }

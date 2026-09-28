@@ -4,6 +4,7 @@ import {
   LayoutDashboard, Send, Users, Mail, FileSpreadsheet, Globe, BarChart3,
   Sparkles, Target, CheckCircle2, ChevronDown, Rocket, MapPinned,
   MessageSquareText,
+  PhoneCall,
 } from "lucide-react";
 import Header from "@/components/Header";
 import SitePipelineAlert from "@/components/SitePipelineAlert";
@@ -25,6 +26,7 @@ const websiteTabs = [
   { to: "/site-outreach", label: "Demo Outreach", icon: Rocket },
   { to: "/lead-sourcing", label: "Lead sourcing", icon: MapPinned },
   { to: "/audit-outreach", label: "Audit Outreach", icon: MessageSquareText },
+  { to: "/call-leads", label: "Ringlista", icon: PhoneCall },
 
 ];
 
