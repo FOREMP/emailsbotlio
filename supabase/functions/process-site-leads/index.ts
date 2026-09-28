@@ -129,7 +129,7 @@ function isCanonicalDemoUrl(value?: string | null): boolean {
 }
 const STALE_PIPELINE_MINUTES = 180 // queued work may legitimately wait; don't fail healthy backlog
 const ORPHAN_GRACE_MINUTES = 10   // 'generating' with no generated_sites row = dead job
-const TEMPLATE_PICKER_NVIDIA_MODEL = 'deepseek-ai/deepseek-v3.2'
+const TEMPLATE_PICKER_NVIDIA_MODEL = 'deepseek-ai/deepseek-v4.1-flash'
 const TEMPLATE_PICKER_OPENROUTER_FALLBACK = 'deepseek/deepseek-chat-v3.1'
 
 // Audit-led outreach is only safe when we can connect the destination address
@@ -139,9 +139,11 @@ const TEMPLATE_PICKER_OPENROUTER_FALLBACK = 'deepseek/deepseek-chat-v3.1'
 // B, or an LLM fills a generic "dated design" claim into every first email.
 const FREE_EMAIL_DOMAINS = new Set([
   'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com',
-  'icloud.com', 'me.com', 'yahoo.com', 'yahoo.co.uk', 'aol.com', 'proton.me',
+  'hotmail.se', 'outlook.se', 'live.se', 'icloud.com', 'me.com', 'yahoo.com',
+  'yahoo.se', 'yahoo.co.uk', 'telia.com', 'telia.se', 'aol.com', 'proton.me',
   'protonmail.com', 'gmx.com', 'mail.com',
 ])
+const PLACEHOLDER_EMAIL_DOMAINS = new Set(['example.com', 'example.org', 'example.net', 'test.com'])
 const GENERIC_DOMAIN_TOKENS = new Set([
   'www', 'com', 'co', 'uk', 'se', 'net', 'org', 'ltd', 'limited', 'llp',
   'plc', 'inc', 'the', 'and', 'for', 'of', 'company', 'services', 'service',
@@ -185,17 +187,30 @@ function verifyLeadEmailIdentity(lead: any): { ok: boolean; reason?: string } {
   const email = String(lead?.email ?? '').trim().toLowerCase()
   const emailDomain = email.split('@')[1] ?? ''
   if (!email || !emailDomain) return { ok: false, reason: 'No usable email address is available.' }
+  if (PLACEHOLDER_EMAIL_DOMAINS.has(emailDomain)) {
+    return { ok: false, reason: `The address uses the placeholder domain ${emailDomain}.` }
+  }
   // A personal mailbox cannot be domain-verified, but it is not proof of a
   // mismatch either. The existing duplicate, suppression and reply safeguards
   // still apply to it.
   if (FREE_EMAIL_DOMAINS.has(emailDomain)) return { ok: true }
+
+  // A booking/profile page belongs to the platform, not the business. In
+  // that case a separate company email domain is expected and must not be
+  // rejected merely because it differs from Bokadirekt/Facebook/etc.
+  if (lead?.audit_details?.website_presence === 'third_party_booking_or_profile') return { ok: true }
 
   const websiteHost = hostnameFor(lead?.website)
   if (!websiteHost) return { ok: true }
   const emailTokens = domainTokens(emailDomain)
   const websiteTokens = domainTokens(websiteHost)
   const businessTokens = companyTokens(lead?.company_name)
-  if (emailDomain === websiteHost || overlaps(emailTokens, websiteTokens) || overlaps(emailTokens, businessTokens)) return { ok: true }
+  const emailLabel = emailDomain.split('.')[0]?.replace(/[^a-z0-9]/g, '') ?? ''
+  const compactBusiness = String(lead?.company_name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+  if (emailDomain === websiteHost
+    || overlaps(emailTokens, websiteTokens)
+    || overlaps(emailTokens, businessTokens)
+    || (emailLabel.length >= 5 && compactBusiness.includes(emailLabel))) return { ok: true }
   return { ok: false, reason: `The email domain ${emailDomain} does not match the audited website or company name.` }
 }
 
@@ -420,6 +435,7 @@ Deno.serve(async (req) => {
           .from('site_leads')
           .select('id, user_id, company_name, website, email, phone, address, category, niche, rating, review_snippets, audit_reason, audit_details, feedback, language')
           .eq('status', 'needs_site')
+          .is('generated_site_id', null)
           .not('website', 'is', null)
           .not('email', 'is', null)
           .order('audit_score', { ascending: true, nullsFirst: false })
@@ -1563,9 +1579,10 @@ async function advanceReliableLowQualityAudits(
 ): Promise<number> {
   const { data, error } = await supabase
     .from('site_leads')
-    .select('id, email, language, audit_details')
+    .select('id, email, language, audit_details, generated_site_id')
     .in('status', ['awaiting_audit_approval', 'needs_triage'])
     .lte('audit_score', 4)
+    .is('generated_site_id', null)
     .limit(100)
 
   if (error) {
@@ -1584,7 +1601,8 @@ async function advanceReliableLowQualityAudits(
     const evidence = details.evidence && typeof details.evidence === 'object'
       ? details.evidence as Record<string, any>
       : {}
-    if (details.excluded_ecommerce === true
+    if (details.outreach_sync_state === 'held'
+      || details.excluded_ecommerce === true
       || evidence.screenshot_reliable !== true
       || evidence.unreadable === true) continue
 
@@ -1721,7 +1739,7 @@ async function chooseTemplateFamilyForLead(supabase: ReturnType<typeof createCli
       // not spend a paid model call merely because the NVIDIA picker is busy.
       allowOpenRouterFallback: false,
       title: 'Botlio Template Picker Fallback',
-      timeoutMs: 25_000,
+      timeoutMs: 40_000,
       requireJsonObject: true,
       body: {
         temperature: 0,
@@ -1812,6 +1830,30 @@ async function startGeneration(
   const scrapeProvider = await selectedScrapeProvider(supabase)
   const breakers = await activePipelineBreakers(supabase, [scrapeProvider, 'openrouter', 'vercel'])
   if (breakers.length) throw new Error(`pipeline paused: ${breakers.map((row) => row.provider).join(', ')}`)
+
+  // Idempotency guard for normal queue work. A lead may be observed by two
+  // overlapping cron invocations, or its pointer may have been cleared while
+  // a successful generated_sites row still exists. Reattach the existing job
+  // instead of creating and deploying another copy of the same website.
+  const { data: existingSite } = await supabase
+    .from('generated_sites')
+    .select('id, status, demo_site_url')
+    .eq('site_lead_id', lead.id)
+    .in('status', ['pending', 'scraped', 'queued', 'processing', 'generated', 'deploying', 'live'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (existingSite) {
+    await supabase.from('site_leads').update({
+      generated_site_id: existingSite.id,
+      demo_url: existingSite.demo_site_url ?? lead.demo_url ?? null,
+      status: existingSite.status === 'live' ? 'needs_triage' : 'generating',
+      ...(existingSite.status === 'live'
+        ? { auto_send: false, feedback: 'Existing live website held for outreach review; duplicate generation prevented.' }
+        : {}),
+    }).eq('id', lead.id)
+    return
+  }
 
   // Resolve the niche up-front: it is used both on the ghost contact and on
   // the generated_sites row (previously declared after first use -> TDZ crash).

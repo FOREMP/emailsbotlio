@@ -180,7 +180,14 @@ async function request(
       // response_format field. The prompts already require strict JSON, so
       // remove it instead of turning every NVIDIA call into a 422 + fallback.
       delete requestBody.response_format
-      if (model.startsWith('deepseek-ai/')) requestBody.reasoning_effort = 'none'
+      // The V4.1 Flash hosted schema is a lean OpenAI-compatible chat
+      // endpoint and does not advertise reasoning_effort. Sending that extra
+      // parameter can turn a healthy request into a 422. Older compatible
+      // DeepSeek endpoints retain the explicit non-reasoning setting.
+      if (model.startsWith('deepseek-ai/') && model !== 'deepseek-ai/deepseek-v4.1-flash') {
+        requestBody.reasoning_effort = 'none'
+      }
+      if (model === 'deepseek-ai/deepseek-v4.1-flash') delete requestBody.seed
       if (model.startsWith('qwen/') && model !== 'qwen/qwen3.5-397b-a17b') {
         requestBody.chat_template_kwargs = { enable_thinking: false }
       }

@@ -22,7 +22,10 @@ import { callRoutedChat } from '../_shared/ai-provider.ts'
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 export const BUILD_MODEL = 'deepseek/deepseek-chat-v3.1'
 export const BUILD_FALLBACK_MODEL = 'deepseek/deepseek-chat-v3.1'
-export const NVIDIA_BUILD_MODEL = 'deepseek-ai/deepseek-v3.2'
+// NVIDIA's hosted v3.2 endpoint was removed. V4.1 Flash is the current
+// low-active-parameter coding model in the NIM catalog, making it a better fit
+// for one bounded JSON page at a time than a large reasoning model.
+export const NVIDIA_BUILD_MODEL = 'deepseek-ai/deepseek-v4.1-flash'
 export const LANG_MODEL = 'openai/gpt-4o-mini'
 const VERSION = 13
 const MAX_PAGES = 6
@@ -1770,7 +1773,7 @@ async function callBuildModelCascade(ctx: FreeformCtx, label: string, system: st
     nvidiaModel: NVIDIA_BUILD_MODEL,
     openrouterModel: isEnglish(ctx) ? BUILD_FALLBACK_MODEL : BUILD_MODEL,
     title: 'Botlio Site Content Fallback',
-    timeoutMs: 45_000,
+    timeoutMs: 60_000,
     requireJsonObject: true,
     nvidiaAttempts: 1,
     // Page generation has a safe, factual local-content fallback. Never turn

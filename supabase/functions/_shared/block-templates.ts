@@ -317,7 +317,7 @@ export function blockTemplateFamilyCatalog(): Array<{
   }))
 }
 
-export const BLOCK_TEMPLATE_CLASSIFIER_VERSION = 2
+export const BLOCK_TEMPLATE_CLASSIFIER_VERSION = 3
 
 export interface BlockTemplateFamilyDecision {
   family: BlockTemplateFamily
@@ -349,7 +349,7 @@ const FAMILY_TERMS: Array<{ family: BlockTemplateFamilyKey; terms: string[] }> =
       'restaurang', 'restaurant', 'lunchrestaurang', 'pizza restaurant',
       'italian restaurant', 'french restaurant', 'scandinavian restaurant',
       'modern british restaurant', 'bistro', 'bar', 'bar & grill', 'cocktail bar',
-      'pub', 'café', 'cafe', 'pizzeria', 'bageri', 'bakery', 'catering',
+      'pub', 'café', 'kafé', 'cafe', 'pizzeria', 'bageri', 'bakery', 'catering',
       'snabbmat', 'fast food', 'lunch', 'krog', 'diner', 'brasserie', 'trattoria',
       'kebab', 'sushi restaurant', 'thai restaurant',
     ],
@@ -369,6 +369,7 @@ const FAMILY_TERMS: Array<{ family: BlockTemplateFamilyKey; terms: string[] }> =
       'bilverkstad', 'mekaniker', 'mechanic', 'auto repair shop', 'auto shop',
       'car repair', 'bilservice', 'bilrekond', 'car detailing service', 'däckverkstad',
       'tire shop', 'tyre shop', 'billack', 'bilglas', 'motorverkstad',
+      'båtverkstad', 'marinverkstad', 'marine repair', 'boat repair shop',
     ],
   },
   {
@@ -380,6 +381,8 @@ const FAMILY_TERMS: Array<{ family: BlockTemplateFamilyKey; terms: string[] }> =
       'electrician', 'vvs', 'rörmokare', 'plumber', 'målare', 'painter',
       'markarbete', 'paving contractor', 'flooring contractor', 'mattläggare',
       'byggnadsmaterial', 'building materials supplier', 'building materials store',
+      'elinstallation', 'elinstallationstjänster', 'electrical installation service',
+      'värmeteknik', 'heating contractor', 'poolentreprenör', 'swimming pool contractor',
     ],
   },
   {
@@ -389,6 +392,7 @@ const FAMILY_TERMS: Array<{ family: BlockTemplateFamilyKey; terms: string[] }> =
       'trädgårdstjänster', 'landscaper', 'tree service', 'arborist service',
       'flytt', 'sanering', 'lås', 'ventilation', 'solskydd', 'glas', 'transport',
       'bemanning', 'städning', 'städtjänster', 'lokalvård', 'montage', 'hemtjänst',
+      'gräsklipparbutik', 'lawn mower store', 'maskinservice',
     ],
   },
 ]
@@ -415,12 +419,38 @@ export function selectBlockTemplateFamilyDecision(input: {
   businessName?: string | null
   source?: string | null
 }): BlockTemplateFamilyDecision {
+  const category = normalize(input.category)
+  const categoryMatch = matchedFamily(category)
+  if (categoryMatch) {
+    return {
+      family: categoryMatch.family,
+      confidence: .99,
+      matchedBy: 'category',
+      matchedTerm: categoryMatch.term,
+      classifierVersion: BLOCK_TEMPLATE_CLASSIFIER_VERSION,
+    }
+  }
+
+  // An imported category is the authoritative business type. If it is
+  // present but unfamiliar, do not let an old/stale niche tag or a word in
+  // the company name override it. The lower confidence deliberately hands
+  // the decision to the AI picker, with the broad service family as the safe
+  // deterministic fallback.
+  if (category) {
+    return {
+      family: BLOCK_TEMPLATE_FAMILIES.service_company_modern,
+      confidence: .68,
+      matchedBy: 'default',
+      matchedTerm: null,
+      classifierVersion: BLOCK_TEMPLATE_CLASSIFIER_VERSION,
+    }
+  }
+
   const candidates: Array<{
     value: string
     matchedBy: BlockTemplateFamilyDecision['matchedBy']
     confidence: number
   }> = [
-    { value: normalize(input.category), matchedBy: 'category', confidence: .99 },
     { value: normalize(input.niche), matchedBy: 'niche', confidence: .92 },
     { value: normalize(input.nicheLabel), matchedBy: 'niche', confidence: .9 },
     { value: normalize(input.businessName), matchedBy: 'business_name', confidence: .78 },
@@ -435,17 +465,6 @@ export function selectBlockTemplateFamilyDecision(input: {
         matchedTerm: match.term,
         classifierVersion: BLOCK_TEMPLATE_CLASSIFIER_VERSION,
       }
-    }
-  }
-
-  const category = normalize(input.category)
-  if (category) {
-    return {
-      family: BLOCK_TEMPLATE_FAMILIES.service_company_modern,
-      confidence: .68,
-      matchedBy: 'default',
-      matchedTerm: null,
-      classifierVersion: BLOCK_TEMPLATE_CLASSIFIER_VERSION,
     }
   }
 
