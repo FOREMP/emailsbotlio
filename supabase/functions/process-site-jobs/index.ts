@@ -708,6 +708,13 @@ Deno.serve(async (req) => {
     const breakers = await activePipelineBreakers(supabase)
     if (breakers.length) return json(pipelinePausedPayload(breakers), 423)
 
+    // Operator "stop website building" switch — audits keep running elsewhere.
+    const { data: buildRow } = await supabase
+      .from('app_settings').select('value').eq('key', 'site_build_state').maybeSingle()
+    if ((buildRow as any)?.value?.state === 'stopped') {
+      return json({ ok: true, skipped: 'website building stopped by operator' })
+    }
+
     const openrouterKey = Deno.env.get('OPENROUTER_API_KEY')
     if (!openrouterKey) {
       await recordPipelineFailure(supabase, {

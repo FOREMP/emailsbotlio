@@ -135,6 +135,7 @@ export default function SiteLeads() {
   // Firecrawl stays the default until the self-hosted worker has been tested.
   const [scrapeProvider, setScrapeProvider] = useState<"firecrawl" | "botlio_scraper">("firecrawl");
   const [auditEngine, setAuditEngine] = useState<"current" | "jev">("current");
+  const [buildStopped, setBuildStopped] = useState(false);
 
   const loadCounts = async () => {
     const { data, error } = await (supabase as any).rpc("get_site_lead_counts", { p_language: null });
@@ -293,6 +294,28 @@ export default function SiteLeads() {
       .eq("key", "site_audit_engine")
       .maybeSingle();
     setAuditEngine(((data?.value as any)?.engine === "jev" ? "jev" : "current"));
+    const { data: build } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("key", "site_build_state")
+      .maybeSingle();
+    setBuildStopped((build?.value as any)?.state === "stopped");
+  };
+
+  const changeBuildState = async (stopped: boolean) => {
+    setAutoBusy(true);
+    try {
+      const { error } = await supabase
+        .from("app_settings")
+        .upsert({ key: "site_build_state", value: { state: stopped ? "stopped" : "running" } as any, updated_at: new Date().toISOString() });
+      if (error) throw error;
+      setBuildStopped(stopped);
+      toast({ title: stopped ? "Hemsidesbygge stoppat" : "Hemsidesbygge igång", description: stopped ? "Audits fortsätter, inga nya hemsidor byggs." : undefined });
+    } catch (err) {
+      toast({ title: "Kunde inte ändra hemsidesbygge", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setAutoBusy(false);
+    }
   };
 
   const changeAuditEngine = async (engine: "current" | "jev") => {
@@ -709,17 +732,31 @@ export default function SiteLeads() {
         </div>
         <div className="flex flex-wrap items-center gap-2 border-t pt-3">
           <div className="text-sm font-medium">Auditmotor</div>
+          <Badge variant="outline">
+            Aktiv: {auditEngine === "jev" ? "JEV AI (typesafe/jev-1.13 + Gemini 2.5 Flash Lite bildkoll)" : "Gemini 2.5 Flash (skärmdumpsaudit)"}
+          </Badge>
           <Button size="sm" variant={auditEngine === "current" ? "default" : "outline"}
             disabled={autoBusy || auditEngine === "current"} onClick={() => changeAuditEngine("current")}>
-            Nuvarande AI-audit
+            Gemini-audit
           </Button>
           <Button size="sm" variant={auditEngine === "jev" ? "default" : "outline"}
             disabled={autoBusy || auditEngine === "jev"} onClick={() => changeAuditEngine("jev")}>
-            JEV beslut
+            JEV AI
           </Button>
           <p className="text-xs text-muted-foreground basis-full">
             JEV är text- och struktur-baserad: säker dålig sajt går direkt till hemsidesbygge,
             säker bra sajt parkeras, och osäkra fall visas för dig.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 border-t pt-3">
+          <div className="text-sm font-medium">Hemsidesbygge</div>
+          <Badge className={buildStopped ? "bg-red-500" : "bg-emerald-500"}>{buildStopped ? "Stoppat" : "Igång"}</Badge>
+          <Button size="sm" variant={buildStopped ? "outline" : "destructive"} disabled={autoBusy}
+            onClick={() => changeBuildState(!buildStopped)}>
+            {buildStopped ? "Starta hemsidesbygge" : "Stoppa hemsidesbygge"}
+          </Button>
+          <p className="text-xs text-muted-foreground basis-full">
+            Stoppar alla nya hemsidesbyggen (även köade). Audits fortsätter som vanligt.
           </p>
         </div>
       </Card>
