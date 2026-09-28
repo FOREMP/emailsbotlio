@@ -191,6 +191,17 @@ async function request(
       if (model.startsWith('qwen/') && model !== 'qwen/qwen3.5-397b-a17b') {
         requestBody.chat_template_kwargs = { enable_thinking: false }
       }
+      // Nemotron's hosted chat endpoint is a lean OpenAI-compatible schema.
+      // Reasoning/thinking flags are not advertised and turn into a 422, and
+      // the model card documents temperature 1.0 / top_p 0.95 as the
+      // supported sampling pair.
+      if (model.startsWith('nvidia/nemotron')) {
+        delete requestBody.reasoning_effort
+        delete requestBody.chat_template_kwargs
+        delete requestBody.seed
+        requestBody.temperature = 1
+        requestBody.top_p = 0.95
+      }
       // Keep current NVIDIA-hosted multimodal models on the parameter values
       // advertised by their live endpoints. Unsupported sampling or template
       // flags otherwise become a 4xx and trigger an unnecessary paid fallback.
