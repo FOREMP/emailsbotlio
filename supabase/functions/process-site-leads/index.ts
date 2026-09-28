@@ -318,13 +318,16 @@ Deno.serve(async (req) => {
     report.audit_recovered = await recoverStuckAudits(supabase, report)
 
 
-    // Operator on/off switch (Igång / Pausad / Stoppad) from /site-leads.
-    const { data: autoRow } = await supabase
+    // Load the two operator switches together. They are used at different
+    // pipeline stages but do not need separate database round trips.
+    const { data: controlRows } = await supabase
       .from('app_settings')
-      .select('value')
-      .eq('key', 'site_generation_state')
-      .maybeSingle()
-    const autoState = ((autoRow as any)?.value?.state ?? 'running') as string
+      .select('key, value')
+      .in('key', ['site_generation_state', 'site_build_state'])
+    const controlValue = (key: string) => (controlRows ?? []).find((row: any) => row.key === key)?.value
+
+    // Operator on/off switch (Igång / Pausad / Stoppad) from /site-leads.
+    const autoState = ((controlValue('site_generation_state') as any)?.state ?? 'running') as string
     if (autoState !== 'running') {
       report.errors.push(`skip audit+generate: automation is ${autoState}`)
       // Lead sourcing is a separate durable pipeline. Keep its watchdog
@@ -415,9 +418,7 @@ Deno.serve(async (req) => {
       en: Math.max(0, dailyCaps.en - usedToday.en),
     }
     const capacity = languageCapacity.sv + languageCapacity.en
-    const { data: buildRow } = await supabase
-      .from('app_settings').select('value').eq('key', 'site_build_state').maybeSingle()
-    const buildStopped = (buildRow as any)?.value?.state === 'stopped'
+    const buildStopped = (controlValue('site_build_state') as any)?.state === 'stopped'
     report.capacity = buildStopped ? 0 : capacity
     if (buildStopped) report.errors.push('skip generate: website building stopped by operator')
 

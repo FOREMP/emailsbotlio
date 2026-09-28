@@ -134,17 +134,17 @@ export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<st
   // template-changing regeneration.
   const keep = ctx.progress?.version === VERSION && familyMatches && ctx.progress?.designFingerprint === fingerprint
   const files = keep ? { ...(existingFiles ?? {}) } : {}
-  const progress = normalizeProgress(keep ? ctx.progress : null, files, ctx)
+  let progress = normalizeProgress(keep ? ctx.progress : null, files, ctx)
   progress.designFingerprint = fingerprint
   console.log(`[freeform-v${VERSION}] site=${ctx.siteId} stage=${progress.stage} category=${ctx.category || 'missing'} family=${ctx.selectedTemplateFamily || 'auto'} resumed=${keep}`)
   if (progress.stage === 'plan' || !progress.plan) {
     const plan = buildPlan(ctx)
-    return step(false, files, meta({ ...progress, stage: 'theme', plan, profile: buildProfile(ctx), factPack: buildFactPack(ctx), content: {}, rendered: [], built: [], polished: [], lastStage: 'plan' }), `v${VERSION} plan ready: ${plan.pages.map((p) => p.slug).join(', ')}`)
+    progress = meta({ ...progress, stage: 'theme', plan, profile: buildProfile(ctx), factPack: buildFactPack(ctx), content: {}, rendered: [], built: [], polished: [], lastStage: 'plan' })
   }
-  const plan = progress.plan
+  const plan = progress.plan!
   if (progress.stage === 'theme' || !files['style.css'] || files['style.css'].length < 1200) {
     files['style.css'] = buildCss(ctx, plan)
-    return step(false, files, meta({ ...progress, profile: progress.profile ?? buildProfile(ctx), factPack: progress.factPack ?? buildFactPack(ctx), stage: 'content', theme: { designNote: `Template/block renderer: ${plan.templateLabel || plan.templateFamily || 'default'}`, source: 'template-blocks', cssVersion: VERSION }, design: { designNote: `Template/block renderer: ${plan.templateLabel || plan.templateFamily || 'default'}`, source: 'template-blocks' }, lastStage: 'theme' }), `v${VERSION} theme ready`)
+    progress = meta({ ...progress, profile: progress.profile ?? buildProfile(ctx), factPack: progress.factPack ?? buildFactPack(ctx), stage: 'content', theme: { designNote: `Template/block renderer: ${plan.templateLabel || plan.templateFamily || 'default'}`, source: 'template-blocks', cssVersion: VERSION }, design: { designNote: `Template/block renderer: ${plan.templateLabel || plan.templateFamily || 'default'}`, source: 'template-blocks' }, lastStage: 'theme' })
   }
   if (progress.stage === 'content') {
     const content = cleanContentMap(progress.content)
@@ -154,9 +154,15 @@ export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<st
       content[next.slug] = got.content
       const done = plan.pages.every((p) => content[p.slug])
       const nextStage: Stage = done ? (isEnglish(ctx) ? 'render' : 'polish_content') : 'content'
-      return step(false, files, meta({ ...progress, stage: nextStage, content, lastStage: `content:${next.slug}`, lastError: got.error ?? progress.lastError, fallbacksUsed: got.source === 'fallback' ? addFallback(progress, `content:${next.slug}`) : progress.fallbacksUsed }), `${got.source} content ready for ${next.slug}${got.model ? ` via ${got.model}` : ''}`)
+      progress = meta({ ...progress, stage: nextStage, content, lastStage: `content:${next.slug}`, lastError: got.error ?? progress.lastError, fallbacksUsed: got.source === 'fallback' ? addFallback(progress, `content:${next.slug}`) : progress.fallbacksUsed })
+      // Keep at most one model call per Edge invocation. Swedish copy still
+      // receives its polish pass on the next job, while English can render now.
+      if (!done || !isEnglish(ctx)) {
+        return step(false, files, progress, `${got.source} content ready for ${next.slug}${got.model ? ` via ${got.model}` : ''}`)
+      }
+    } else {
+      progress = meta({ ...progress, stage: isEnglish(ctx) ? 'render' : 'polish_content', content, lastStage: 'content:complete' })
     }
-    return step(false, files, meta({ ...progress, stage: isEnglish(ctx) ? 'render' : 'polish_content', content, lastStage: 'content:complete' }), 'v7 content complete')
   }
   if (progress.stage === 'polish_content') {
     const content = cleanContentMap(progress.content)
@@ -164,18 +170,23 @@ export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<st
     // repair Swedish, so English sites go directly to rendering—even when an
     // older in-flight job resumes from this stage.
     if (isEnglish(ctx)) {
-      return step(false, files, meta({ ...progress, stage: 'render', content, lastStage: 'polish:skipped-en' }), 'v7 English polish skipped')
+      progress = meta({ ...progress, stage: 'render', content, lastStage: 'polish:skipped-en' })
+    } else {
+      const polished = Array.isArray(progress.polished) ? progress.polished : []
+      const next = plan.pages.find((p) => content[p.slug] && !polished.includes(p.slug))
+      if (next) {
+        const got = await polishContent(ctx, plan, next, content[next.slug])
+        content[next.slug] = repairContent(ctx, got.content)
+        const nowPolished = Array.from(new Set([...polished, next.slug]))
+        const done = plan.pages.every((p) => nowPolished.includes(p.slug))
+        progress = meta({ ...progress, stage: done ? 'render' : 'polish_content', content, polished: nowPolished, lastStage: `polish:${next.slug}`, lastError: got.error ?? progress.lastError, fallbacksUsed: got.source === 'fallback' ? addFallback(progress, `polish:${next.slug}`) : progress.fallbacksUsed })
+        if (!done) {
+          return step(false, files, progress, `${got.source} polish ready for ${next.slug}${got.model ? ` via ${got.model}` : ''}`)
+        }
+      } else {
+        progress = meta({ ...progress, stage: 'render', content, lastStage: 'polish:complete' })
+      }
     }
-    const polished = Array.isArray(progress.polished) ? progress.polished : []
-    const next = plan.pages.find((p) => content[p.slug] && !polished.includes(p.slug))
-    if (next) {
-      const got = await polishContent(ctx, plan, next, content[next.slug])
-      content[next.slug] = repairContent(ctx, got.content)
-      const nowPolished = Array.from(new Set([...polished, next.slug]))
-      const done = plan.pages.every((p) => nowPolished.includes(p.slug))
-      return step(false, files, meta({ ...progress, stage: done ? 'render' : 'polish_content', content, polished: nowPolished, lastStage: `polish:${next.slug}`, lastError: got.error ?? progress.lastError, fallbacksUsed: got.source === 'fallback' ? addFallback(progress, `polish:${next.slug}`) : progress.fallbacksUsed }), `${got.source} polish ready for ${next.slug}${got.model ? ` via ${got.model}` : ''}`)
-    }
-    return step(false, files, meta({ ...progress, stage: 'render', content, lastStage: 'polish:complete' }), 'v7 polish complete')
   }
   if (progress.stage === 'render') {
     const content = cleanContentMap(progress.content)
@@ -185,7 +196,7 @@ export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<st
       const stable = stabilizeTemplateContent(ctx, plan, p, repaired, labels)
       files[fileNameFor(p.slug)] = render(ctx, plan, p, stable)
     }
-    return step(false, files, meta({ ...progress, stage: 'quality_check', rendered: plan.pages.map((p) => p.slug), built: plan.pages.map((p) => p.slug), lastStage: 'render' }), `v${VERSION} rendered ${plan.pages.length} pages`)
+    progress = meta({ ...progress, stage: 'quality_check', rendered: plan.pages.map((p) => p.slug), built: plan.pages.map((p) => p.slug), lastStage: 'render' })
   }
   if (progress.stage === 'quality_check') {
     const checked = qualityFixFiles(files, ctx)

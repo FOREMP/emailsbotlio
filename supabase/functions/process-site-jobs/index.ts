@@ -708,10 +708,16 @@ Deno.serve(async (req) => {
     const breakers = await activePipelineBreakers(supabase)
     if (breakers.length) return json(pipelinePausedPayload(breakers), 423)
 
+    // Load both operator switches in one round trip. These values are read on
+    // every cron tick, so separate queries created avoidable Postgres work.
+    const { data: controlRows } = await supabase
+      .from('app_settings')
+      .select('key, value')
+      .in('key', ['site_build_state', 'site_generation_state'])
+    const controlValue = (key: string) => (controlRows ?? []).find((row: any) => row.key === key)?.value
+
     // Operator "stop website building" switch — audits keep running elsewhere.
-    const { data: buildRow } = await supabase
-      .from('app_settings').select('value').eq('key', 'site_build_state').maybeSingle()
-    if ((buildRow as any)?.value?.state === 'stopped') {
+    if ((controlValue('site_build_state') as any)?.state === 'stopped') {
       return json({ ok: true, skipped: 'website building stopped by operator' })
     }
 
@@ -750,12 +756,7 @@ Deno.serve(async (req) => {
 
     // 2b. Honor the operator switch from /site-leads (Pausa / Stoppa).
     if (!forceRun) {
-      const { data: stateRow } = await supabase
-        .from('app_settings')
-        .select('value')
-        .eq('key', 'site_generation_state')
-        .maybeSingle()
-      const state = ((stateRow as any)?.value?.state ?? 'running') as string
+      const state = ((controlValue('site_generation_state') as any)?.state ?? 'running') as string
       if (state !== 'running') {
         return json({ ok: true, message: `automation is ${state} — worker idle` })
       }
@@ -1012,15 +1013,6 @@ Deno.serve(async (req) => {
         progress: (site.gen_progress ?? null) as any,
       }
 
-      const heartbeat = setInterval(() => {
-        supabase.from('generated_sites')
-          .update({ updated_at: new Date().toISOString() })
-          .eq('id', generated_site_id)
-          .then(() => {}, () => {})
-      // Stale recovery waits ten minutes. A four-minute heartbeat is enough to
-      // prove liveness without rewriting the row once per minute.
-      }, 4 * 60_000)
-
       try {
         const existingFiles = (site.generated_files ?? {}) as Record<string, string>
         const step = await runFreeformStep(ffCtx, existingFiles)
@@ -1065,8 +1057,6 @@ Deno.serve(async (req) => {
         console.error('freeform error', err)
         await failOrRetry(supabase, generated_site_id, nextAttempts, msg, siteLeadId)
         return json({ ok: false, mode: 'freeform', error: msg }, 200)
-      } finally {
-        clearInterval(heartbeat)
       }
     }
 
@@ -1115,14 +1105,6 @@ Deno.serve(async (req) => {
     // Run AI work synchronously. Background waitUntil has proven unreliable for
     // this long-running job in Supabase Edge.
     const runGeneration = async () => {
-      // Heartbeat while the model is thinking, so the reaper never marks a
-      // still-running job as "worker died".
-      const heartbeat = setInterval(() => {
-        supabase.from('generated_sites')
-          .update({ updated_at: new Date().toISOString() })
-          .eq('id', generated_site_id)
-          .then(() => {}, () => {})
-      }, 4 * 60_000)
       try {
         const systemPrompt = SKIP_POLISH
           ? `${nc.systemPrompt}\n\n--- SPRÅKKRAV (skriv färdig, publicerbar copy direkt) ---\n${nc.polishSystemPrompt}`
@@ -1201,8 +1183,6 @@ Deno.serve(async (req) => {
         const msg = `Error: ${(err as Error).message}`
         console.error('generate error', err)
         await failOrRetry(supabase, generated_site_id, nextAttempts, msg, siteLeadId)
-      } finally {
-        clearInterval(heartbeat)
       }
     }
 

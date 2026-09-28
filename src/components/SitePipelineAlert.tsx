@@ -42,7 +42,10 @@ export default function SitePipelineAlert() {
       if (error) throw error
       return (data ?? []) as Breaker[]
     },
-    refetchInterval: 30_000,
+    staleTime: 60_000,
+    refetchInterval: 300_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
   })
 
   const resume = async (provider: Provider) => {

@@ -64,7 +64,10 @@ const STATUS_BADGE: Record<string, string> = {
 
 const APPROVAL_STATUSES = ["awaiting_audit_approval", "awaiting_approval", "generating", "failed", "approved", "auto_approved", "site_good_enough", "needs_triage", "needs_site"] as const;
 const APPROVALS_PAGE_SIZE = 20;
-const APPROVALS_REFRESH_MS = 30_000;
+// Actions and focus/visibility changes already refresh immediately. A slower
+// background cadence avoids repeatedly loading preview-heavy rows while the
+// operator is reading a site.
+const APPROVALS_REFRESH_MS = 120_000;
 
 const JEV_ROUTING_LABELS: Record<string, string> = {
   ecommerce_outside_offer: "E-handel ligger utanför erbjudandet",
