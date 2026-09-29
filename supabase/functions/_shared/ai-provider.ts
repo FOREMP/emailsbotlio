@@ -191,14 +191,15 @@ async function request(
       if (model.startsWith('qwen/') && model !== 'qwen/qwen3.5-397b-a17b') {
         requestBody.chat_template_kwargs = { enable_thinking: false }
       }
-      // Nemotron's hosted chat endpoint is a lean OpenAI-compatible schema.
-      // Reasoning/thinking flags are not advertised and turn into a 422, and
-      // the model card documents temperature 1.0 / top_p 0.95 as the
-      // supported sampling pair.
-      if (model.startsWith('nvidia/nemotron')) {
+      // Nemotron 3.5 Lightning exposes thinking through chat_template_kwargs.
+      // Website-page generation only needs bounded JSON, so disable thinking
+      // to avoid spending the Edge Function timeout on hidden reasoning.
+      // NVIDIA documents temperature 1.0 / top_p 0.95 for this endpoint.
+      if (model === 'nvidia/nemotron-3.5-lightning-30b-a3b') {
         delete requestBody.reasoning_effort
-        delete requestBody.chat_template_kwargs
+        delete requestBody.reasoning_budget
         delete requestBody.seed
+        requestBody.chat_template_kwargs = { enable_thinking: false }
         requestBody.temperature = 1
         requestBody.top_p = 0.95
       }
