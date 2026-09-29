@@ -99,6 +99,12 @@ export interface FreeformPageContent {
   closingTitle?: string
   closingText?: string
   source?: 'ai' | 'fallback' | 'polished'
+  /** Durable provenance for the first-pass page copy. */
+  buildSource?: 'ai' | 'fallback'
+  buildModel?: string
+  /** Swedish-only language pass provenance. */
+  polishSource?: 'ai' | 'fallback'
+  polishModel?: string
 }
 export interface FreeformProgress {
   version?: number
@@ -504,11 +510,24 @@ Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","he
     const parsed = parseJson(raw)
     const c = repairContent(ctx, cleanContent(parsed, ctx, page))
     if (!c.heroTitle || !c.heroLead) throw new Error('missing hero fields')
-    return { source: 'ai', content: { ...c, source: 'ai' }, model: got.model }
+    return {
+      source: 'ai',
+      content: { ...c, source: 'ai', buildSource: 'ai', buildModel: got.model },
+      model: got.model,
+    }
   } catch (e) {
     const error = (e as Error).message
     console.warn(`[freeform-v7] content fallback for ${page.slug}: ${error}`)
-    return { source: 'fallback', content: fallbackContent(ctx, page), error }
+    return {
+      source: 'fallback',
+      content: {
+        ...fallbackContent(ctx, page),
+        source: 'fallback',
+        buildSource: 'fallback',
+        buildModel: NVIDIA_BUILD_MODEL,
+      },
+      error,
+    }
   }
 }
 
@@ -560,11 +579,32 @@ HÅRDA REGLER:
     const parsed = parseJson(raw)
     const c = repairContent(ctx, cleanContent(parsed, ctx, page))
     if (!c.heroTitle || !c.heroLead) throw new Error('polish missing hero fields')
-    return { source: 'polished', content: { ...c, source: 'polished' }, model: LANG_MODEL }
+    return {
+      source: 'polished',
+      content: {
+        ...c,
+        source: 'polished',
+        buildSource: draft.buildSource,
+        buildModel: draft.buildModel,
+        polishSource: 'ai',
+        polishModel: `openrouter/${LANG_MODEL}`,
+      },
+      model: LANG_MODEL,
+    }
   } catch (e) {
     const error = (e as Error).message
     console.warn(`[freeform-v7] polish fallback for ${page.slug}: ${error}`)
-    return { source: 'fallback', content: repairContent(ctx, draft), error }
+    return {
+      source: 'fallback',
+      content: {
+        ...repairContent(ctx, draft),
+        buildSource: draft.buildSource,
+        buildModel: draft.buildModel,
+        polishSource: 'fallback',
+        polishModel: `openrouter/${LANG_MODEL}`,
+      },
+      error,
+    }
   }
 }
 
@@ -1614,6 +1654,10 @@ function cleanContent(v: any, ctx: FreeformCtx | null, page: FreeformPageSpec): 
     closingTitle: clean(decodeText(String(v?.closingTitle ?? ''))).slice(0, 90),
     closingText: clean(decodeText(String(v?.closingText ?? ''))).slice(0, 260),
     source: v?.source === 'fallback' ? 'fallback' : v?.source === 'polished' ? 'polished' : v?.source === 'ai' ? 'ai' : undefined,
+    buildSource: v?.buildSource === 'fallback' ? 'fallback' : v?.buildSource === 'ai' ? 'ai' : undefined,
+    buildModel: clean(String(v?.buildModel ?? '')).slice(0, 140) || undefined,
+    polishSource: v?.polishSource === 'fallback' ? 'fallback' : v?.polishSource === 'ai' ? 'ai' : undefined,
+    polishModel: clean(String(v?.polishModel ?? '')).slice(0, 140) || undefined,
   }
 }
 
@@ -1785,7 +1829,7 @@ async function callBuildModelCascade(ctx: FreeformCtx, label: string, system: st
     nvidiaModel: NVIDIA_BUILD_MODEL,
     openrouterModel: isEnglish(ctx) ? BUILD_FALLBACK_MODEL : BUILD_MODEL,
     title: 'Botlio Site Content Fallback',
-    timeoutMs: 60_000,
+    timeoutMs: 75_000,
     requireJsonObject: true,
     nvidiaAttempts: 1,
     // Page generation has a safe, factual local-content fallback. Never turn
@@ -1802,5 +1846,8 @@ async function callBuildModelCascade(ctx: FreeformCtx, label: string, system: st
   const content = routed.data?.choices?.[0]?.message?.content
   const text = Array.isArray(content) ? content.map((p: any) => p?.text || '').join('') : String(content || '')
   if (!text.trim()) throw new Error(`${label}: ${routed.model} returned empty content`)
-  return { model: `${routed.provider}/${routed.model}`, text }
+  const routedModel = routed.model.startsWith(`${routed.provider}/`)
+    ? routed.model
+    : `${routed.provider}/${routed.model}`
+  return { model: routedModel, text }
 }

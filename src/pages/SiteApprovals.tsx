@@ -49,6 +49,13 @@ type LeadRow = {
   template_family?: string | null;
   template_variant?: string | null;
   template_stage?: string | null;
+  build_summary?: {
+    totalPages: number;
+    aiPages: number;
+    fallbackPages: number;
+    models: string[];
+    polishModels: string[];
+  } | null;
 };
 
 const STATUS_BADGE: Record<string, string> = {
@@ -195,6 +202,27 @@ export default function SiteApprovals() {
           row.template_family = site?.gen_progress?.plan?.templateFamily ?? site?.template ?? null;
           row.template_variant = site?.gen_progress?.plan?.variant ?? null;
           row.template_stage = site?.gen_progress?.stage ?? null;
+          const progress = site?.gen_progress ?? {};
+          const content = progress?.content && typeof progress.content === "object" ? progress.content : {};
+          const slugs: string[] = Array.isArray(progress?.plan?.pages)
+            ? progress.plan.pages.map((page: any) => String(page?.slug ?? "")).filter(Boolean)
+            : Object.keys(content);
+          const fallbackLabels = new Set(Array.isArray(progress?.fallbacksUsed) ? progress.fallbacksUsed : []);
+          let aiPages = 0;
+          let fallbackPages = 0;
+          const models = new Set<string>();
+          const polishModels = new Set<string>();
+          for (const slug of slugs) {
+            const page: any = content[slug] ?? {};
+            const usedFallback = page.buildSource === "fallback" || fallbackLabels.has(`content:${slug}`);
+            if (usedFallback) fallbackPages += 1;
+            else if (page.buildSource === "ai" || page.buildModel) aiPages += 1;
+            if (page.buildModel) models.add(String(page.buildModel));
+            if (page.polishModel) polishModels.add(String(page.polishModel));
+          }
+          row.build_summary = slugs.length
+            ? { totalPages: slugs.length, aiPages, fallbackPages, models: [...models], polishModels: [...polishModels] }
+            : null;
         }
       }
       reconcileRows(incoming, preserveOrder);
@@ -714,6 +742,14 @@ export default function SiteApprovals() {
                   {row.phone && <span>{row.phone}</span>}
                   {row.category && <span>{row.category}</span>}
                 </div>
+                {row.build_summary && (
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    Byggd med: {row.build_summary.models.length ? row.build_summary.models.join(", ") : "modellinfo saknas"}
+                    {` · ${row.build_summary.aiPages}/${row.build_summary.totalPages} sidor AI`}
+                    {row.build_summary.fallbackPages > 0 ? ` · ${row.build_summary.fallbackPages} lokal reserv` : " · ingen lokal reserv"}
+                    {row.build_summary.polishModels.length ? ` · språkputs ${row.build_summary.polishModels.join(", ")}` : ""}
+                  </div>
+                )}
               </div>
               <div className="flex flex-wrap gap-2">
                 {row.status === "awaiting_audit_approval" && (

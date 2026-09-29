@@ -99,12 +99,16 @@ export async function callRoutedChat(args: RoutedAiArgs): Promise<RoutedAiResult
     }
 
     const model = provider === 'nvidia' ? args.nvidiaModel : args.openrouterModel
+    const startedAt = Date.now()
     try {
       if (provider === 'nvidia') await claimNvidiaSlot(args.supabase)
       const data = await request(provider, key, model, args.body, args.timeoutMs ?? 60_000, args.title)
       if (args.requireJsonObject && !hasJsonObject(data)) {
         throw new Error('model returned invalid or empty JSON content')
       }
+      console.log(
+        `[ai] ok provider=${provider} model=${model} title=${safeLogLabel(args.title)} ms=${Date.now() - startedAt}`,
+      )
       return { data, provider, model }
     } catch (error) {
       // Providers occasionally reject a request without a normal Error
@@ -125,6 +129,10 @@ export async function callRoutedChat(args: RoutedAiArgs): Promise<RoutedAiResult
   }
 
   throw new Error(`AI request failed: ${errors.join(' | ')}`)
+}
+
+function safeLogLabel(value: string | undefined): string {
+  return String(value || 'Botlio AI').replace(/[^a-z0-9:._-]+/gi, '_').slice(0, 100)
 }
 
 function hasJsonObject(data: any): boolean {

@@ -191,6 +191,7 @@ async function describeScreenshotForJev(ctx: LeadContext, screenshot: string | n
     ? 'Look only at the screenshot of the current website. From Botlio’s perspective, judge whether customers can clearly understand the offer, trust the business, and contact, book, or request a quote. Separate material usability or trust problems from cosmetic taste. A plain, generic, or slightly dated design is not by itself a reason to replace a working site. Ignore cookie/consent banners and assess the page behind them. Do not decide the final status. Return strict JSON only.'
     : 'Titta bara på screenshoten av den nuvarande hemsidan. Från Botlios perspektiv, bedöm om kunder tydligt kan förstå erbjudandet, känna förtroende och kontakta, boka eller begära offert. Skilj verkliga problem med användbarhet eller förtroende från kosmetisk smak. En enkel, generisk eller något daterad design är inte ensam ett skäl att ersätta en fungerande sajt. Ignorera cookie- och samtyckesrutor och bedöm sidan bakom dem. Ta inte slutbeslutet. Returnera bara strikt JSON.'
 
+  const startedAt = Date.now()
   try {
     const response = await fetchWithTimeout('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
@@ -226,6 +227,7 @@ async function describeScreenshotForJev(ctx: LeadContext, screenshot: string | n
     const text = extractAssistantText(data)
     const parsed = parseJsonObject(text)
     if (!parsed) return { available: false, model: VISION_SUMMARY_MODEL, error: 'vision summary returned no JSON' }
+    console.log(`[ai] ok provider=openrouter model=${VISION_SUMMARY_MODEL} title=Botlio_JEV_Vision ms=${Date.now() - startedAt}`)
     return {
       available: true,
       model: VISION_SUMMARY_MODEL,
@@ -320,6 +322,7 @@ async function callOpenRouterDecisions(payload: Record<string, unknown>): Promis
   ]
 
   let lastError = ''
+  const startedAt = Date.now()
   for (const attempt of attempts) {
     let response: Response
     try {
@@ -341,7 +344,9 @@ async function callOpenRouterDecisions(payload: Record<string, unknown>): Promis
     const text = await response.text()
     if (response.ok) {
       try {
-        return JSON.parse(text || '{}')
+        const parsed = JSON.parse(text || '{}')
+        console.log(`[ai] ok provider=openrouter model=${JEV_MODEL} title=Botlio_JEV_Audit ms=${Date.now() - startedAt}`)
+        return parsed
       } catch {
         throw new Error(`JEV returned invalid JSON: ${text.slice(0, 300)}`)
       }
