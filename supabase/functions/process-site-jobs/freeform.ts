@@ -22,11 +22,10 @@ import { callRoutedChat } from '../_shared/ai-provider.ts'
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 export const BUILD_MODEL = 'deepseek/deepseek-chat-v3.1'
 export const BUILD_FALLBACK_MODEL = 'deepseek/deepseek-chat-v3.1'
-// DeepSeek V4.1 Flash is a 284B MoE model and queues badly on the shared NIM
-// free tier, so page builds kept hitting the request timeout. Nemotron 3.5
-// Lightning activates only 3B parameters per token and is tuned for structured
-// output, which keeps one bounded JSON page well inside the timeout budget.
-export const NVIDIA_BUILD_MODEL = 'nvidia/nemotron-3.5-lightning-30b-a3b'
+// DeepSeek V4.1 Flash and Nemotron 3.5 Lightning repeatedly exhausted the
+// hosted request timeout in production. Gemma 4 is the current multilingual
+// route for bounded, structured website copy in both Swedish and English.
+export const NVIDIA_BUILD_MODEL = 'google/gemma-4-31b-it'
 export const LANG_MODEL = 'openai/gpt-4o-mini'
 const VERSION = 13
 const MAX_PAGES = 6
@@ -173,7 +172,7 @@ export async function runFreeformStep(ctx: FreeformCtx, existingFiles: Record<st
   }
   if (progress.stage === 'polish_content') {
     const content = cleanContentMap(progress.content)
-    // DeepSeek produces strong English copy. The paid GPT pass exists only to
+    // The primary NVIDIA model produces the English copy directly. The paid GPT pass exists only to
     // repair Swedish, so English sites go directly to rendering—even when an
     // older in-flight job resumes from this stage.
     if (isEnglish(ctx)) {
@@ -504,7 +503,7 @@ Schema: {"metaTitle":"","metaDescription":"","heroEyebrow":"","heroTitle":"","he
   ].filter(Boolean).join('\n')
   try {
     // 2,400 tokens comfortably covers this one-page JSON schema while keeping
-    // DeepSeek V4 Flash well below the long-output timeout seen at 3,000.
+    // hosted-model latency bounded below the long-output timeout seen at 3,000.
     const got = await callBuildModelCascade(ctx, `freeform-v7-content:${page.slug}`, system, user, 2400)
     const raw = got.text
     const parsed = parseJson(raw)
@@ -569,7 +568,7 @@ HÅRDA REGLER:
     `Faktapaket: ${JSON.stringify(pack)}`,
     `Alla sidor: ${plan.pages.map((p) => p.slug + ':' + p.title).join(', ')}`,
     ctx.regenFeedback ? `Feedback: ${ctx.regenFeedback}` : '',
-    'Utkast från DeepSeek:',
+    'Första utkast:',
     JSON.stringify(draft),
   ].filter(Boolean).join('\n')
   try {

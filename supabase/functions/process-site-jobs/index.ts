@@ -1095,7 +1095,7 @@ Deno.serve(async (req) => {
       'Returnera BARA JSON-objektet med innehållsplanen, inte HTML.',
     ].filter(Boolean).join('\n')
 
-    // The NVIDIA DeepSeek builder is text-only. Attaching the screenshot here
+    // The NVIDIA website builder is text-only. Attaching the screenshot here
     // made an otherwise healthy NVIDIA request fail and unnecessarily fall
     // through to the vision-capable OpenRouter model. The scraped page text,
     // palette and image pool already carry the information this planner needs.
@@ -1111,7 +1111,7 @@ Deno.serve(async (req) => {
           : nc.systemPrompt
         const routed = await callRoutedChat({
           supabase,
-          nvidiaModel: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+          nvidiaModel: 'google/gemma-4-31b-it',
           openrouterModel: chosenModel,
           title: 'Botlio Legacy Site Generator Fallback',
           timeoutMs: 75_000,

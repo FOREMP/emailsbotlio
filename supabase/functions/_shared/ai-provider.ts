@@ -146,7 +146,19 @@ function hasJsonObject(data: any): boolean {
     const parsed = JSON.parse(cleaned)
     return Boolean(parsed) && typeof parsed === 'object' && !Array.isArray(parsed)
   } catch {
-    return false
+    // Some otherwise valid NVIDIA chat models wrap the final answer in
+    // channel/thought markers even when reasoning is disabled. Accept the
+    // bounded JSON object inside that wrapper; the caller performs the same
+    // extraction before it cleans and validates the page schema.
+    const start = cleaned.indexOf('{')
+    const end = cleaned.lastIndexOf('}')
+    if (start < 0 || end <= start) return false
+    try {
+      const parsed = JSON.parse(cleaned.slice(start, end + 1))
+      return Boolean(parsed) && typeof parsed === 'object' && !Array.isArray(parsed)
+    } catch {
+      return false
+    }
   }
 }
 
@@ -210,6 +222,18 @@ async function request(
         requestBody.chat_template_kwargs = { enable_thinking: false }
         requestBody.temperature = 1
         requestBody.top_p = 0.95
+      }
+      // Gemma 4 is the multilingual website-copy route. Keep its hosted NIM
+      // in non-thinking chat mode and use the sampling values advertised by
+      // NVIDIA's endpoint example. The prompt already constrains the output
+      // to a bounded JSON schema.
+      if (model === 'google/gemma-4-31b-it') {
+        delete requestBody.reasoning_effort
+        delete requestBody.reasoning_budget
+        delete requestBody.chat_template_kwargs
+        requestBody.temperature = 0.5
+        requestBody.top_p = 1
+        requestBody.seed = 0
       }
       // Keep current NVIDIA-hosted multimodal models on the parameter values
       // advertised by their live endpoints. Unsupported sampling or template
