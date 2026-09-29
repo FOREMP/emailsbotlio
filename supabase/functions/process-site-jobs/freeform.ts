@@ -22,10 +22,10 @@ import { callRoutedChat } from '../_shared/ai-provider.ts'
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 export const BUILD_MODEL = 'deepseek/deepseek-chat-v3.1'
 export const BUILD_FALLBACK_MODEL = 'deepseek/deepseek-chat-v3.1'
-// DeepSeek V4.1 Flash and Nemotron 3.5 Lightning repeatedly exhausted the
-// hosted request timeout in production. Gemma 4 is the current multilingual
-// route for bounded, structured website copy in both Swedish and English.
-export const NVIDIA_BUILD_MODEL = 'google/gemma-4-31b-it'
+// DeepSeek V4.1 Flash, Nemotron 3.5 Lightning and Gemma 4 repeatedly exhausted
+// the hosted request timeout in production. Mistral-Nemotron is the current
+// instruction-focused route for structured Swedish and English website copy.
+export const NVIDIA_BUILD_MODEL = 'mistralai/mistral-nemotron'
 export const LANG_MODEL = 'openai/gpt-4o-mini'
 const VERSION = 13
 const MAX_PAGES = 6

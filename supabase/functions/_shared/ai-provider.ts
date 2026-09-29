@@ -235,6 +235,17 @@ async function request(
         requestBody.top_p = 1
         requestBody.seed = 0
       }
+      // Mistral-Nemotron's hosted endpoint advertises conventional sampling
+      // rather than reasoning/template controls. Matching NVIDIA's published
+      // request shape avoids rejected fields and keeps generation latency low.
+      if (model === 'mistralai/mistral-nemotron') {
+        delete requestBody.reasoning_effort
+        delete requestBody.reasoning_budget
+        delete requestBody.chat_template_kwargs
+        delete requestBody.seed
+        requestBody.temperature = 0.6
+        requestBody.top_p = 0.7
+      }
       // Keep current NVIDIA-hosted multimodal models on the parameter values
       // advertised by their live endpoints. Unsupported sampling or template
       // flags otherwise become a 4xx and trigger an unnecessary paid fallback.
