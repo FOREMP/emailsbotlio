@@ -246,6 +246,15 @@ async function request(
         requestBody.temperature = 0.6
         requestBody.top_p = 0.7
       }
+      // GLM-5.3 Flash defaults to maximum reasoning, which can consume the
+      // Edge Function timeout before returning the bounded JSON we need.
+      // NVIDIA documents `low` as the smallest supported reasoning budget and
+      // recommends clearing prior thinking state for chat-style requests.
+      if (model === 'z-ai/glm-5.3-flash') {
+        delete requestBody.reasoning_budget
+        requestBody.reasoning_effort = 'low'
+        requestBody.chat_template_kwargs = { clear_thinking: true }
+      }
       // Keep current NVIDIA-hosted multimodal models on the parameter values
       // advertised by their live endpoints. Unsupported sampling or template
       // flags otherwise become a 4xx and trigger an unnecessary paid fallback.
