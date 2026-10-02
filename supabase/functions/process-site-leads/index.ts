@@ -1319,8 +1319,7 @@ async function auditOne(
       && !result.uncertain
     const auditOutreachObservation = selectConcreteAuditObservation({ audit_details: { structural: result.structural } })
     const contactIdentity = verifyLeadEmailIdentity(row)
-    const auditOnlyEligible = auditEngine !== 'jev'
-      && isEnglishAuditOnly
+    const auditOnlyEligible = isEnglishAuditOnly
       && Boolean(row.email)
       && !automaticallyGoodEnough
       && result.score >= 1
@@ -1329,7 +1328,7 @@ async function auditOne(
       && contactIdentity.ok
       && (!englishOutreach.require_reliable_audit || reliableForAuditOutreach)
     // E-commerce is outside the offer even when its visual score is low.
-    const automaticallyNeedsSite = (auditEngine === 'jev' || !isEnglishAuditOnly)
+    const automaticallyNeedsSite = !isEnglishAuditOnly
       && !automaticallyGoodEnough
       && automaticBuildCandidate
     const recommendedStatus = auditEngine === 'jev'

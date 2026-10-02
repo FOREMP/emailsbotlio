@@ -29,6 +29,7 @@ type State = {
 type EnglishPipelineState = {
   mode: 'audit_only' | 'demo_sites' | 'paused'
   sourcing_enabled: boolean
+  daily_first_touch_limit: number
 }
 
 async function englishPipelineState(supabase: any): Promise<EnglishPipelineState> {
@@ -39,6 +40,7 @@ async function englishPipelineState(supabase: any): Promise<EnglishPipelineState
   return {
     mode: raw.mode === 'demo_sites' || raw.mode === 'paused' ? raw.mode : 'audit_only',
     sourcing_enabled: raw.sourcing_enabled !== false,
+    daily_first_touch_limit: Math.max(1, Math.min(100, Number(raw.daily_first_touch_limit) || 20)),
   }
 }
 
@@ -204,8 +206,14 @@ async function getCoverage(supabase: any, userId: string, language: Language, se
   const domains = language === 'en'
     ? ['botlio.email', 'botlio.eu', 'website.botlio.email']
     : ['foremp.email', 'foremp.one', 'foremp.eu', 'website.foremp.email']
-  const dailyCapacity = (senders ?? []).filter((sender: any) => domains.some((domain) => String(sender.from_email ?? '').toLowerCase().endsWith(`@${domain}`)))
+  const senderCapacity = (senders ?? []).filter((sender: any) => domains.some((domain) => String(sender.from_email ?? '').toLowerCase().endsWith(`@${domain}`)))
     .reduce((total: number, sender: any) => total + Math.max(0, Number(sender.daily_limit) || 0), 0)
+  // English sourcing must follow the campaign's real first-touch cap. The
+  // mailbox sum can be higher because the same Botlio senders also have
+  // separate follow-up capacity and may serve another sequence.
+  const dailyCapacity = language === 'en' && englishPipeline
+    ? Math.min(senderCapacity, englishPipeline.daily_first_touch_limit)
+    : senderCapacity
   const stockMultiplier = Math.max(1, Math.min(10, Number(settings.lead_stock_multiplier) || LEAD_STOCK_MULTIPLIER))
   const tolerance = Math.max(0, Math.min(20, Number(settings.stock_tolerance) || STOCK_TOLERANCE))
   const backlogMultiplier = Math.max(1, Math.min(6, Number(settings.backlog_multiplier) || BACKLOG_MULTIPLIER))
@@ -221,32 +229,47 @@ async function getCoverage(supabase: any, userId: string, language: Language, se
   const auditBacklog = Number(stockCounts.audit_backlog ?? 0)
   const reviewBacklog = Number(stockCounts.review_backlog ?? 0)
   const buildBacklog = Number(stockCounts.build_backlog ?? 0)
+  // Audit-only English outreach does not build demo sites and does not depend
+  // on the old website-approval queue. Counting those legacy rows here caused
+  // sourcing to stop permanently even though the send queue was empty.
+  const ignoresWebsiteBacklogs = language === 'en' && englishPipeline?.mode === 'audit_only'
+  const blockingReviewBacklog = ignoresWebsiteBacklogs ? 0 : reviewBacklog
+  const blockingBuildBacklog = ignoresWebsiteBacklogs ? 0 : buildBacklog
   const daily = Math.max(1, dailyCapacity || 10)
   const target = daily * stockMultiplier
   const stock = pipelineCount + unsentApprovedCount
   const backlogCap = Math.max(MIN_BACKLOG_CAP, daily * backlogMultiplier)
   const upperStockLimit = target + tolerance
   const remainingDiscoveryCapacity = Math.max(0, upperStockLimit - stock)
-  const englishDisabled = language === 'en' && (englishPipeline?.mode === 'paused' || !englishPipeline?.sourcing_enabled)
+  const englishDisabled = language === 'en' && (
+    englishPipeline?.mode === 'paused'
+    || !englishPipeline?.sourcing_enabled
+    || dailyCapacity <= 0
+  )
   let reason = 'stock target reached'
   if (englishDisabled) reason = englishPipeline?.mode === 'paused'
     ? 'English outreach pipeline is paused'
-    : 'English automatic sourcing is disabled'
+    : !englishPipeline?.sourcing_enabled
+      ? 'English automatic sourcing is disabled'
+      : 'English outreach has no active sender capacity'
   else if (auditBacklog >= backlogCap) reason = `audit backlog is ${auditBacklog}/${backlogCap}`
-  else if (reviewBacklog >= backlogCap) reason = `approval backlog is ${reviewBacklog}/${backlogCap}`
-  else if (buildBacklog >= backlogCap) reason = `build backlog is ${buildBacklog}/${backlogCap}`
+  else if (blockingReviewBacklog >= backlogCap) reason = `approval backlog is ${blockingReviewBacklog}/${backlogCap}`
+  else if (blockingBuildBacklog >= backlogCap) reason = `build backlog is ${blockingBuildBacklog}/${backlogCap}`
   else if (stock < target - tolerance) reason = 'needs sourcing'
   const shouldSource = !englishDisabled
     && stock < target - tolerance
     && auditBacklog < backlogCap
-    && reviewBacklog < backlogCap
-    && buildBacklog < backlogCap
+    && blockingReviewBacklog < backlogCap
+    && blockingBuildBacklog < backlogCap
     && remainingDiscoveryCapacity > 0
   return {
     language, daily_capacity: dailyCapacity, stock, target, tolerance,
     upper_stock_limit: upperStockLimit, remaining_discovery_capacity: remainingDiscoveryCapacity,
-    audit_backlog: auditBacklog, review_backlog: reviewBacklog,
-    build_backlog: buildBacklog, backlog_cap: backlogCap, should_source: shouldSource, reason,
+    audit_backlog: auditBacklog, review_backlog: blockingReviewBacklog,
+    build_backlog: blockingBuildBacklog,
+    ignored_review_backlog: ignoresWebsiteBacklogs ? reviewBacklog : 0,
+    ignored_build_backlog: ignoresWebsiteBacklogs ? buildBacklog : 0,
+    backlog_cap: backlogCap, should_source: shouldSource, reason,
   }
 }
 
