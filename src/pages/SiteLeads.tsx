@@ -71,26 +71,62 @@ const STATUS_OPTIONS = [
   "pending_audit",
   "auditing",
   "awaiting_audit_approval",
+  "needs_triage",
   "site_good_enough",
   "needs_site",
   "generating",
   "awaiting_approval",
   "approved",
+  "auto_approved",
   "skipped_no_contact",
   "failed",
+  "unsubscribed",
+];
+
+const STATUS_LABELS: Record<string, string> = {
+  pending_audit: "Väntar på audit",
+  auditing: "Granskas nu",
+  awaiting_audit_approval: "Besluta före bygge (audit)",
+  needs_triage: "Besluta före bygge (triage)",
+  needs_site: "Ska byggas",
+  generating: "Byggs nu",
+  awaiting_approval: "Klar för granskning",
+  approved: "I utskick (manuellt godkänd)",
+  auto_approved: "I utskick (automatiskt)",
+  site_good_enough: "Parkerad (bra sajt)",
+  skipped_no_contact: "Saknar kontaktinfo",
+  failed: "Misslyckades",
+  unsubscribed: "Avregistrerad",
+};
+
+type SummaryGroup = { id: string; title: string; keys: string[]; detail?: (c: Record<string, number>) => string };
+
+const SUMMARY_GROUPS: SummaryGroup[] = [
+  { id: "g_audit", title: "Väntar på audit", keys: ["pending_audit", "auditing"], detail: (c) => `${c.auditing || 0} granskas nu` },
+  { id: "g_triage", title: "Att besluta före bygge", keys: ["needs_triage", "awaiting_audit_approval"], detail: (c) => `${c.needs_triage || 0} triage · ${c.awaiting_audit_approval || 0} audit` },
+  { id: "g_production", title: "Ska byggas / byggs", keys: ["needs_site", "generating"], detail: (c) => `${c.generating || 0} byggs nu` },
+  { id: "g_review", title: "Klara för granskning", keys: ["awaiting_approval"], detail: () => "Väntar på dig" },
+  { id: "g_outreach", title: "I utskickssekvens", keys: ["approved", "auto_approved"], detail: (c) => `${c.approved || 0} manuella · ${c.auto_approved || 0} auto` },
+  { id: "g_parked", title: "Parkerad (bra sajt)", keys: ["site_good_enough"] },
+  { id: "g_nocontact", title: "Saknar kontaktinfo", keys: ["skipped_no_contact"] },
+  { id: "g_failed", title: "Misslyckades", keys: ["failed"] },
+  { id: "g_unsub", title: "Avregistrerade", keys: ["unsubscribed"] },
 ];
 
 const STATUS_COLORS: Record<string, string> = {
   pending_audit: "bg-slate-500",
   auditing: "bg-blue-500",
   awaiting_audit_approval: "bg-sky-600",
+  needs_triage: "bg-sky-600",
   site_good_enough: "bg-green-500",
   needs_site: "bg-amber-500",
   generating: "bg-purple-500",
   awaiting_approval: "bg-indigo-500",
   approved: "bg-emerald-500",
+  auto_approved: "bg-emerald-600",
   skipped_no_contact: "bg-neutral-400",
   failed: "bg-red-500",
+  unsubscribed: "bg-rose-700",
 };
 
 const NICHE_OPTIONS: { value: string; label: string }[] = [
@@ -150,7 +186,10 @@ export default function SiteLeads() {
 
   const applyListFilters = (query: any, includeLanguage: boolean) => {
     let next = query;
-    if (statusFilter !== "all") next = next.eq("status", statusFilter);
+    if (statusFilter !== "all") {
+      const group = SUMMARY_GROUPS.find((g) => g.id === statusFilter);
+      next = group ? next.in("status", group.keys) : next.eq("status", statusFilter);
+    }
     if (nicheFilter !== "all") next = next.eq("niche", nicheFilter);
     if (includeLanguage && languageFilter !== "all") next = next.eq("language", languageFilter);
     const q = search.trim();
@@ -763,13 +802,22 @@ export default function SiteLeads() {
 
 
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        {Object.entries(counts).map(([k, v]) => (
-          <Card key={k} className="p-4">
-            <div className="text-xs uppercase text-muted-foreground">{k}</div>
-            <div className="text-2xl font-bold">{v}</div>
-          </Card>
-        ))}
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
+        {SUMMARY_GROUPS.map((group) => {
+          const total = group.keys.reduce((sum, k) => sum + (counts[k] || 0), 0);
+          const isActive = statusFilter === group.id;
+          return (
+            <Card
+              key={group.id}
+              onClick={() => { setStatusFilter(isActive ? "all" : group.id); setPage(1); }}
+              className={`p-3 cursor-pointer transition-all hover:border-primary ${isActive ? "ring-2 ring-primary border-primary bg-muted/40" : ""}`}
+            >
+              <div className="text-xs font-medium text-muted-foreground truncate">{group.title}</div>
+              <div className="text-2xl font-bold mt-1">{total.toLocaleString("sv-SE")}</div>
+              {group.detail && <div className="text-[11px] text-muted-foreground mt-0.5 truncate">{group.detail(counts)}</div>}
+            </Card>
+          );
+        })}
       </div>
 
       <Card className="p-3 flex flex-wrap items-center gap-2">
@@ -779,12 +827,16 @@ export default function SiteLeads() {
           placeholder="Sök företag, email, hemsida…"
           className="h-9 w-full sm:w-64"
         />
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="h-9 w-[190px]"><SelectValue placeholder="Status" /></SelectTrigger>
+        <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setPage(1); }}>
+          <SelectTrigger className="h-9 w-[220px]"><SelectValue placeholder="Status" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Alla statusar</SelectItem>
+            {SUMMARY_GROUPS.filter((g) => g.keys.length > 1).map((g) => {
+              const t = g.keys.reduce((s, k) => s + (counts[k] || 0), 0);
+              return <SelectItem key={g.id} value={g.id}>{g.title}{t ? ` (${t})` : ""}</SelectItem>;
+            })}
             {STATUS_OPTIONS.map((s) => (
-              <SelectItem key={s} value={s}>{s}{counts[s] ? ` (${counts[s]})` : ""}</SelectItem>
+              <SelectItem key={s} value={s}>{STATUS_LABELS[s] ?? s}{counts[s] ? ` (${counts[s]})` : ""}</SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -884,7 +936,7 @@ export default function SiteLeads() {
                   {l.website ? <a href={l.website} target="_blank" rel="noreferrer" className="underline">{l.website}</a> : "—"}
                 </td>
                 <td className="p-3">
-                  <Badge className={STATUS_COLORS[l.status] ?? "bg-slate-400"}>{l.status}</Badge>
+                  <Badge className={STATUS_COLORS[l.status] ?? "bg-slate-400"}>{STATUS_LABELS[l.status] ?? l.status}</Badge>
                 </td>
                 <td className="p-3">{l.audit_score ?? "—"}</td>
                 <td className="p-3">
