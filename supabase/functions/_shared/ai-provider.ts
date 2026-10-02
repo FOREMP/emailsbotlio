@@ -208,8 +208,23 @@ async function request(
         requestBody.reasoning_effort = 'none'
       }
       if (model === 'deepseek-ai/deepseek-v4.1-flash') delete requestBody.seed
-      if (model.startsWith('qwen/') && model !== 'qwen/qwen3.5-397b-a17b') {
+      if (
+        model.startsWith('qwen/')
+        && model !== 'qwen/qwen3.5-397b-a17b'
+        && model !== 'qwen/qwen3-next-80b-a3b-instruct'
+      ) {
         requestBody.chat_template_kwargs = { enable_thinking: false }
+      }
+      // Qwen3-Next Instruct is natively non-thinking. Its hosted NVIDIA schema
+      // advertises conventional OpenAI chat parameters only, so remove flags
+      // inherited from reasoning models instead of risking a 422 response.
+      if (model === 'qwen/qwen3-next-80b-a3b-instruct') {
+        delete requestBody.reasoning_effort
+        delete requestBody.reasoning_budget
+        delete requestBody.chat_template_kwargs
+        delete requestBody.seed
+        delete requestBody.top_p
+        requestBody.temperature = 0.6
       }
       // Nemotron 3.5 Lightning exposes thinking through chat_template_kwargs.
       // Website-page generation only needs bounded JSON, so disable thinking

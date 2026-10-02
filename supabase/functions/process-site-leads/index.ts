@@ -129,7 +129,7 @@ function isCanonicalDemoUrl(value?: string | null): boolean {
 }
 const STALE_PIPELINE_MINUTES = 180 // queued work may legitimately wait; don't fail healthy backlog
 const ORPHAN_GRACE_MINUTES = 10   // 'generating' with no generated_sites row = dead job
-const TEMPLATE_PICKER_NVIDIA_MODEL = 'z-ai/glm-5.3-flash'
+const TEMPLATE_PICKER_NVIDIA_MODEL = 'qwen/qwen3-next-80b-a3b-instruct'
 const TEMPLATE_PICKER_OPENROUTER_FALLBACK = 'deepseek/deepseek-chat-v3.1'
 
 // Audit-led outreach is only safe when we can connect the destination address

@@ -22,10 +22,10 @@ import { callRoutedChat } from '../_shared/ai-provider.ts'
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 export const BUILD_MODEL = 'deepseek/deepseek-chat-v3.1'
 export const BUILD_FALLBACK_MODEL = 'deepseek/deepseek-chat-v3.1'
-// GLM-5.3 Flash is the current NVIDIA-hosted route for structured Swedish and
-// English website copy. It is a sparse MoE model intended for high-throughput
-// workloads; the shared provider keeps its reasoning budget low for Edge timeouts.
-export const NVIDIA_BUILD_MODEL = 'z-ai/glm-5.3-flash'
+// Qwen3-Next Instruct is a non-thinking, low-active-parameter NVIDIA-hosted
+// route. It is better suited to bounded page JSON than reasoning-heavy models
+// that can spend the Edge Function timeout before returning usable content.
+export const NVIDIA_BUILD_MODEL = 'qwen/qwen3-next-80b-a3b-instruct'
 export const LANG_MODEL = 'openai/gpt-4o-mini'
 const VERSION = 13
 const MAX_PAGES = 6
