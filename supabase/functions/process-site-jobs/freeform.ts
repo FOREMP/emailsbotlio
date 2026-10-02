@@ -22,10 +22,10 @@ import { callRoutedChat } from '../_shared/ai-provider.ts'
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 export const BUILD_MODEL = 'deepseek/deepseek-chat-v3.1'
 export const BUILD_FALLBACK_MODEL = 'deepseek/deepseek-chat-v3.1'
-// Qwen3-Next Instruct is a non-thinking, low-active-parameter NVIDIA-hosted
-// route. It is better suited to bounded page JSON than reasoning-heavy models
-// that can spend the Edge Function timeout before returning usable content.
-export const NVIDIA_BUILD_MODEL = 'qwen/qwen3-next-80b-a3b-instruct'
+// NVIDIA's first-party GA Nemotron endpoint is used instead of a third-party
+// catalog route, whose advertised availability can differ from the live API.
+// Thinking is disabled centrally in ai-provider.ts for bounded page JSON.
+export const NVIDIA_BUILD_MODEL = 'nvidia/nemotron-3-super-120b-a12b'
 export const LANG_MODEL = 'openai/gpt-4o-mini'
 const VERSION = 13
 const MAX_PAGES = 6

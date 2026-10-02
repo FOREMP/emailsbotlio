@@ -1111,7 +1111,7 @@ Deno.serve(async (req) => {
           : nc.systemPrompt
         const routed = await callRoutedChat({
           supabase,
-          nvidiaModel: 'qwen/qwen3-next-80b-a3b-instruct',
+          nvidiaModel: 'nvidia/nemotron-3-super-120b-a12b',
           openrouterModel: chosenModel,
           title: 'Botlio Legacy Site Generator Fallback',
           timeoutMs: 75_000,
