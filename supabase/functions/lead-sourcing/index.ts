@@ -237,8 +237,21 @@ async function getCoverage(supabase: any, userId: string, language: Language, se
   const blockingBuildBacklog = ignoresWebsiteBacklogs ? 0 : buildBacklog
   const daily = Math.max(1, dailyCapacity || 10)
   const target = daily * stockMultiplier
-  const stock = pipelineCount + unsentApprovedCount
-  const backlogCap = Math.max(MIN_BACKLOG_CAP, daily * backlogMultiplier)
+  // In audit-only English outreach, legacy manual-review and website-build
+  // rows cannot become sendable without operator work. Counting them as stock
+  // made the planner report a full buffer while the real outreach queue was
+  // empty. Only leads that are still moving automatically (audit backlog) or
+  // are already approved and unsent belong in the automatic stock figure.
+  const stock = ignoresWebsiteBacklogs
+    ? auditBacklog + unsentApprovedCount
+    : pipelineCount + unsentApprovedCount
+  // The normal backlog limit protects the more expensive website-building
+  // lane. English audit-only leads do not build sites, so allow the audit queue
+  // to fill the same four-day stock target while still enforcing a hard cap.
+  const effectiveBacklogMultiplier = ignoresWebsiteBacklogs
+    ? Math.max(backlogMultiplier, stockMultiplier)
+    : backlogMultiplier
+  const backlogCap = Math.max(MIN_BACKLOG_CAP, daily * effectiveBacklogMultiplier)
   const upperStockLimit = target + tolerance
   const remainingDiscoveryCapacity = Math.max(0, upperStockLimit - stock)
   const englishDisabled = language === 'en' && (

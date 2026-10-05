@@ -393,7 +393,7 @@ async function settlePageForScreenshot(page) {
   return { ...metrics, reliable: isReadyForScreenshot(metrics) }
 }
 
-async function browserScrape(rawUrl, screenshot) {
+async function browserScrape(rawUrl, screenshot, includeHtml = false) {
   const safe = await assertSafeUrl(rawUrl)
   return withBrowser(async (browser) => {
     const page = await browser.newPage({
@@ -449,6 +449,7 @@ async function browserScrape(rawUrl, screenshot) {
     }
     return {
       ...data,
+      rawHtml: includeHtml ? html.slice(0, 1_500_000) : undefined,
       screenshot: screenshotUrl,
       screenshot_quality: screenshotQuality,
       rendered: true,
@@ -460,14 +461,15 @@ async function browserScrape(rawUrl, screenshot) {
 async function scrape(body) {
   const url = await assertSafeUrl(body?.url)
   const wantScreenshot = Boolean(body?.screenshot)
+  const wantHtml = Boolean(body?.html || body?.rawHtml || body?.include_html)
   let fast
   try {
     const raw = await fetchSafe(url.toString())
-    fast = { ...analyseHtml(raw.html, raw.url, raw.status), screenshot: null, rendered: false, source_url_used: raw.url }
+    fast = { ...analyseHtml(raw.html, raw.url, raw.status), rawHtml: wantHtml ? raw.html.slice(0, 1_500_000) : undefined, screenshot: null, rendered: false, source_url_used: raw.url }
   } catch (error) {
     if (!wantScreenshot) throw error
   }
-  if (wantScreenshot || !fast || fast.markdown.length < 300) return browserScrape(url.toString(), wantScreenshot)
+  if (wantScreenshot || !fast || fast.markdown.length < 300) return browserScrape(url.toString(), wantScreenshot, wantHtml)
   return fast
 }
 
