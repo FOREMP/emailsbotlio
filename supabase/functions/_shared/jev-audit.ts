@@ -20,9 +20,11 @@ type LeadContext = {
 }
 
 type JevDecision = {
-  decision: 'needs_site' | 'site_good_enough' | 'needs_review' | 'skip_ecommerce'
+  decision: 'needs_site' | 'site_good_enough' | 'needs_review' | 'skip_ecommerce' | 'bad_fit_do_not_contact'
   confidence: number
   score: number
+  commercialFitScore: number
+  demoWorthinessScore: number
   hasOwnedWebsite: number
   isEcommerce: number
   isThirdPartyOnly: number
@@ -56,6 +58,8 @@ type JevCalibration = {
   visualEvidenceReliable: boolean
   manualReviewRequired: boolean
   routingReason: string
+  commercialFitScore: number
+  demoWorthinessScore: number
 }
 
 export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult> {
@@ -82,10 +86,11 @@ export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult
     links: scraped.links.slice(0, 40),
     provider_used: scraped.providerUsed,
     screenshot_evidence: visionSummary,
+    commercial_fit_hint: commercialFitHint(ctx),
     rules: [
-      'Botlio sells simple premium presentation websites for local service businesses.',
-      'True e-commerce with cart/checkout is outside the offer and should be skipped as good enough.',
-      'A third-party booking/profile page only, no owned website, parked domain, empty site, broken site, or a site where a simple premium Botlio demo would be a clear commercial improvement is a needs_site result.',
+      'Botlio sells simple premium presentation websites for local service businesses. The goal is not only to find bad websites; the goal is to find businesses likely to value and buy a better simple website demo.',
+      'True e-commerce with cart/checkout is outside the offer and should be skipped. Large chains, petrol stations, car dealers, national franchises, marketplace-first businesses, hotels and complex inventory businesses are usually bad-fit targets even if their website is not perfect.',
+      'A third-party booking/profile page only, no owned website, parked domain, empty site, broken site, or a site where a simple premium Botlio demo would be a clear commercial improvement is a needs_site result when the business is also a plausible local buyer.',
       'Judge material customer-facing shortcomings, not personal design taste. An acceptable owned website is site_good_enough when a Botlio demo would mainly be a cosmetic restyle.',
       'Words such as dated, basic, generic, typography, imagery, or simple navigation are weak evidence by themselves. They justify needs_site only together with a concrete customer problem such as unclear services, missing trust/contact/action, broken layout, unreadable content, or severe mobile usability.',
       'Cookie and consent banners are temporary overlays, not website defects. Ignore them when judging quality unless the underlying page cannot be assessed at all.',
@@ -93,6 +98,7 @@ export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult
       'If evidence is weak, contradictory, or too incomplete, choose needs_review.',
       'Do not punish small sites only because they have little text. Decide from usefulness for customers.',
       'Use screenshot_evidence as material evidence. The final system will reconcile your structured decision with the independent visual scores.',
+      'Give high demo_worthiness only when both conditions are true: Botlio can realistically help this business, and the current web presence gives us a strong reason to send a demo. A bad-fit business with a weak website should not become an automatic build.',
     ].join(' '),
   })
 
@@ -137,6 +143,8 @@ export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult
     auditDiagnostics: {
       calibration_version: 'jev_operator_calibration_v3',
       jev_raw_score: calibration.rawJevScore,
+      commercial_fit_score: calibration.commercialFitScore,
+      demo_worthiness_score: calibration.demoWorthinessScore,
       visual_score: calibration.visualScore,
       combined_score: calibration.combinedScore,
       score_disagreement: calibration.scoreDisagreement,
@@ -167,6 +175,8 @@ export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult
         decision: decision.decision,
         confidence: decision.confidence,
         raw_quality_score: calibration.rawJevScore,
+        commercial_fit_score: calibration.commercialFitScore,
+        demo_worthiness_score: calibration.demoWorthinessScore,
         visual_score: calibration.visualScore,
         combined_score: calibration.combinedScore,
         score_disagreement: calibration.scoreDisagreement,
@@ -179,6 +189,22 @@ export async function auditWebsiteWithJev(ctx: LeadContext): Promise<AuditResult
       },
       screenshot_evidence: visionSummary,
     },
+  }
+}
+
+
+function commercialFitHint(ctx: LeadContext): Record<string, unknown> {
+  const text = `${ctx.companyName} ${ctx.category ?? ''} ${ctx.url ?? ''}`.toLowerCase()
+  const ideal = /frisör|hair|salon|beauty|skönhet|nagel|nail|massage|clinic|klinik|tand|dental|electric|elektriker|plumb|rörmok|bygg|builder|contractor|roof|tak|clean|städ|repair|verkstad|mechanic|restaurant|restaurang|bistro|bar|café|cafe/.test(text)
+  const badFit = /circle k|preem|okq8|shell|st1|bensin|petrol|gas station|hedin|bilia|mercedes|bmw|audi|volvo|toyota|dealership|car dealer|hotel|hotell|booking\.com|airbnb|marketplace|webshop|e[- ]?commerce|shopify|woocommerce|klarna|checkout/.test(text)
+  const thirdPartyLikely = /bokadirekt|boka direkt|booksy|fresha|treatwell|facebook|instagram|linkedin/.test(text)
+  return {
+    ideal_local_service_signal: ideal,
+    bad_fit_signal: badFit,
+    third_party_profile_signal: thirdPartyLikely,
+    guidance: ctx.language === 'en'
+      ? 'Prioritise independent local service businesses likely to value a simple premium website demo. Be stricter with chains, dealers, petrol stations, hotels, e-commerce and complex corporate businesses.'
+      : 'Prioritera lokala fristående serviceföretag som sannolikt värderar en enkel premium-demo. Var striktare med kedjor, bilhandlare, bensinstationer, hotell, e-handel och komplexa företagsupplägg.',
   }
 }
 
@@ -256,13 +282,46 @@ async function decideWithJev(state: Record<string, unknown>): Promise<JevDecisio
     questions: {
       decision: {
         type: 'choice',
-        instructions: 'Choose the operational audit decision for Botlio. Judge material commercial replacement value, not personal design taste. Cosmetic-only improvements are site_good_enough. If evidence is unclear, choose needs_review.',
+        instructions: 'Choose the operational audit decision for Botlio. Judge material commercial replacement value, not personal design taste. Cosmetic-only improvements are site_good_enough. If the business itself is a poor buyer for this offer, choose bad_fit_do_not_contact. If evidence is unclear, choose needs_review.',
         criteria: {
           needs_site: 'A simple premium Botlio demo would solve a concrete customer-facing problem. Includes no owned site, third-party-only, broken/empty/parked sites, unreadable or severely weak mobile layout, unclear services, or missing trust/contact/customer action. Cosmetic wording such as dated, basic or generic is insufficient alone.',
-          site_good_enough: 'The owned website is usable, trustworthy and clear enough that a simple premium Botlio demo would mainly be a cosmetic restyle. It does not need to be excellent or fashionable.',
+          site_good_enough: 'The owned website is usable, trustworthy and clear enough, or the business is not commercially attractive enough for a Botlio demo. It does not need to be excellent or fashionable.',
           needs_review: 'The evidence is incomplete, contradictory, blocked, or too uncertain for automation.',
+          bad_fit_do_not_contact: 'The business is a poor fit for Botlio’s simple website offer even if the website has flaws, for example chain/franchise, petrol station, big dealership, e-commerce, marketplace, hotel, or complex/corporate business.',
           skip_ecommerce: 'The website is a true online shop/e-commerce site with cart or checkout. This is outside Botlio’s current fixed-price offer.',
         },
+      },
+      commercial_fit_score: {
+        type: 'score',
+        instructions: 'Rate how good this business is as a Botlio prospect from 1 to 10, independent of website quality. 10 means ideal local service buyer; 1 means wrong offer or unlikely buyer.',
+        criteria: [
+          '1 — e-commerce, large chain, petrol station, major dealership, hotel, marketplace, public institution, or clearly wrong for a simple fixed-price website',
+          '2 — very poor fit; likely has complex corporate, inventory, franchise, or compliance needs',
+          '3 — weak fit even if the website is bad',
+          '4 — possible but not attractive; human should decide',
+          '5 — mixed or unclear fit',
+          '6 — reasonable local business but not an obvious buyer',
+          '7 — good local service business prospect',
+          '8 — strong prospect: independent service business where trust, booking/contact, and local presentation matter',
+          '9 — very strong prospect in a niche Botlio can serve well, such as salon, beauty, massage, trades, clinic, restaurant/bar, builder, cleaning, repair, local service',
+          '10 — ideal Botlio prospect with clear local buyer logic',
+        ],
+      },
+      demo_worthiness_score: {
+        type: 'score',
+        instructions: 'Rate how worth it is to build/send a Botlio demo for this exact lead from 1 to 10. This combines commercial fit, current web weakness, and likely sales angle. High means build/send; low means park.',
+        criteria: [
+          '1 — do not build; wrong business or website already strong',
+          '2 — not worth building a demo',
+          '3 — low value; probably park',
+          '4 — weak case; only manual review could justify it',
+          '5 — borderline and should be reviewed by a human',
+          '6 — possible but not strong enough for confident automation',
+          '7 — useful demo case if supporting evidence is clear',
+          '8 — strong demo candidate; likely worth building',
+          '9 — very strong demo candidate',
+          '10 — obvious build/send candidate',
+        ],
       },
       quality_score: {
         type: 'score',
@@ -363,6 +422,8 @@ function parseJevResponse(raw: Record<string, unknown>): JevDecision {
   const answers = (root as any)?.answers ?? (root as any)?.decisions ?? (root as any)?.result ?? root
   const decisionAnswer = pickAnswer(answers, 'decision')
   const scoreAnswer = pickAnswer(answers, 'quality_score')
+  const commercialFitAnswer = pickAnswer(answers, 'commercial_fit_score')
+  const demoWorthinessAnswer = pickAnswer(answers, 'demo_worthiness_score')
   const ownedAnswer = pickAnswer(answers, 'has_owned_website')
   const ecommerceAnswer = pickAnswer(answers, 'is_ecommerce')
   const thirdPartyAnswer = pickAnswer(answers, 'third_party_only')
@@ -374,6 +435,8 @@ function parseJevResponse(raw: Record<string, unknown>): JevDecision {
     decision,
     confidence: clamp01(probability || 0.5),
     score: clampScore(readNumber(scoreAnswer, 5)),
+    commercialFitScore: clampScore(readNumber(commercialFitAnswer, 5)),
+    demoWorthinessScore: clampScore(readNumber(demoWorthinessAnswer, 5)),
     hasOwnedWebsite: clamp01(readNoul(ownedAnswer)),
     isEcommerce: clamp01(readNoul(ecommerceAnswer)),
     isThirdPartyOnly: clamp01(readNoul(thirdPartyAnswer)),
@@ -467,6 +530,7 @@ function isMaterialVisualObservation(value: string): boolean {
 function normalizeDecision(value: string): JevDecision['decision'] {
   const normalized = value.toLowerCase().replace(/[^a-z_]/g, '_')
   if (normalized.includes('ecommerce') || normalized.includes('skip')) return 'skip_ecommerce'
+  if (normalized.includes('bad_fit') || normalized.includes('do_not_contact') || normalized.includes('poor_fit')) return 'bad_fit_do_not_contact'
   if (normalized.includes('good')) return 'site_good_enough'
   if (normalized.includes('review') || normalized.includes('manual') || normalized.includes('uncertain')) return 'needs_review'
   if (normalized.includes('need')) return 'needs_site'
@@ -495,50 +559,78 @@ function calibrateScore(
     ? roundOne(visionScores[0] * 0.45 + visionScores[1] * 0.30 + visionScores[2] * 0.25)
     : null
   const visualEvidenceReliable = visualScore !== null && screenshotReliable
+  const commercialFitScore = clampScore(decision.commercialFitScore)
+  const demoWorthinessScore = clampScore(decision.demoWorthinessScore)
+  const demoAsNeedScore = clampScore(11 - demoWorthinessScore)
   let combinedScore = visualScore === null
-    ? rawJevScore
-    : clampScore(rawJevScore * 0.40 + visualScore * 0.60)
+    ? clampScore(rawJevScore * 0.55 + demoAsNeedScore * 0.45)
+    : clampScore(rawJevScore * 0.25 + visualScore * 0.35 + demoAsNeedScore * 0.40)
 
-  // Ownership and commerce are discrete routing facts. They must not flatten
-  // every ordinary owned website into an artificial 1/7 score distribution.
-  if (!isEcommerce && baseConfident && (websitePresence === 'no_functional_website' || websitePresence === 'third_party_booking_or_profile')) {
+  // The final score keeps the existing meaning: low = build a demo, high = park.
+  // JEV now also tells us whether the company is commercially worth targeting.
+  // This prevents weak but bad-fit sites (chains, dealers, petrol stations, etc.)
+  // from consuming build/send budget, while keeping strong local-service cases moving.
+  const badCommercialFit = isEcommerce || decision.decision === 'bad_fit_do_not_contact' || commercialFitScore <= 3
+  const excellentDemoCase = demoWorthinessScore >= 8 && commercialFitScore >= 7
+  const goodDemoCase = demoWorthinessScore >= 7 && commercialFitScore >= 7 && rawJevScore <= 5
+  const weakDemoCase = demoWorthinessScore <= 4 || commercialFitScore <= 4
+
+  if (badCommercialFit) {
+    combinedScore = Math.max(8, combinedScore)
+  } else if (baseConfident && (websitePresence === 'no_functional_website' || websitePresence === 'third_party_booking_or_profile') && commercialFitScore >= 6) {
     combinedScore = Math.min(3, combinedScore)
+  } else if (baseConfident && excellentDemoCase) {
+    combinedScore = Math.min(3, combinedScore)
+  } else if (baseConfident && goodDemoCase) {
+    combinedScore = Math.min(4, combinedScore)
+  } else if (weakDemoCase) {
+    combinedScore = Math.max(7, combinedScore)
   }
 
   const scoreDisagreement = visualScore === null ? null : roundOne(Math.abs(rawJevScore - visualScore))
-  const decisionConflict = decision.decision === 'site_good_enough'
+  const decisionConflict = decision.decision === 'site_good_enough' || decision.decision === 'bad_fit_do_not_contact'
     ? combinedScore <= 4
     : decision.decision === 'needs_site'
       ? combinedScore >= 7
       : false
   const ownedSiteNeedsVisualEvidence = websitePresence === 'owned_site' && !visualEvidenceReliable
-  const manualReviewRequired = !isEcommerce && (
+  const commercialBorderline = commercialFitScore >= 4 && commercialFitScore <= 5
+  const demoBorderline = demoWorthinessScore >= 5 && demoWorthinessScore <= 6
+  const manualReviewRequired = !isEcommerce && !badCommercialFit && (
     !baseConfident
     || decision.decision === 'needs_review'
     || websitePresence === 'uncertain'
     || ownedSiteNeedsVisualEvidence
     || (scoreDisagreement !== null && scoreDisagreement >= 3)
     || decisionConflict
+    || commercialBorderline
+    || demoBorderline
     || (combinedScore >= 5 && combinedScore <= 6)
   )
 
   const routingReason = isEcommerce
     ? 'ecommerce_outside_offer'
-    : websitePresence === 'no_functional_website' || websitePresence === 'third_party_booking_or_profile'
-      ? 'no_owned_or_third_party_site'
-      : !baseConfident
-        ? 'jev_low_confidence'
-        : !visualEvidenceReliable
-          ? 'visual_evidence_unreliable'
-          : scoreDisagreement !== null && scoreDisagreement >= 3
-            ? 'jev_visual_disagreement'
-            : decisionConflict
-              ? 'decision_score_conflict'
-              : combinedScore <= 4
-                ? 'clear_replacement_candidate'
-                : combinedScore >= 7
-                  ? 'existing_site_good_enough'
-                  : 'borderline_quality'
+    : badCommercialFit
+      ? 'bad_commercial_fit'
+      : websitePresence === 'no_functional_website' || websitePresence === 'third_party_booking_or_profile'
+        ? 'no_owned_or_third_party_site'
+        : excellentDemoCase || goodDemoCase
+          ? 'strong_demo_worthiness'
+          : weakDemoCase
+            ? 'weak_demo_worthiness_or_fit'
+            : !baseConfident
+              ? 'jev_low_confidence'
+              : !visualEvidenceReliable
+                ? 'visual_evidence_unreliable'
+                : scoreDisagreement !== null && scoreDisagreement >= 3
+                  ? 'jev_visual_disagreement'
+                  : decisionConflict
+                    ? 'decision_score_conflict'
+                    : combinedScore <= 4
+                      ? 'clear_replacement_candidate'
+                      : combinedScore >= 7
+                        ? 'existing_site_good_enough'
+                        : 'borderline_quality'
 
   return {
     rawJevScore,
@@ -549,6 +641,8 @@ function calibrateScore(
     visualEvidenceReliable,
     manualReviewRequired,
     routingReason,
+    commercialFitScore,
+    demoWorthinessScore,
   }
 }
 
@@ -561,10 +655,10 @@ function buildReason(language: 'sv' | 'en', decision: JevDecision, calibration: 
       ? `Manual review is required after the calibrated JEV audit (${scores}; ${calibration.routingReason}).`
       : `Manuell kontroll krävs efter den kalibrerade JEV-auditen (${scores}; ${calibration.routingReason}).`
   }
-  if (decision.decision === 'skip_ecommerce') {
+  if (decision.decision === 'skip_ecommerce' || decision.decision === 'bad_fit_do_not_contact') {
     return language === 'en'
-      ? 'The site appears to be e-commerce, which is outside this website offer.'
-      : 'Sajten verkar vara e-handel, vilket ligger utanför detta hemsideerbjudande.'
+      ? (decision.decision === 'skip_ecommerce' ? 'The site appears to be e-commerce, which is outside this website offer.' : 'The business looks like a poor commercial fit for this simple demo website offer.')
+      : (decision.decision === 'skip_ecommerce' ? 'Sajten verkar vara e-handel, vilket ligger utanför detta hemsideerbjudande.' : 'Företaget verkar vara en svag kommersiell matchning för detta enkla demoerbjudande.')
   }
   if (decision.decision === 'site_good_enough') {
     return language === 'en'
@@ -598,6 +692,11 @@ function buildStructuralEvidence(language: 'sv' | 'en', decision: JevDecision, c
     return [language === 'en'
       ? 'The site appears to include e-commerce/cart/checkout functionality.'
       : 'Sajten verkar innehålla e-handel, varukorg eller checkout.']
+  }
+  if (decision.decision === 'bad_fit_do_not_contact') {
+    return [language === 'en'
+      ? 'The business appears to be a poor fit for Botlio’s simple fixed-price demo offer.'
+      : 'Företaget verkar vara en svag matchning för Botlios enkla demoerbjudande till fast pris.']
   }
   return []
 }
