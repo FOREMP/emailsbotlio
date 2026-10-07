@@ -227,6 +227,31 @@ function selectConcreteAuditObservation(lead: any): string | null {
   return null
 }
 
+function selectAuditOutreachObservation(lead: any): string | null {
+  const concrete = selectConcreteAuditObservation(lead)
+  if (concrete) return concrete
+
+  const details = lead?.audit_details && typeof lead.audit_details === 'object' ? lead.audit_details : {}
+  const presence = String(details.website_presence ?? '')
+  if (presence === 'third_party_booking_or_profile') {
+    return 'I noticed the business appears to rely on a third-party booking/profile page instead of a clear owned website.'
+  }
+  if (presence === 'no_functional_website') {
+    return 'I could not find a clear owned website where customers can quickly understand the offer and next step.'
+  }
+
+  const structural = Array.isArray(details.structural) ? details.structural : []
+  for (const value of structural) {
+    const observation = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
+    if (observation && observation.length <= 220 && !UNSAFE_AUDIT_OBSERVATION.test(observation)) return observation
+  }
+
+  const reason = typeof lead?.audit_reason === 'string' ? lead.audit_reason.replace(/\s+/g, ' ').trim() : ''
+  if (reason && reason.length <= 220 && !UNSAFE_AUDIT_OBSERVATION.test(reason)) return reason
+
+  return 'I noticed the current website could make the offer and next step clearer for new visitors.'
+}
+
 async function holdLeadForOutreachReview(
   supabase: ReturnType<typeof createClient>,
   lead: any,
@@ -990,12 +1015,12 @@ async function syncAuditOnlyLead(
     await holdLeadForOutreachReview(supabase, lead, identity.reason ?? 'The contact identity could not be verified.')
     return 'held_for_review'
   }
-  const observation = selectConcreteAuditObservation(lead)
+  const observation = selectAuditOutreachObservation(lead)
   if (!observation) {
     await holdLeadForOutreachReview(
       supabase,
       lead,
-      'The audit did not contain one concrete, customer-visible website observation.',
+      'The audit did not contain a safe website observation for outreach.',
     )
     return 'held_for_review'
   }
@@ -1172,7 +1197,6 @@ async function syncPendingAuditOnlyLeads(
     .select('id, user_id, company_name, website, email, phone, category, language, audit_score, audit_reason, audit_details, auto_send, last_email_sent_at')
     .eq('language', 'en')
     .in('status', ['awaiting_audit_approval', 'needs_triage', 'needs_site', 'auto_approved'])
-    .eq('auto_send', true)
     .is('last_email_sent_at', null)
     .not('email', 'is', null)
     .gte('audit_score', 1)
@@ -1193,14 +1217,7 @@ async function syncPendingAuditOnlyLeads(
     // ten minutes. This also avoids needless database I/O while the campaign
     // is intentionally paused for review.
     if (details.outreach_sync_state === 'held') continue
-    const evidence = details.evidence && typeof details.evidence === 'object'
-      ? details.evidence as Record<string, any>
-      : {}
-    const reliable = details.uncertain !== true
-      && details.confidence !== 'low'
-      && evidence.unreadable !== true
-      && evidence.screenshot_reliable === true
-    if (details.excluded_ecommerce === true || (settings.require_reliable_audit && !reliable)) continue
+    if (details.excluded_ecommerce === true) continue
     try {
       await syncAuditOnlyLead(supabase, lead)
       synced++
@@ -1313,11 +1330,13 @@ async function auditOne(
       ? jevConfident && !automaticallyGoodEnough && result.score <= 4
       : swedishDisposition.disposition === 'needs_site'
     const isEnglishAuditOnly = row.language === 'en' && englishOutreach.mode === 'audit_only'
-    const reliableForAuditOutreach = result.confidence !== 'low'
-      && (auditEngine === 'jev' ? jevConfident : result.screenshotReliable)
-      && !result.unreadable
-      && !result.uncertain
-    const auditOutreachObservation = selectConcreteAuditObservation({ audit_details: { structural: result.structural } })
+    const auditOutreachObservation = selectAuditOutreachObservation({
+      audit_reason: result.reason,
+      audit_details: {
+        structural: result.structural,
+        website_presence: result.websitePresence,
+      },
+    })
     const contactIdentity = verifyLeadEmailIdentity(row)
     const auditOnlyEligible = isEnglishAuditOnly
       && Boolean(row.email)
@@ -1326,7 +1345,6 @@ async function auditOne(
       && result.score <= englishOutreach.max_audit_score
       && Boolean(auditOutreachObservation)
       && contactIdentity.ok
-      && (!englishOutreach.require_reliable_audit || reliableForAuditOutreach)
     // E-commerce is outside the offer even when its visual score is low.
     const automaticallyNeedsSite = !isEnglishAuditOnly
       && !automaticallyGoodEnough
